@@ -8,6 +8,8 @@ pub mod env;
 pub mod fs;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub mod workers;
 
 /// Waits for `future`. On native, as long as it takes; on the web, where the
 /// page's only thread can't wait for the browser, `None` unless the future is
@@ -44,14 +46,19 @@ pub mod time {
     }
 }
 
-/// std's threads. The page's build has no threads yet: scoped threads run
-/// one after another on the caller's, and sleeping returns at once (the page's
-/// thread may not block).
+/// std's threads. On the page, scoped threads run one after another on the
+/// caller's and sleeping on the page's thread returns at once (it may not
+/// block). The shared-memory build (`+atomics`) starts other threads as Web
+/// Workers ([`crate::workers`]); the plain build has none.
 pub mod thread {
     pub use std::thread::*;
 
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    pub use crate::workers::{Builder, JoinHandle, Thread, available_parallelism, sleep, spawn};
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    pub use sequential::{Builder, sleep, spawn};
     #[cfg(target_arch = "wasm32")]
-    pub use sequential::{Builder, Scope, ScopedJoinHandle, scope, sleep, spawn};
+    pub use sequential::{Scope, ScopedJoinHandle, scope};
 
     #[cfg(target_arch = "wasm32")]
     mod sequential {
@@ -100,15 +107,18 @@ pub mod thread {
             })
         }
 
+        #[cfg(not(target_feature = "atomics"))]
         pub fn sleep(_dur: std::time::Duration) {}
 
         /// std's builder, which can't start a thread on the page: says which
         /// thread was wanted before failing as std does.
+        #[cfg(not(target_feature = "atomics"))]
         #[derive(Debug)]
         pub struct Builder {
             name: Option<String>,
         }
 
+        #[cfg(not(target_feature = "atomics"))]
         impl Builder {
             pub fn new() -> Self {
                 Builder { name: None }
@@ -136,18 +146,105 @@ pub mod thread {
             }
         }
 
+        #[cfg(not(target_feature = "atomics"))]
         impl Default for Builder {
             fn default() -> Self {
                 Self::new()
             }
         }
 
+        #[cfg(not(target_feature = "atomics"))]
         pub fn spawn<F, T>(f: F) -> std::thread::JoinHandle<T>
         where
             F: FnOnce() -> T + Send + 'static,
             T: Send + 'static,
         {
             Builder::new().spawn(f).expect("failed to spawn thread")
+        }
+    }
+}
+
+/// std's timed waits that read std's clock, which panics on the web: there
+/// they time themselves with the browser's. Never on the page's own thread,
+/// which may not wait: it only checks once.
+pub mod sync {
+    use crate::time::Duration;
+    use std::sync::{
+        Condvar, MutexGuard,
+        mpsc::{Receiver, RecvTimeoutError},
+    };
+
+    /// `rx.recv_timeout(timeout)`.
+    pub fn recv_timeout<T>(rx: &Receiver<T>, timeout: Duration) -> Result<T, RecvTimeoutError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            rx.recv_timeout(timeout)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            use std::sync::mpsc::TryRecvError;
+            let deadline = crate::time::Instant::now() + timeout;
+            loop {
+                match rx.try_recv() {
+                    Ok(v) => return Ok(v),
+                    Err(TryRecvError::Disconnected) => return Err(RecvTimeoutError::Disconnected),
+                    Err(TryRecvError::Empty) => {}
+                }
+                if !can_wait() || crate::time::Instant::now() >= deadline {
+                    return Err(RecvTimeoutError::Timeout);
+                }
+                // A channel can't be waited on with a deadline here: look again shortly.
+                crate::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    /// `condvar.wait_timeout_while(guard, timeout, condition)`, without the
+    /// poisoning: the guard, and whether it timed out.
+    pub fn wait_timeout_while<'a, T, F>(
+        condvar: &Condvar,
+        guard: MutexGuard<'a, T>,
+        timeout: Duration,
+        condition: F,
+    ) -> (MutexGuard<'a, T>, bool)
+    where
+        F: FnMut(&mut T) -> bool,
+    {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (guard, result) = condvar
+                .wait_timeout_while(guard, timeout, condition)
+                .unwrap_or_else(|e| e.into_inner());
+            (guard, result.timed_out())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let (mut guard, mut condition) = (guard, condition);
+            let deadline = crate::time::Instant::now() + timeout;
+            while condition(&mut *guard) {
+                let left = deadline.saturating_duration_since(crate::time::Instant::now());
+                if !can_wait() || left.is_zero() {
+                    return (guard, true);
+                }
+                // std's plain timed wait needs no clock.
+                guard = condvar
+                    .wait_timeout(guard, left)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+            }
+            (guard, false)
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn can_wait() -> bool {
+        #[cfg(target_feature = "atomics")]
+        {
+            crate::workers::in_worker()
+        }
+        #[cfg(not(target_feature = "atomics"))]
+        {
+            false
         }
     }
 }

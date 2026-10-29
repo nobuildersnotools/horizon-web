@@ -253,13 +253,13 @@ impl Mailbox {
     fn try_recv(&self) -> Option<Done> {
         self.try_lock()?.pop_front()
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     fn recv_timeout(&self, timeout: horizon_os::time::Duration) -> Option<Done> {
         let done = self.done.lock().unwrap();
-        let (mut done, _) = self
-            .arrived
-            .wait_timeout_while(done, timeout, |done| done.is_empty())
-            .unwrap();
+        let (mut done, _) =
+            horizon_os::sync::wait_timeout_while(&self.arrived, done, timeout, |done| {
+                done.is_empty()
+            });
         done.pop_front()
     }
 }
@@ -585,7 +585,9 @@ impl Streaming {
         });
         let light_tables = context.light.clone();
         let saves: Arc<dyn Saves> = generator.clone();
-        let threads: Vec<thread::JoinHandle<()>> = if cfg!(target_arch = "wasm32") {
+        // The page's shared-memory build starts them as Web Workers.
+        let no_threads = cfg!(all(target_arch = "wasm32", not(target_feature = "atomics")));
+        let threads: Vec<thread::JoinHandle<()>> = if no_threads {
             Vec::new()
         } else {
             (0..threads.max(1))
@@ -621,8 +623,8 @@ impl Streaming {
                 })
                 .collect()
         };
-        // The page has no threads: the frame runs queued jobs itself
-        // (`pump`), for a share of each update.
+        // Without threads the frame runs queued jobs itself (`pump`), for a
+        // share of each update.
         #[cfg(target_arch = "wasm32")]
         let pump: Pump = {
             let shared = shared.clone();
@@ -1012,7 +1014,11 @@ impl Streaming {
         self.relight_edits(world);
         let deferred = std::mem::take(&mut self.deferred);
         #[cfg(target_arch = "wasm32")]
-        (self.pump)(horizon_os::time::Instant::now() + horizon_os::time::Duration::from_millis(12));
+        if self.threads.is_empty() {
+            (self.pump)(
+                horizon_os::time::Instant::now() + horizon_os::time::Duration::from_millis(12),
+            );
+        }
         let received = self.shared.done.take();
         // Meshes made stale meanwhile, freed with the uploaded ones (`free`).
         let mut stale = Vec::new();
@@ -1643,11 +1649,12 @@ impl Streaming {
             self.deferred.push(done);
         }
     }
-    /// A finished job, waiting up to `timeout` for one. The page has no
-    /// worker to wait for: it runs queued jobs until one finishes.
+    /// A finished job, waiting up to `timeout` for one. Without workers to
+    /// wait for, it runs queued jobs until one finishes; the page's own thread
+    /// may not wait at all.
     fn receive(&mut self, timeout: horizon_os::time::Duration) -> Option<Done> {
         #[cfg(target_arch = "wasm32")]
-        {
+        if self.threads.is_empty() {
             let deadline = horizon_os::time::Instant::now() + timeout;
             loop {
                 if let Some(done) = self.shared.done.try_recv() {
@@ -1661,7 +1668,13 @@ impl Streaming {
                 }
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+        unreachable!("the page's build without threads has no workers");
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        if !horizon_os::workers::in_worker() {
+            return self.shared.done.try_recv();
+        }
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         self.shared.done.recv_timeout(timeout)
     }
 }

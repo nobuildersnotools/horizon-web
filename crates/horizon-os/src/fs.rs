@@ -119,6 +119,36 @@ export function horizon_fetch_sync(url) {
         VFS.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Fetches a manifest file before it is read, without holding the
+    /// filesystem's lock: another thread's reads go on during the request.
+    fn prefetch(key: &str) {
+        let Some(url) = remote_url(&vfs(), key) else {
+            return;
+        };
+        if let Some(data) = horizon_fetch_sync(&url) {
+            let mut vfs = vfs();
+            if matches!(vfs.nodes.get(key), Some(Node::Remote { .. })) {
+                vfs.nodes.insert(
+                    key.to_owned(),
+                    Node::File {
+                        data,
+                        modified: SystemTime::now(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Where a manifest file not fetched yet is fetched from.
+    fn remote_url(vfs: &Vfs, key: &str) -> Option<String> {
+        if !matches!(vfs.nodes.get(key), Some(Node::Remote { .. })) {
+            return None;
+        }
+        let remote = REMOTE.lock().unwrap_or_else(|e| e.into_inner());
+        let rel = key.strip_prefix(&remote.0).unwrap_or(key);
+        Some(format!("{}{}", remote.1, rel.trim_start_matches('/')))
+    }
+
     /// `path` from the root, `.` and `..` resolved, no trailing slash.
     fn key(path: &Path) -> String {
         let mut parts: Vec<String> = Vec::new();
@@ -182,11 +212,7 @@ export function horizon_fetch_sync(url) {
                     ));
                 }
                 Some(Node::Remote { .. }) => {
-                    let url = {
-                        let remote = REMOTE.lock().unwrap_or_else(|e| e.into_inner());
-                        let rel = key.strip_prefix(&remote.0).unwrap_or(key);
-                        format!("{}{}", remote.1, rel.trim_start_matches('/'))
-                    };
+                    let url = remote_url(self, key).unwrap_or_default();
                     let data = horizon_fetch_sync(&url).ok_or_else(|| {
                         io::Error::new(io::ErrorKind::NotFound, format!("could not fetch {url}"))
                     })?;
@@ -316,7 +342,9 @@ export function horizon_fetch_sync(url) {
 
     pub fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
         let path = path.as_ref();
-        vfs().data(&key(path), path).cloned()
+        let k = key(path);
+        prefetch(&k);
+        vfs().data(&k, path).cloned()
     }
 
     pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
@@ -697,6 +725,7 @@ export function horizon_fetch_sync(url) {
         pub fn open(&self, path: impl AsRef<Path>) -> io::Result<File> {
             let path = path.as_ref();
             let k = key(path);
+            prefetch(&k);
             let mut vfs = vfs();
             let present = vfs.nodes.contains_key(&k);
             if self.create_new && present {

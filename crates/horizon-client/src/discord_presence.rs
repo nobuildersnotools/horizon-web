@@ -113,7 +113,9 @@ static THREAD: OnceLock<Thread> = OnceLock::new();
 /// `automated` runs (offscreen, benchmarks) only talk to a test's fake Discord.
 pub fn start(enabled: bool, automated: bool) {
     let fake_discord = std::env::var_os(IPC_DIR_ENV).is_some();
-    if THREAD.get().is_some()
+    // A page can't reach Discord's pipe.
+    if cfg!(target_arch = "wasm32")
+        || THREAD.get().is_some()
         || std::env::var_os("HORIZON_NO_DISCORD").is_some_and(|v| v != "0")
         || (automated && !fake_discord)
     {
@@ -151,7 +153,10 @@ pub fn stop() {
     let mut shared = lock();
     shared.stop = true;
     thread.unpark();
-    let _ = STOPPED.wait_timeout_while(shared, Duration::from_millis(300), |s| !s.stopped);
+    let _ =
+        horizon_os::sync::wait_timeout_while(&STOPPED, shared, Duration::from_millis(300), |s| {
+            !s.stopped
+        });
 }
 
 fn lock() -> std::sync::MutexGuard<'static, Shared> {

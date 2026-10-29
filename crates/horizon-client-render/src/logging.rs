@@ -307,7 +307,7 @@ impl log::Log for Logger {
     fn flush(&self) {
         let (done, wait) = mpsc::sync_channel(1);
         if self.out.send(Out::Flush(done)).is_ok() {
-            let _ = wait.recv_timeout(horizon_os::time::Duration::from_secs(1));
+            let _ = horizon_os::sync::recv_timeout(&wait, horizon_os::time::Duration::from_secs(1));
         }
     }
 }
