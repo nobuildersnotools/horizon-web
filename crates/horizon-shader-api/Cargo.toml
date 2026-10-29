@@ -7,6 +7,7 @@ rust-version = "1.85"
 description = "Horizon's own shader packs (WGSL, docs/shaders.md): the format, the stages, the check, and the horizon-shader tool"
 
 [dependencies]
+horizon-os = { path = "../horizon-os" }
 bytemuck = { version = "1.24", features = ["derive"] }
 # Parses and validates a pack's WGSL, and translates it as wgpu does for Vulkan, Metal and DirectX 12.
 naga = { version = "30.0.1", features = ["wgsl-in", "spv-out", "msl-out", "hlsl-out"] }

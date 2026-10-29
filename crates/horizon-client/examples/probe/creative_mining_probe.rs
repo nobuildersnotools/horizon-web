@@ -3,10 +3,10 @@ use horizon_client::{
     item_data::StackData,
     items::{ItemStack, Items},
 };
+use horizon_os::fs::File;
 use horizon_world::nbt::Tag;
 use serde_json::Value;
 use std::{
-    fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };

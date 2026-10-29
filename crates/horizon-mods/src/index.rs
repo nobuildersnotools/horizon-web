@@ -404,7 +404,8 @@ fn plain_name(name: &str) -> bool {
 
 /// The SHA-256 of a file, lowercase hex.
 pub fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut file =
+        horizon_os::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
     loop {
@@ -431,7 +432,7 @@ pub fn verify_signature(key: &str, signature: &str, path: &Path) -> Result<(), S
         minisign_verify::PublicKey::from_base64(key.trim()).map_err(|e| format!("key: {e}"))?;
     let sig =
         minisign_verify::Signature::decode(signature).map_err(|e| format!("signature: {e}"))?;
-    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file = horizon_os::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut verifier = key
         .verify_stream(&sig)
         .map_err(|e| format!("signature: {e}"))?;
@@ -458,7 +459,7 @@ pub fn check_file(
     version: &Version,
     path: &Path,
 ) -> Result<Trust, String> {
-    let size = std::fs::metadata(path)
+    let size = horizon_os::fs::metadata(path)
         .map_err(|e| format!("{}: {e}", path.display()))?
         .len();
     if size != version.file.size {
@@ -618,7 +619,7 @@ pub fn inspect(kind: &Kind, path: &Path) -> Result<Facts, String> {
 /// object, and only plain paths. Returns its pack format (`pack_format`, or
 /// `min_format` in newer packs), empty when it names none.
 fn check_resource_pack(path: &Path) -> Result<String, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file = horizon_os::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..zip.len() {
         let name = zip

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// unprivileged thread lower its priority but not raise it (and the JVM
 /// leaves it there too). Whether the OS took it.
 pub fn favour_current() -> bool {
-    if std::thread::available_parallelism().map_or(1, |n| n.get()) <= 4 {
+    if horizon_os::thread::available_parallelism().map_or(1, |n| n.get()) <= 4 {
         return false;
     }
     favour()
@@ -48,11 +48,9 @@ fn favour() -> bool {
 /// clock and cycles convert to time. `None` elsewhere: unix callers read
 /// `CLOCK_THREAD_CPUTIME_ID` themselves.
 #[cfg(all(windows, target_arch = "x86_64"))]
-pub fn thread_cpu() -> Option<std::time::Duration> {
-    use std::{
-        sync::OnceLock,
-        time::{Duration, Instant},
-    };
+pub fn thread_cpu() -> Option<horizon_os::time::Duration> {
+    use horizon_os::time::{Duration, Instant};
+    use std::sync::OnceLock;
     use windows_sys::Win32::System::{
         Threading::GetCurrentThread, WindowsProgramming::QueryThreadCycleTime,
     };
@@ -62,7 +60,7 @@ pub fn thread_cpu() -> Option<std::time::Duration> {
         // SAFETY: RDTSC has no preconditions on x86_64.
         let tsc = || unsafe { core::arch::x86_64::_rdtsc() };
         let (wall, start) = (Instant::now(), tsc());
-        std::thread::sleep(Duration::from_millis(20));
+        horizon_os::thread::sleep(Duration::from_millis(20));
         (tsc() - start) as f64 / wall.elapsed().as_nanos() as f64
     });
     let mut cycles = 0;
@@ -74,7 +72,7 @@ pub fn thread_cpu() -> Option<std::time::Duration> {
 }
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
-pub fn thread_cpu() -> Option<std::time::Duration> {
+pub fn thread_cpu() -> Option<horizon_os::time::Duration> {
     None
 }
 
@@ -232,10 +230,10 @@ mod tests {
     /// The hint holds on the platforms that take it.
     #[test]
     fn favouring_a_thread_takes_where_the_os_allows_it() {
-        let took = std::thread::spawn(super::favour).join().unwrap();
+        let took = horizon_os::thread::spawn(super::favour).join().unwrap();
         assert_eq!(took, cfg!(any(target_vendor = "apple", windows)));
         #[cfg(target_vendor = "apple")]
-        std::thread::spawn(|| {
+        horizon_os::thread::spawn(|| {
             assert!(super::favour());
             let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
             let mut relative = 0;
@@ -257,10 +255,14 @@ mod tests {
     /// then, on Linux and Android, 10 nice levels below the process or in the idle class.
     #[test]
     fn helpers_go_behind_only_when_asked() {
-        assert!(!std::thread::spawn(super::behind_server).join().unwrap());
+        assert!(
+            !horizon_os::thread::spawn(super::behind_server)
+                .join()
+                .unwrap()
+        );
         super::put_helpers_behind();
         #[cfg(any(target_os = "linux", target_os = "android"))]
-        std::thread::spawn(|| {
+        horizon_os::thread::spawn(|| {
             // SAFETY: reads the calling thread's own nice value.
             let before = unsafe { libc::getpriority(libc::PRIO_PROCESS as _, 0) };
             assert!(super::behind_server());
@@ -280,19 +282,25 @@ mod tests {
         .join()
         .unwrap();
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
-        assert!(!std::thread::spawn(super::behind_server).join().unwrap());
+        assert!(
+            !horizon_os::thread::spawn(super::behind_server)
+                .join()
+                .unwrap()
+        );
     }
 
     /// The idle hint holds on the three platforms.
     #[test]
     fn idling_a_thread_takes() {
-        let took = std::thread::spawn(super::idle_current).join().unwrap();
+        let took = horizon_os::thread::spawn(super::idle_current)
+            .join()
+            .unwrap();
         assert_eq!(
             took,
             cfg!(any(target_os = "linux", target_vendor = "apple", windows))
         );
         #[cfg(target_os = "linux")]
-        std::thread::spawn(|| {
+        horizon_os::thread::spawn(|| {
             assert!(super::idle_current());
             // SAFETY: reads the calling thread's own policy.
             assert_eq!(unsafe { libc::sched_getscheduler(0) }, libc::SCHED_IDLE);

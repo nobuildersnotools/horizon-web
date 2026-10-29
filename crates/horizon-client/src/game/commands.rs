@@ -770,7 +770,7 @@ impl Game<'_> {
             "data/minecraft/tags/entity_type/{}.json",
             tag.trim_start_matches("minecraft:")
         ));
-        serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap_or_default())
+        serde_json::from_slice::<serde_json::Value>(&horizon_os::fs::read(path).unwrap_or_default())
             .ok()
             .is_some_and(|v| {
                 v["values"]
@@ -1101,7 +1101,8 @@ impl Game<'_> {
             std::sync::OnceLock::new();
         let map = RARITY.get_or_init(|| {
             let v: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(self.options.resources.join("items.json")).unwrap_or_default(),
+                &horizon_os::fs::read(self.options.resources.join("items.json"))
+                    .unwrap_or_default(),
             )
             .unwrap_or_default();
             v.as_object()
@@ -3109,7 +3110,7 @@ impl Game<'_> {
                 .options
                 .resources
                 .join(format!("data/{ns}/tags/{registry}/{path}.json"));
-            let Ok(v) = std::fs::read(file)
+            let Ok(v) = horizon_os::fs::read(file)
                 .map_err(|_| ())
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).map_err(|_| ()))
             else {

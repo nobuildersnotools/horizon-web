@@ -19,12 +19,12 @@ use horizon_client::{
     raid::{self, Action, BarName, RaidLevel, RaidPlayer, RaiderInfo, Raids},
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_os::fs;
 use horizon_world::{chunk::BlockState, nbt::Tag, registry::BlockStateId};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as _,
-    fs,
     path::Path,
 };
 

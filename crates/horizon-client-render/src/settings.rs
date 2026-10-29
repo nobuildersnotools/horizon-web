@@ -3,8 +3,9 @@
 //! The option screens live in `options_ui`.
 use crate::keybinds::KeyBinds;
 use crate::options_file::{OptionsFile, V};
+use horizon_os::fs;
 use horizon_protocol::packets::configuration::ClientInformation;
-use std::{fs, path::Path};
+use std::path::Path;
 
 pub use horizon_client_core::sound_source::SOUND_SOURCES;
 

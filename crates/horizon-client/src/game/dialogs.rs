@@ -14,8 +14,8 @@ use horizon_client::{
     text::Text,
     ui,
 };
+use horizon_os::time::Instant;
 use horizon_world::nbt::Tag;
-use std::time::Instant;
 use winit::keyboard::KeyCode;
 
 /// An open `DialogScreen`.

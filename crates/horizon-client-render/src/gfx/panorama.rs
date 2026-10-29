@@ -248,18 +248,16 @@ impl Rotation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        sync::atomic::{AtomicU32, Ordering},
-    };
+    use horizon_os::fs;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     struct Fixture(std::path::PathBuf);
     impl Fixture {
         fn new(size: u32) -> Self {
             static NEXT: AtomicU32 = AtomicU32::new(0);
-            let root = std::env::temp_dir().join(format!(
+            let root = horizon_os::env::temp_dir().join(format!(
                 "horizon-panorama-{}-{}",
-                std::process::id(),
+                horizon_os::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed),
             ));
             let fixture = Self(root);

@@ -9,8 +9,8 @@ use horizon_client::{
     pregen::{Pregen, Shape},
     text::{self, Text},
 };
+use horizon_os::time::{Duration, Instant};
 use horizon_protocol::packets::play::{self, Clientbound as C};
-use std::time::{Duration, Instant};
 
 /// How often the progress is reported.
 const REPORT_EVERY: Duration = Duration::from_secs(5);

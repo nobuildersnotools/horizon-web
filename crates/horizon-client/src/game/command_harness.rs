@@ -9,11 +9,9 @@
 //! `portal` sends the player through the nether portal it stands in.
 use super::Game;
 use horizon_client::{Result, text::Text};
+use horizon_os::time::{Duration, Instant};
 use serde_json::{Value, json};
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::path::Path;
 
 /// A message as `[text, style]` runs with adjacent equal styles merged; the
 /// style lists colour, bold, italic, underlined, strikethrough, obfuscated
@@ -49,7 +47,7 @@ impl Game<'_> {
         let server = self.integrated.take().ok_or("command harness: no server")?;
         while !server.stopped() {
             self.poll_stationary_client()?;
-            std::thread::sleep(Duration::from_millis(2));
+            horizon_os::thread::sleep(Duration::from_millis(2));
         }
         server.stop()
     }
@@ -155,7 +153,7 @@ impl Game<'_> {
             if Instant::now() > deadline {
                 return Err("command harness: terrain did not load".into());
             }
-            std::thread::sleep(Duration::from_millis(2));
+            horizon_os::thread::sleep(Duration::from_millis(2));
         }
     }
     pub(super) fn run_command_harness(&mut self, script: &Path, output: &Path) -> Result<()> {
@@ -176,11 +174,11 @@ impl Game<'_> {
             if Instant::now() > deadline {
                 return Err("command harness: owner did not connect".into());
             }
-            std::thread::sleep(Duration::from_millis(2));
+            horizon_os::thread::sleep(Duration::from_millis(2));
         }
         self.harness_owner(|g| g.harness_settle(deadline))?;
         let mut out = String::new();
-        for line in std::fs::read_to_string(script)?.lines() {
+        for line in horizon_os::fs::read_to_string(script)?.lines() {
             if line.trim().is_empty() {
                 continue;
             }
@@ -231,7 +229,7 @@ impl Game<'_> {
                         if Instant::now() > deadline {
                             return Err("command harness: portal did not arrive".into());
                         }
-                        std::thread::sleep(Duration::from_millis(2));
+                        horizon_os::thread::sleep(Duration::from_millis(2));
                     }
                     self.harness_owner(|g| g.harness_settle(deadline))?;
                 }
@@ -239,7 +237,7 @@ impl Game<'_> {
                 other => return Err(format!("command harness: unknown op {other}").into()),
             }
         }
-        std::fs::write(output, out)?;
+        horizon_os::fs::write(output, out)?;
         Ok(())
     }
 }

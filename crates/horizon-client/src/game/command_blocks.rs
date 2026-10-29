@@ -34,7 +34,7 @@ pub(super) struct CommandBlockScreen {
     /// The command box with its `CommandSuggestions`.
     command: ChatScreen,
     /// When the command box was focused, for its cursor's blink.
-    opened: std::time::Instant,
+    opened: horizon_os::time::Instant,
     previous: EditBox,
     track_output: bool,
     mode: Mode,
@@ -470,7 +470,7 @@ impl Game<'_> {
         let mut screen = CommandBlockScreen {
             pos,
             command,
-            opened: std::time::Instant::now(),
+            opened: horizon_os::time::Instant::now(),
             previous,
             track_output: block.track_output,
             mode: Mode::of_block(&state.name).unwrap_or(Mode::Redstone),

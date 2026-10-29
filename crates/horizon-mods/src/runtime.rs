@@ -1,5 +1,6 @@
 //! Loading and calling mods with wasmtime's component model.
 use crate::manifest::{Manifest, Package, Side};
+use horizon_os::time::{Duration, Instant, SystemTime};
 use server_bindings::{
     HorizonServerMod,
     exports::horizon::mods::server_events::Registration as ServerRegistration,
@@ -8,7 +9,6 @@ use server_bindings::{
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime},
 };
 use wasmtime::{
     Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap,
@@ -1326,10 +1326,10 @@ fn check_arguments(arguments: &[Argument]) -> Result<(), String> {
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
-    let meta = std::fs::metadata(path).ok()?;
+    let meta = horizon_os::fs::metadata(path).ok()?;
     if meta.is_dir() {
         // A folder mod changes when its component does.
-        return std::fs::metadata(path.join(crate::manifest::WASM))
+        return horizon_os::fs::metadata(path.join(crate::manifest::WASM))
             .ok()?
             .modified()
             .ok();
@@ -1916,7 +1916,7 @@ impl ui::Host for State {
 impl storage::Host for State {
     fn get(&mut self, key: String) -> Option<Vec<u8>> {
         storage_key_ok(&key)
-            .then(|| std::fs::read(self.data_dir.join(&key)).ok())
+            .then(|| horizon_os::fs::read(self.data_dir.join(&key)).ok())
             .flatten()
     }
     fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
@@ -1928,7 +1928,7 @@ impl storage::Host for State {
             return Err("too much storage traffic in one call".into());
         }
         // Everything already on disk but the file this call replaces.
-        let existing: Vec<std::fs::DirEntry> = std::fs::read_dir(&self.data_dir)
+        let existing: Vec<horizon_os::fs::DirEntry> = horizon_os::fs::read_dir(&self.data_dir)
             .into_iter()
             .flatten()
             .flatten()
@@ -1948,14 +1948,14 @@ impl storage::Host for State {
                 STORAGE_QUOTA >> 20
             ));
         }
-        std::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
-        std::fs::write(self.data_dir.join(&key), value).map_err(|e| e.to_string())?;
+        horizon_os::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
+        horizon_os::fs::write(self.data_dir.join(&key), value).map_err(|e| e.to_string())?;
         self.storage_budget -= len;
         Ok(())
     }
     fn delete(&mut self, key: String) {
         if storage_key_ok(&key) {
-            let _ = std::fs::remove_file(self.data_dir.join(&key));
+            let _ = horizon_os::fs::remove_file(self.data_dir.join(&key));
         }
     }
 }

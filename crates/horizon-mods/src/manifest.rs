@@ -1,4 +1,5 @@
 //! `horizon-mod.toml`, a mod's manifest, and the `.hmod` file around it.
+use horizon_os::fs::PathExt;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -322,16 +323,16 @@ impl Package {
     /// A `.hmod` (a zip holding `horizon-mod.toml`, `mod.wasm` and, for
     /// content, `assets/` and `data/`) or a folder holding the same.
     pub fn read(path: &Path) -> Result<Self, String> {
-        let (toml, wasm) = if path.is_dir() {
-            let toml = std::fs::read_to_string(path.join(MANIFEST));
+        let (toml, wasm) = if path.fs_is_dir() {
+            let toml = horizon_os::fs::read_to_string(path.join(MANIFEST));
             let wasm = path.join(WASM);
-            let wasm = match wasm.exists() {
-                true => Some(std::fs::read(wasm).map_err(|e| format!("{WASM}: {e}"))?),
+            let wasm = match wasm.fs_exists() {
+                true => Some(horizon_os::fs::read(wasm).map_err(|e| format!("{WASM}: {e}"))?),
                 false => None,
             };
             (toml.map_err(|e| format!("{MANIFEST}: {e}"))?, wasm)
         } else {
-            let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+            let file = horizon_os::fs::File::open(path).map_err(|e| e.to_string())?;
             let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
             let mut entry = |name: &str| -> Result<Option<Vec<u8>>, String> {
                 let f = match zip.by_name(name) {
@@ -394,13 +395,13 @@ impl Package {
 
 /// The `.hmod` files and mod folders in `dir`, by name.
 pub fn find(dir: &Path) -> Vec<PathBuf> {
-    let Ok(read) = std::fs::read_dir(dir) else {
+    let Ok(read) = horizon_os::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut found: Vec<PathBuf> = read
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "hmod") || p.join(MANIFEST).is_file())
+        .filter(|p| p.extension().is_some_and(|e| e == "hmod") || p.join(MANIFEST).fs_is_file())
         .collect();
     found.sort();
     found
@@ -532,14 +533,15 @@ capabilities = ["game-read", "hud"]
 
     #[test]
     fn hmod_round_trips() {
-        let dir = std::env::temp_dir().join(format!("horizon-mods-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir =
+            horizon_os::env::temp_dir().join(format!("horizon-mods-{}", horizon_os::process::id()));
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("coords_hud.hmod");
-        std::fs::write(&path, Package::write(EXAMPLE, b"\0asm").unwrap()).unwrap();
+        horizon_os::fs::write(&path, Package::write(EXAMPLE, b"\0asm").unwrap()).unwrap();
         let p = Package::read(&path).unwrap();
         assert_eq!(p.manifest.id, "coords_hud");
         assert_eq!(p.wasm.as_deref(), Some(&b"\0asm"[..]));
-        std::fs::remove_dir_all(&dir).unwrap();
+        horizon_os::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

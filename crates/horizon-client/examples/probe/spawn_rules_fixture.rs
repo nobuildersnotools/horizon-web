@@ -14,11 +14,11 @@ use horizon_client::{
     },
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_os::fs;
 use horizon_world::{chunk::BlockState, registry::BlockStateId};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as _,
-    fs,
     path::Path,
 };
 

@@ -7,8 +7,8 @@ use crate::{
     nbt::{self, Limits, NamedTag},
 };
 use horizon_core::position::ChunkPos;
+use horizon_os::fs::{self, File, OpenOptions};
 use std::{
-    fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -414,7 +414,7 @@ impl RegionWriter {
         let (temporary, file) = loop {
             let path = parent.join(format!(
                 ".horizon-{}-{}.tmp",
-                std::process::id(),
+                horizon_os::process::id(),
                 NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
             ));
             match OpenOptions::new()

@@ -9,11 +9,12 @@ use horizon_assets::{
     palette::{PalettedPermutations, apply_palette},
     resolve::{MISSING_MODEL, ModelLibrary},
 };
+use horizon_os::fs::PathExt;
+use horizon_os::fs::{self, File};
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
-    fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
@@ -222,7 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(dir) = stack.pop() {
         for entry in fs::read_dir(&dir)? {
             let path = entry?.path();
-            if path.is_dir() {
+            if path.fs_is_dir() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "json") {
                 let relative = path.strip_prefix(&models_dir)?.with_extension("");

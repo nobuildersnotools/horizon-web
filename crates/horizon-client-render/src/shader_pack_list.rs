@@ -2,6 +2,7 @@
 //! Settings > Shader Packs lists them: Horizon's own (docs/shaders.md) and those in the
 //! `shaders/` format, side by side.
 
+use horizon_os::fs::PathExt;
 use std::path::Path;
 
 pub const DIR: &str = "shaderpacks";
@@ -25,7 +26,7 @@ pub struct Entry {
 
 /// The packs in `dir`, Horizon's first, each kind by title. A missing folder has none.
 pub fn scan(dir: &Path) -> Vec<Entry> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = horizon_os::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut packs: Vec<Entry> = entries.flatten().filter_map(|e| entry(&e.path())).collect();
@@ -44,8 +45,8 @@ fn entry(path: &Path) -> Option<Entry> {
     if horizon_shader_api::package::is_pack(path) {
         // Its manifest's name; a pack that can't be read is still listed, under its file
         // name: picking it says why in the chat.
-        let manifest = if path.is_dir() {
-            std::fs::read_to_string(path.join(horizon_shader_api::MANIFEST))
+        let manifest = if path.fs_is_dir() {
+            horizon_os::fs::read_to_string(path.join(horizon_shader_api::MANIFEST))
                 .ok()
                 .and_then(|t| horizon_shader_api::Manifest::parse(&t).ok())
         } else {
@@ -60,11 +61,11 @@ fn entry(path: &Path) -> Option<Entry> {
             kind: Kind::Horizon,
         });
     }
-    let zip = path.is_file()
+    let zip = path.fs_is_file()
         && path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
-    (zip || path.join("shaders").is_dir()).then(|| Entry {
+    (zip || path.join("shaders").fs_is_dir()).then(|| Entry {
         title: file.clone(),
         file,
         kind: Kind::Classic,
@@ -77,19 +78,20 @@ mod tests {
 
     #[test]
     fn lists_both_kinds_horizon_first_and_skips_the_rest() {
-        let dir = std::env::temp_dir().join(format!("horizon-shader-list-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-shader-list-{}", horizon_os::process::id()));
+        let _ = horizon_os::fs::remove_dir_all(&dir);
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let d = dir.as_path();
         let manifest = "schema = 1\nid = \"warm\"\nname = \"Warm Light\"\nversion = \"1\"\n\
             api = \"0.1\"\n[[post]]\nfile = \"p.wgsl\"\n";
-        std::fs::create_dir(d.join("warm")).unwrap();
-        std::fs::write(d.join("warm").join(horizon_shader_api::MANIFEST), manifest).unwrap();
-        std::fs::create_dir_all(d.join("Classic Folder/shaders")).unwrap();
-        std::fs::write(d.join("archive.zip"), b"").unwrap();
-        std::fs::write(d.join("notes.txt"), b"").unwrap();
-        std::fs::create_dir(d.join("empty")).unwrap();
-        std::fs::create_dir_all(d.join(".hidden/shaders")).unwrap();
+        horizon_os::fs::create_dir(d.join("warm")).unwrap();
+        horizon_os::fs::write(d.join("warm").join(horizon_shader_api::MANIFEST), manifest).unwrap();
+        horizon_os::fs::create_dir_all(d.join("Classic Folder/shaders")).unwrap();
+        horizon_os::fs::write(d.join("archive.zip"), b"").unwrap();
+        horizon_os::fs::write(d.join("notes.txt"), b"").unwrap();
+        horizon_os::fs::create_dir(d.join("empty")).unwrap();
+        horizon_os::fs::create_dir_all(d.join(".hidden/shaders")).unwrap();
         let packs = scan(d);
         let listed: Vec<(&str, &str, Kind)> = packs
             .iter()
@@ -104,6 +106,6 @@ mod tests {
             ]
         );
         assert!(scan(&d.join("missing")).is_empty());
-        std::fs::remove_dir_all(d).unwrap();
+        horizon_os::fs::remove_dir_all(d).unwrap();
     }
 }

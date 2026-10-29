@@ -169,7 +169,7 @@ impl ChunkDecoder {
         let (jobs, todo) = mpsc::channel::<(Arc<ChunkFormat>, Box<C>)>();
         let (finished, done) = mpsc::channel();
         // The thread ends with the connection, when `jobs` is dropped.
-        let spawned = std::thread::Builder::new()
+        let spawned = horizon_os::thread::Builder::new()
             .name("Chunk decoder".into())
             .spawn(move || {
                 // A frame waits for its columns, as it would for the render
@@ -334,7 +334,7 @@ mod tests {
             let (packet, column) = loop {
                 match decoder.next() {
                     Next::Ready(decoded) => break decoded,
-                    Next::Decoding => std::thread::yield_now(),
+                    Next::Decoding => horizon_os::thread::yield_now(),
                     Next::Lost => panic!("the decoder stopped"),
                 }
             };

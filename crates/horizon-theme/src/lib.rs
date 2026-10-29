@@ -6,8 +6,8 @@
 //! Cool neutrals in two appearances and one violet accent; Geist and Geist Mono only, bundled
 //! here under the SIL Open Font License (`fonts/OFL-Geist.txt`). Colours are `0xRRGGBB`; sizes
 //! are in logical pixels.
+use horizon_os::time::Duration;
 use std::fmt::Write as _;
-use std::time::Duration;
 
 pub const FONT: &str = "Geist";
 pub const MONO: &str = "Geist Mono";
@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn tokens_css_is_up_to_date() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tokens.css");
-        let written = std::fs::read_to_string(path).unwrap_or_default();
+        let written = horizon_os::fs::read_to_string(path).unwrap_or_default();
         assert!(
             written == css(),
             "crates/horizon-theme/tokens.css is out of date: run `cargo run -p xtask -- tokens`"

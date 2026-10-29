@@ -3,9 +3,10 @@
 //! GUI scale is applied when drawing).
 use crate::Result;
 use horizon_assets::animation::AnimationMetadata;
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use std::{
     collections::{HashMap, HashSet},
-    fs,
     path::{Path, PathBuf},
 };
 use wgpu::util::DeviceExt;
@@ -144,7 +145,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        if path.fs_is_dir() {
             walk(&path, out);
         } else if path.extension().is_some_and(|e| e == "png") {
             out.push(path);
@@ -476,9 +477,9 @@ impl HudAtlas {
                 animated,
             ))
         };
-        let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
+        let threads = horizon_os::thread::available_parallelism().map_or(2, |n| n.get());
         let chunk = files.len().div_ceil(threads).max(1);
-        let decoded: Vec<_> = std::thread::scope(|scope| {
+        let decoded: Vec<_> = horizon_os::thread::scope(|scope| {
             let handles: Vec<_> = files
                 .chunks(chunk)
                 .map(|part| {
@@ -627,7 +628,7 @@ impl HudAtlas {
     fn glint_texture(root: &Path, defaults: &Path, name: &str) -> (Vec<u8>, u32, u32) {
         let relative = format!("assets/minecraft/textures/misc/{name}.png");
         let mut path = root.join(&relative);
-        if !path.exists() && defaults != root {
+        if !path.fs_exists() && defaults != root {
             path = defaults.join(&relative);
         }
         decode(&path).map_or((vec![0; 4], 1, 1), |(w, h, pixels)| (pixels, w, h))
@@ -1812,7 +1813,8 @@ mod tests {
     /// A resource root holding one animated block texture: a strip of two
     /// 16x16 frames, red then blue, whose mcmeta starts on the blue one.
     fn animated_root() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("horizon-atlas-anim-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir()
+            .join(format!("horizon-atlas-anim-{}", horizon_os::process::id()));
         let block = root.join("assets/minecraft/textures/block");
         fs::create_dir_all(&block).unwrap();
         write_strip(
@@ -1892,7 +1894,8 @@ mod tests {
     }
     #[test]
     fn a_pack_texture_keeps_the_default_textures_gui_size() {
-        let temp = std::env::temp_dir().join(format!("horizon-gui-size-{}", std::process::id()));
+        let temp = horizon_os::env::temp_dir()
+            .join(format!("horizon-gui-size-{}", horizon_os::process::id()));
         let (defaults, pack) = (temp.join("defaults"), temp.join("pack"));
         write_png(&defaults, "gui/container/inventory", 256, 256);
         write_png(&defaults, "gui/sprites/widget/button", 200, 20);
@@ -1970,8 +1973,10 @@ mod tests {
 
     /// A synthetic default font: two 8x8 glyphs, 3 and 5 pixels wide.
     fn two_glyph_font(name: &str) -> std::path::PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("horizon-fonts-{name}-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-fonts-{name}-{}",
+            horizon_os::process::id()
+        ));
         let font = root.join("assets/minecraft/font");
         let textures = root.join("assets/minecraft/textures/font");
         fs::create_dir_all(&font).unwrap();
@@ -2079,7 +2084,8 @@ mod tests {
     fn name_tags_draw_bold_text_and_tall_glyphs_like_any_text() {
         // `ascii.png`'s 8x8 'a' (4 pixels wide) and `accented.png`'s 9x12
         // 'й' (height 12, ascent 10: the breve above the line), 7 wide.
-        let root = std::env::temp_dir().join(format!("horizon-name-tag-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir()
+            .join(format!("horizon-name-tag-{}", horizon_os::process::id()));
         let textures = root.join("assets/minecraft/textures/font");
         fs::create_dir_all(root.join("assets/minecraft/font")).unwrap();
         fs::create_dir_all(&textures).unwrap();
@@ -2139,8 +2145,10 @@ mod tests {
         use crate::{effects::EffectInstance, hud_layout, hud_overlays, inventory_effects};
         // A synthetic resource tree exercises loading and painting together.
         // No Minecraft installation or GPU is needed for this regression test.
-        let root =
-            std::env::temp_dir().join(format!("horizon-effect-icons-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-effect-icons-{}",
+            horizon_os::process::id()
+        ));
         for (name, size) in [
             ("mob_effect/levitation", 18),
             ("gui/sprites/hud/effect_background", 24),

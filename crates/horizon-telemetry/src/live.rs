@@ -8,8 +8,8 @@
 //! version, the platform and whether a LAN or play-with-friends world is open. The game sends
 //! one every [`INTERVAL`]; the server counts a session while its last ping is under
 //! [`WINDOW`] old, keeps nothing on disk and serves the counts rounded ([`round`]).
+use horizon_os::time::Duration;
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 

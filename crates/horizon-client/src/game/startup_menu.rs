@@ -72,7 +72,9 @@ impl StartupMenu {
         self.root = root;
         if self.title.is_none() {
             let mut title = Title::new(
-                std::env::current_dir().unwrap_or_default().join("saves"),
+                horizon_os::env::current_dir()
+                    .unwrap_or_default()
+                    .join("saves"),
                 &self.root,
             );
             title.last_server = settings.file.string("lastServer");
@@ -222,40 +224,50 @@ pub(super) fn spawn_loader(
     vanilla_root: &std::path::Path,
     started: Instant,
     progress: &Progress,
-) -> Result<(Receiver<LoaderMsg>, JoinHandle<()>)> {
+) -> Result<(Receiver<LoaderMsg>, Option<JoinHandle<()>>)> {
     let (sender, receiver) = std::sync::mpsc::channel();
     let settings = settings.clone();
     let vanilla_root = vanilla_root.to_path_buf();
     let dev_mods = options.dev_mods.clone();
     let progress = progress.clone();
-    let handle = std::thread::Builder::new()
-        .name("resource-loader".into())
-        .spawn(move || {
-            let mut pack_error = None;
-            let root = packs::startup_root(&vanilla_root, &settings.resource_packs, &[])
-                .unwrap_or_else(|error| {
-                    pack_error = Some(error.to_string());
-                    vanilla_root.clone()
-                });
-            let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
-            let result = load_resources(
-                root,
-                &vanilla_root,
-                &settings,
-                started,
-                true,
-                &progress,
-                &mut |gui, root| {
-                    let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
-                },
-            )
-            .map(|mut loaded| {
-                loaded.pack_error = loaded.pack_error.or(pack_error);
-                loaded
-            })
-            .map_err(|error| error.to_string());
-            let _ = sender.send(LoaderMsg::Done(result));
-        })?;
+    let work = move || {
+        let mut pack_error = None;
+        let root = packs::startup_root(&vanilla_root, &settings.resource_packs, &[])
+            .unwrap_or_else(|error| {
+                pack_error = Some(error.to_string());
+                vanilla_root.clone()
+            });
+        let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
+        let result = load_resources(
+            root,
+            &vanilla_root,
+            &settings,
+            started,
+            true,
+            &progress,
+            &mut |gui, root| {
+                let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
+            },
+        )
+        .map(|mut loaded| {
+            loaded.pack_error = loaded.pack_error.or(pack_error);
+            loaded
+        })
+        .map_err(|error| error.to_string());
+        let _ = sender.send(LoaderMsg::Done(result));
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let handle = Some(
+        horizon_os::thread::Builder::new()
+            .name("resource-loader".into())
+            .spawn(work)?,
+    );
+    // No threads on the page yet: load now, before the window opens.
+    #[cfg(target_arch = "wasm32")]
+    let handle = {
+        work();
+        None
+    };
     Ok((receiver, handle))
 }
 
@@ -382,7 +394,7 @@ impl Loading {
                 }
                 Event::OpenPackFolder => {
                     let dir = packs::packs_dir();
-                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = horizon_os::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
                 Event::DataPacks(ids) => {
@@ -391,12 +403,12 @@ impl Loading {
                     }
                 }
                 Event::OpenDataPackFolder(dir) => {
-                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = horizon_os::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
                 Event::OpenModFolder => {
                     let dir = Game::options_path().with_file_name(horizon_client::mod_list::DIR);
-                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = horizon_os::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
                 Event::ListShaderPacks => {
@@ -406,7 +418,7 @@ impl Loading {
                 Event::ShaderPack => self.save_menu_settings(),
                 Event::OpenShaderPackFolder => {
                     let dir = Game::shader_packs_dir();
-                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = horizon_os::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
                 Event::Credits => {
@@ -714,7 +726,7 @@ impl Loading {
             &self.progress,
         )?;
         self.receiver = receiver;
-        self.handle = Some(handle);
+        self.handle = handle;
         self.menu.reload_packs = false;
         Ok(())
     }
@@ -759,12 +771,12 @@ mod tests {
 
     #[test]
     fn menu_is_usable_while_the_core_worker_is_blocked() {
-        let root = std::env::temp_dir().join("horizon-startup-menu-no-world-resources");
+        let root = horizon_os::env::temp_dir().join("horizon-startup-menu-no-world-resources");
         let (sender, receiver) = std::sync::mpsc::channel();
         let (release, wait) = std::sync::mpsc::channel();
         let (published, published_rx) = std::sync::mpsc::channel();
         let worker_root = root.clone();
-        let worker = std::thread::spawn(move || {
+        let worker = horizon_os::thread::spawn(move || {
             sender
                 .send(LoaderMsg::Ui(gui(&worker_root), worker_root))
                 .unwrap();
@@ -830,7 +842,7 @@ mod tests {
     #[test]
     fn a_failed_generation_keeps_its_error_after_the_loader_ends() {
         let (sender, receiver) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
+        let worker = horizon_os::thread::spawn(move || {
             sender
                 .send(LoaderMsg::Done(Err("missing facts.json".into())))
                 .unwrap();
@@ -844,7 +856,7 @@ mod tests {
         // once more before it exits, with the loader gone.
         assert!(matches!(loading.loaded.take(), Some(Err(e)) if e == "missing facts.json"));
         while !loading.handle.as_ref().is_none_or(JoinHandle::is_finished) {
-            std::thread::yield_now();
+            horizon_os::thread::yield_now();
         }
         loading.poll_menu_resources().unwrap();
         assert!(loading.loaded.is_none());
@@ -853,12 +865,12 @@ mod tests {
     #[test]
     fn a_panicking_loader_reports_its_panic() {
         let (sender, receiver) = std::sync::mpsc::channel::<LoaderMsg>();
-        let worker = std::thread::spawn(move || {
+        let worker = horizon_os::thread::spawn(move || {
             let _sender = sender;
             panic!("atlas has no fonts");
         });
         while !worker.is_finished() {
-            std::thread::yield_now();
+            horizon_os::thread::yield_now();
         }
         let mut loading = loading(receiver);
         loading.handle = Some(worker);

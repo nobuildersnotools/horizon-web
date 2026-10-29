@@ -9,6 +9,8 @@
 //! path ends in `.json`, the game listens on a random localhost TCP port and
 //! writes `{"transport":"tcp","port":N,"token":"..."}` to the path, readable
 //! only by its user; a client's first line must then be `auth TOKEN`.
+use horizon_os::fs::PathExt;
+use horizon_os::thread;
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
@@ -18,7 +20,6 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
-    thread,
 };
 
 #[cfg(unix)]
@@ -40,7 +41,7 @@ impl Stream {
         })
     }
     /// A read timeout (None waits forever).
-    pub fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> io::Result<()> {
+    pub fn set_read_timeout(&self, timeout: Option<horizon_os::time::Duration>) -> io::Result<()> {
         match self {
             #[cfg(unix)]
             Self::Unix(s) => s.set_read_timeout(timeout),
@@ -81,7 +82,7 @@ pub fn uses_tcp(path: &Path) -> bool {
 
 /// The TCP endpoint file: (port, token).
 fn read_endpoint(path: &Path) -> io::Result<(u16, String)> {
-    let text = std::fs::read_to_string(path)?;
+    let text = horizon_os::fs::read_to_string(path)?;
     let bad = || io::Error::new(io::ErrorKind::InvalidData, "not a control endpoint file");
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| bad())?;
     let port = v["port"]
@@ -121,11 +122,11 @@ fn random_token() -> String {
             let mut h = std::collections::hash_map::RandomState::new().build_hasher();
             h.write_u64(i);
             h.write_u128(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                horizon_os::time::SystemTime::now()
+                    .duration_since(horizon_os::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_nanos()),
             );
-            h.write_u32(std::process::id());
+            h.write_u32(horizon_os::process::id());
             format!("{:016x}", h.finish())
         })
         .collect()
@@ -133,7 +134,7 @@ fn random_token() -> String {
 
 /// Write the endpoint file so that only this user can read it.
 fn write_private(path: &Path, text: &str) -> io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
+    let mut options = horizon_os::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
@@ -170,17 +171,18 @@ pub fn default_path() -> PathBuf {
         return path.into();
     }
     if !cfg!(unix) {
-        return std::env::temp_dir().join("horizon-control.json");
+        return horizon_os::env::temp_dir().join("horizon-control.json");
     }
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+    let dir =
+        std::env::var_os("XDG_RUNTIME_DIR").map_or_else(horizon_os::env::temp_dir, PathBuf::from);
     dir.join("horizon-control.sock")
 }
 
 impl Server {
     pub fn start(path: &Path) -> io::Result<Self> {
         // An endpoint left by a crashed game refuses connections; replace it.
-        if path.exists() && connect(path).is_err() {
-            std::fs::remove_file(path)?;
+        if path.fs_exists() && connect(path).is_err() {
+            horizon_os::fs::remove_file(path)?;
         }
         let (sender, requests) = mpsc::channel();
         let local = sender.clone();
@@ -277,7 +279,7 @@ fn spawn_listener<S: Send + 'static>(
                     return;
                 }
                 let Ok(stream) = next else {
-                    thread::sleep(std::time::Duration::from_millis(10));
+                    thread::sleep(horizon_os::time::Duration::from_millis(10));
                     continue;
                 };
                 let sender = sender.clone();
@@ -337,7 +339,7 @@ impl Drop for Server {
             #[cfg(not(unix))]
             None => {}
         }
-        let _ = std::fs::remove_file(&self.path);
+        let _ = horizon_os::fs::remove_file(&self.path);
     }
 }
 
@@ -370,10 +372,12 @@ mod tests {
 
     #[test]
     fn tcp_endpoint_round_trip() {
-        let path =
-            std::env::temp_dir().join(format!("horizon-ctl-test-{}.json", std::process::id()));
+        let path = horizon_os::env::temp_dir().join(format!(
+            "horizon-ctl-test-{}.json",
+            horizon_os::process::id()
+        ));
         let server = Server::start(&path).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
+        let text = horizon_os::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"tcp\""));
         let mut client = connect(&path).unwrap();
         writeln!(client, "status").unwrap();
@@ -381,7 +385,7 @@ mod tests {
             if let Some(r) = server.try_recv() {
                 break r;
             }
-            thread::sleep(std::time::Duration::from_millis(5));
+            thread::sleep(horizon_os::time::Duration::from_millis(5));
         };
         assert_eq!(request.line, "status");
         request.reply.send(r#"{"ok":true}"#.into()).unwrap();
@@ -389,13 +393,15 @@ mod tests {
         BufReader::new(client).read_line(&mut reply).unwrap();
         assert_eq!(reply.trim(), r#"{"ok":true}"#);
         drop(server);
-        assert!(!path.exists());
+        assert!(!path.fs_exists());
     }
 
     #[test]
     fn tcp_refuses_a_wrong_token() {
-        let path =
-            std::env::temp_dir().join(format!("horizon-ctl-bad-{}.json", std::process::id()));
+        let path = horizon_os::env::temp_dir().join(format!(
+            "horizon-ctl-bad-{}.json",
+            horizon_os::process::id()
+        ));
         let _server = Server::start(&path).unwrap();
         let (port, _) = read_endpoint(&path).unwrap();
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();

@@ -9,8 +9,8 @@
 //!
 //! The one exception is [`live`]: the anonymous "I'm playing" ping the game sends while it
 //! runs, for the live player count. It holds no install ID and nothing about the player.
+use horizon_os::time::{SystemTime, UNIX_EPOCH};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod batch;
 pub mod consent;
@@ -87,11 +87,11 @@ pub(crate) fn random_hex(bytes: usize) -> String {
 /// Writes `bytes` through a temporary file, so a reader never sees half of it.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        horizon_os::fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension(format!("tmp-{}", random_hex(4)));
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)
+    horizon_os::fs::write(&tmp, bytes)?;
+    horizon_os::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]
@@ -100,9 +100,9 @@ pub(crate) mod test_home {
 
     /// An empty folder of its own under the system's temporary folder.
     pub fn new(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("horizon-telemetry-{name}-{}", super::random_hex(6)));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-telemetry-{name}-{}", super::random_hex(6)));
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         dir
     }
 }

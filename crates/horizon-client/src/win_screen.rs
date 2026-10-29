@@ -69,7 +69,7 @@ impl WinScreen {
             direction: 1,
         };
         let texts = root.join("assets/minecraft/texts");
-        let read = |name: &str| match std::fs::read_to_string(texts.join(name)) {
+        let read = |name: &str| match horizon_os::fs::read_to_string(texts.join(name)) {
             Ok(s) => Some(s),
             Err(e) => {
                 log::error!("Couldn't load credits from file minecraft:texts/{name}: {e}");
@@ -313,16 +313,18 @@ mod tests {
         // the same arguments used to remove each other's files.
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root =
-            std::env::temp_dir().join(format!("horizon-win-screen-{}-{n}", std::process::id()));
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-win-screen-{}-{n}",
+            horizon_os::process::id()
+        ));
         let texts = root.join("assets/minecraft/texts");
-        std::fs::create_dir_all(&texts).unwrap();
-        std::fs::write(texts.join("end.txt"), end).unwrap();
-        std::fs::write(texts.join("credits.json"), credits).unwrap();
-        std::fs::write(texts.join("postcredits.txt"), post).unwrap();
+        horizon_os::fs::create_dir_all(&texts).unwrap();
+        horizon_os::fs::write(texts.join("end.txt"), end).unwrap();
+        horizon_os::fs::write(texts.join("credits.json"), credits).unwrap();
+        horizon_os::fs::write(texts.join("postcredits.txt"), post).unwrap();
         let atlas = HudAtlas::fonts(&root).unwrap();
         let screen = WinScreen::new(poem, &root, "Steve", &atlas.font);
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
         screen
     }
     const CREDITS: &str = r#"[{"section":"Studio","disciplines":[

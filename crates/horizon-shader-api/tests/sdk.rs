@@ -6,9 +6,12 @@ use std::{path::Path, process::Command};
 const TOOL: &str = env!("CARGO_BIN_EXE_horizon-shader");
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("horizon-shader-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = horizon_os::env::temp_dir().join(format!(
+        "horizon-shader-{name}-{}",
+        horizon_os::process::id()
+    ));
+    let _ = horizon_os::fs::remove_dir_all(&dir);
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     dir
 }
 
@@ -48,7 +51,7 @@ fn every_template_makes_a_pack_that_passes() {
         "water",
     ]);
     assert!(!ok && text.contains("no template \"water\""), "{text}");
-    std::fs::remove_dir_all(root).unwrap();
+    horizon_os::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -74,7 +77,7 @@ fn packs_and_checks_the_package() {
     assert_eq!(report[0]["sha256"], sha.as_str());
     assert_eq!(report[0]["stages"][0]["stage"], "post");
 
-    std::fs::write(
+    horizon_os::fs::write(
         dir.join("post.wgsl"),
         "fn post(input: PostInput) -> vec4<f32> { return input.color }\n",
     )
@@ -88,5 +91,5 @@ fn packs_and_checks_the_package() {
     assert_eq!(report[0]["problems"][0]["line"], 1);
     let (ok, text) = run(&["pack", dir_s]);
     assert!(!ok && text.contains("failed the check"), "{text}");
-    std::fs::remove_dir_all(root).unwrap();
+    horizon_os::fs::remove_dir_all(root).unwrap();
 }

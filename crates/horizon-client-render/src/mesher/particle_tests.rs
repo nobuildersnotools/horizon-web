@@ -1,4 +1,5 @@
 use super::*;
+use horizon_os::fs::PathExt;
 
 /// `TerrainParticle`: the model's particle sprite and tint source 0's
 /// `colorAsTerrainParticle` (#1034: grass blocks crumbled as tinted grass tops).
@@ -6,7 +7,7 @@ use super::*;
 fn terrain_particles_use_the_particle_sprite_and_vanilla_tint_sources() {
     let root =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
-    if !root.join("horizon-resources.json").exists() {
+    if !root.join("horizon-resources.json").fs_exists() {
         return;
     }
     let assets = Assets::load(&root).unwrap();

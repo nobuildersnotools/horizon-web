@@ -12,6 +12,7 @@ use horizon_client::{
     screen_draw::Measure,
     text::{ClickEvent, Style, Text},
 };
+use horizon_os::fs::PathExt;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -83,7 +84,7 @@ pub struct UiState {
     pub chat: Chat,
     pub chat_screen: Option<ChatScreen>,
     /// When the chat screen opened (its input took the focus: the cursor blink).
-    pub chat_opened: Option<std::time::Instant>,
+    pub chat_opened: Option<horizon_os::time::Instant>,
     /// The chat screen is `InBedChatScreen`: the sleeper's, with a Leave Bed button.
     pub in_bed_chat: bool,
     pub registries: Registries,
@@ -106,10 +107,10 @@ pub struct UiState {
     pub vanilla_root: std::path::PathBuf,
     /// Death screen cause and when the player died (buttons wait 20 ticks).
     pub death_text: Option<Text>,
-    pub died_at: Option<std::time::Instant>,
+    pub died_at: Option<horizon_os::time::Instant>,
     /// `DeathScreen.TitleConfirmScreen` and when it opened (its buttons wait
     /// 20 ticks, `setDelay`).
-    pub death_confirm: Option<std::time::Instant>,
+    pub death_confirm: Option<horizon_os::time::Instant>,
     /// `LivingEntity.deathTime` of the window's player: ticks since it died.
     pub death_time: u32,
 }
@@ -119,7 +120,7 @@ impl UiState {
     /// in the game folder (`ChatComponent`'s constructor).
     pub fn new() -> Self {
         let mut ui = Self::default();
-        if let Ok(dir) = std::env::current_dir() {
+        if let Ok(dir) = horizon_os::env::current_dir() {
             ui.chat.load_history(&dir);
         }
         ui
@@ -161,12 +162,12 @@ fn ids_under(root: &Path, extension: &str) -> Vec<String> {
 /// The templates of every namespace folder under `root` (vanilla's and the
 /// content mods'), as `namespace:path`, sorted.
 fn templates_under(root: &Path) -> Vec<String> {
-    let Ok(namespaces) = std::fs::read_dir(root) else {
+    let Ok(namespaces) = horizon_os::fs::read_dir(root) else {
         return Vec::new();
     };
     let mut out: Vec<String> = namespaces
         .flatten()
-        .filter(|e| e.path().is_dir())
+        .filter(|e| e.path().fs_is_dir())
         .flat_map(|e| ids_in(&e.path(), "nbt", &e.file_name().to_string_lossy()))
         .collect();
     out.sort();
@@ -178,7 +179,7 @@ fn ids_in(root: &Path, extension: &str, namespace: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_owned()];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        let Ok(entries) = horizon_os::fs::read_dir(&dir) else {
             continue;
         };
         for e in entries.flatten() {
@@ -187,7 +188,7 @@ fn ids_in(root: &Path, extension: &str, namespace: &str) -> Vec<String> {
             // link is followed, as `Path::is_dir` does.
             let is_dir = e
                 .file_type()
-                .is_ok_and(|t| t.is_dir() || (t.is_symlink() && path.is_dir()));
+                .is_ok_and(|t| t.is_dir() || (t.is_symlink() && path.fs_is_dir()));
             if is_dir {
                 stack.push(path);
             } else if path.extension().and_then(|x| x.to_str()) == Some(extension)
@@ -342,7 +343,7 @@ impl Game<'_> {
         reg.summonable = summonable;
         let root = self.options.resources.clone();
         let mut types: Vec<String> = serde_json::from_slice::<serde_json::Value>(
-            &std::fs::read(root.join("entity-types.json")).unwrap_or_default(),
+            &horizon_os::fs::read(root.join("entity-types.json")).unwrap_or_default(),
         )
         .ok()
         .and_then(|v| {
@@ -360,7 +361,7 @@ impl Game<'_> {
         types.sort();
         reg.entity_types = types;
         let list = |dir: &str| -> Vec<String> {
-            let mut out: Vec<String> = std::fs::read_dir(root.join(dir))
+            let mut out: Vec<String> = horizon_os::fs::read_dir(root.join(dir))
                 .into_iter()
                 .flatten()
                 .flatten()
@@ -400,7 +401,7 @@ impl Game<'_> {
                 name.trim_start_matches("minecraft:")
             ));
             let Ok(v) = serde_json::from_slice::<serde_json::Value>(
-                &std::fs::read(path).unwrap_or_default(),
+                &horizon_os::fs::read(path).unwrap_or_default(),
             ) else {
                 continue;
             };
@@ -429,7 +430,7 @@ impl Game<'_> {
         }
         // Vanilla's built-in registries (mob effects, components, dialogs...).
         for dir in [&self.options.resources, &self.ui.vanilla_root] {
-            if let Ok(bytes) = std::fs::read(dir.join("command-registries.json"))
+            if let Ok(bytes) = horizon_os::fs::read(dir.join("command-registries.json"))
                 && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
             {
                 self.ui.registries.fill_from_export(&v);
@@ -492,7 +493,7 @@ impl Game<'_> {
         );
         screen.auto_suggestions = self.settings.auto_suggestions;
         self.ui.chat_screen = Some(screen);
-        self.ui.chat_opened = Some(std::time::Instant::now());
+        self.ui.chat_opened = Some(horizon_os::time::Instant::now());
         self.screen = Screen::Chat;
         self.keys.clear();
         self.left = false;
@@ -1064,7 +1065,8 @@ impl Game<'_> {
         self.ui.clock = WorldClock::default();
         // PrimaryLevelData: the difficulty comes back from level.dat's difficulty_settings.
         self.ui.difficulty = self.level.difficulty_id();
-        if let Ok(bytes) = std::fs::read(self.world_root.join("data/minecraft/world_clocks.dat"))
+        if let Ok(bytes) =
+            horizon_os::fs::read(self.world_root.join("data/minecraft/world_clocks.dat"))
             && let Ok(raw) = horizon_world::compression::Compression::Gzip.decode(&bytes, 1 << 20)
             && let Ok((root, _)) =
                 horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default())
@@ -1143,7 +1145,7 @@ impl Game<'_> {
     /// cause is known to the client).
     pub(super) fn death_message(&mut self) {
         let cause = self.ui.death_cause.take();
-        self.ui.died_at = Some(std::time::Instant::now());
+        self.ui.died_at = Some(horizon_os::time::Instant::now());
         self.ui.death_text = None;
         self.ui.death_confirm = None;
         if !self.ui.rules.bool("show_death_messages") {
@@ -1182,10 +1184,10 @@ impl Game<'_> {
     }
     /// F2: ScreenShot.grab into `screenshots/` with vanilla's file name.
     pub(super) fn take_screenshot(&mut self) {
-        let dir = std::env::current_dir()
+        let dir = horizon_os::env::current_dir()
             .unwrap_or_default()
             .join("screenshots");
-        if std::fs::create_dir_all(&dir).is_err() {
+        if horizon_os::fs::create_dir_all(&dir).is_err() {
             return;
         }
         let name = screenshot_name(&dir);
@@ -1242,7 +1244,7 @@ pub fn screenshot_name(dir: &std::path::Path) -> String {
         } else {
             format!("{base}_{n}.png")
         };
-        if !dir.join(&name).exists() {
+        if !dir.join(&name).fs_exists() {
             return name;
         }
         n += 1;
@@ -1265,17 +1267,18 @@ mod tests {
 
     #[test]
     fn resource_ids_are_listed_once_per_root() {
-        let root = std::env::temp_dir().join(format!("horizon-ids-{}", std::process::id()));
+        let root =
+            horizon_os::env::temp_dir().join(format!("horizon-ids-{}", horizon_os::process::id()));
         let recipe = root.join("data/minecraft/recipe");
-        std::fs::create_dir_all(recipe.join("sub")).unwrap();
-        std::fs::write(recipe.join("b.json"), "{}").unwrap();
-        std::fs::write(recipe.join("sub/a.json"), "{}").unwrap();
-        std::fs::write(recipe.join("notes.txt"), "").unwrap();
+        horizon_os::fs::create_dir_all(recipe.join("sub")).unwrap();
+        horizon_os::fs::write(recipe.join("b.json"), "{}").unwrap();
+        horizon_os::fs::write(recipe.join("sub/a.json"), "{}").unwrap();
+        horizon_os::fs::write(recipe.join("notes.txt"), "").unwrap();
         let first = resource_ids(&root);
         assert_eq!(first.recipes, ["minecraft:b", "minecraft:sub/a"]);
         assert!(first.loot_tables.is_empty());
-        std::fs::write(recipe.join("c.json"), "{}").unwrap();
+        horizon_os::fs::write(recipe.join("c.json"), "{}").unwrap();
         assert!(Arc::ptr_eq(&first, &resource_ids(&root)));
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 }

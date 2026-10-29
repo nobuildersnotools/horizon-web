@@ -4,10 +4,10 @@ use horizon_core::{
     position::BlockPos,
     random::{LegacyRandom, RandomSource, XoroshiroRandom},
 };
+use horizon_os::fs;
 use horizon_world::teleport_consume::{TeleportConsume, TeleportConsumeWorld};
 use serde_json::Value;
 use std::{
-    fs,
     io::{self, Write},
     path::Path,
 };

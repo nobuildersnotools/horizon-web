@@ -271,7 +271,7 @@ mod tests {
         a: impl FnOnce() -> A + Send + 'static,
         b: impl FnOnce() -> B + Send + 'static,
     ) -> (A, B) {
-        let t = std::thread::spawn(a);
+        let t = horizon_os::thread::spawn(a);
         let rb = b();
         (t.join().unwrap(), rb)
     }

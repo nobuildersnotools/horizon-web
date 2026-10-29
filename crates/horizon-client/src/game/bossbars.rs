@@ -14,6 +14,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::random::RandomSource;
+use horizon_os::fs::PathExt;
 use horizon_protocol::packets::play::{self, BossAction, Clientbound as C};
 use horizon_world::nbt::Tag;
 use std::collections::{HashMap, HashSet};
@@ -51,7 +52,7 @@ impl Game<'_> {
         if !self.bosses.loaded || self.remote.is_some() {
             return;
         }
-        if self.bosses.bars.bars.is_empty() && !self.bossbar_path().exists() {
+        if self.bosses.bars.bars.is_empty() && !self.bossbar_path().fs_exists() {
             return;
         }
         if let Err(e) = save::write_dat(

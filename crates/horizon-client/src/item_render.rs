@@ -26,11 +26,11 @@ use horizon_assets::{
     palette::PalettedPermutations,
     resolve::{MISSING_MODEL, ModelLibrary},
 };
+use horizon_os::fs;
 use horizon_world::nbt::Tag;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap},
-    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -857,8 +857,10 @@ mod tests {
     /// items.json still reports itself first.
     #[test]
     fn item_model_errors_wait_for_the_item_definitions() -> crate::Result<()> {
-        let root =
-            std::env::temp_dir().join(format!("horizon-item-model-errors-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-item-model-errors-{}",
+            horizon_os::process::id()
+        ));
         let model = root.join("assets/horizon/models/INVALID.json");
         fs::create_dir_all(model.parent().unwrap())?;
         fs::write(model, "{}")?;

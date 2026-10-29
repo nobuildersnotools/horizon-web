@@ -217,16 +217,16 @@ pub struct Resolver {
     entries: std::collections::HashMap<NameOrId, Entry>,
     done: std::sync::mpsc::Receiver<(NameOrId, Option<ResolvedProfile>)>,
     send: std::sync::mpsc::Sender<(NameOrId, Option<ResolvedProfile>)>,
-    last_sweep: std::time::Instant,
+    last_sweep: horizon_os::time::Instant,
 }
 struct Entry {
-    touched: std::time::Instant,
+    touched: horizon_os::time::Instant,
     /// `None` while the fetch is in flight.
     resolved: Option<Option<ResolvedProfile>>,
 }
 /// `ProfileResolver.Cached`'s cache bounds.
 const MAX_PROFILES: usize = 256;
-const PROFILE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const PROFILE_TTL: horizon_os::time::Duration = horizon_os::time::Duration::from_secs(10 * 60);
 
 /// `StringUtil.isValidPlayerName` (the check `fetchByName` makes first).
 fn valid_player_name(name: &str) -> bool {
@@ -284,15 +284,15 @@ impl Resolver {
             entries: Default::default(),
             done,
             send,
-            last_sweep: std::time::Instant::now(),
+            last_sweep: horizon_os::time::Instant::now(),
         }
     }
     /// `CacheBuilder.expireAfterAccess` with `maximumSize`.
     fn sweep(&mut self) {
-        if self.last_sweep.elapsed() < std::time::Duration::from_secs(30) {
+        if self.last_sweep.elapsed() < horizon_os::time::Duration::from_secs(30) {
             return;
         }
-        self.last_sweep = std::time::Instant::now();
+        self.last_sweep = horizon_os::time::Instant::now();
         self.entries
             .retain(|_, e| e.touched.elapsed() < PROFILE_TTL);
         while self.entries.len() > MAX_PROFILES
@@ -311,14 +311,14 @@ impl Resolver {
             self.entries.insert(
                 key,
                 Entry {
-                    touched: std::time::Instant::now(),
+                    touched: horizon_os::time::Instant::now(),
                     resolved: Some(resolved),
                 },
             );
         }
         self.sweep();
         if let Some(entry) = self.entries.get_mut(key) {
-            entry.touched = std::time::Instant::now();
+            entry.touched = horizon_os::time::Instant::now();
             return match &entry.resolved {
                 Some(resolved) => Resolve::Done(resolved.clone()),
                 None => Resolve::Pending,
@@ -330,7 +330,7 @@ impl Resolver {
         self.entries.insert(
             key.clone(),
             Entry {
-                touched: std::time::Instant::now(),
+                touched: horizon_os::time::Instant::now(),
                 resolved: resolved.then_some(None),
             },
         );
@@ -338,7 +338,7 @@ impl Resolver {
             return Resolve::Done(None);
         }
         let (key, send) = (key.clone(), self.send.clone());
-        std::thread::spawn(move || {
+        horizon_os::thread::spawn(move || {
             let resolved = crate::auth::discovery()
                 .ok()
                 .and_then(|doc| resolve_profile(&key, &doc));
@@ -543,7 +543,7 @@ pub fn offline_cape() -> Option<&'static [u8]> {
     static CAPE: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
     CAPE.get_or_init(|| {
         let path = std::env::var_os("HORIZON_OFFLINE_CAPE").filter(|p| !p.is_empty())?;
-        let image = std::fs::read(&path)
+        let image = horizon_os::fs::read(&path)
             .map_err(|e| e.to_string())
             .and_then(|bytes| crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string()))
             .and_then(|(w, h, rgba)| process_cape(w, h, &rgba).ok_or("not an image".into()));
@@ -729,11 +729,11 @@ impl Downloader {
             .join(if digest.len() > 2 { &digest[..2] } else { "xx" })
             .join(&digest);
         let (url, send) = (url.to_owned(), self.send.clone());
-        std::thread::spawn(move || {
-            let bytes = std::fs::read(&file).ok().or_else(|| {
+        horizon_os::thread::spawn(move || {
+            let bytes = horizon_os::fs::read(&file).ok().or_else(|| {
                 let body = http_get(&url)?;
-                let _ = std::fs::create_dir_all(file.parent()?);
-                let _ = std::fs::write(&file, &body);
+                let _ = horizon_os::fs::create_dir_all(file.parent()?);
+                let _ = horizon_os::fs::write(&file, &body);
                 Some(body)
             });
             let image = bytes
@@ -785,7 +785,7 @@ impl Downloader {
                 .root
                 .join(if digest.len() > 2 { &digest[..2] } else { "xx" })
                 .join(digest);
-            let (w, h, rgba) = crate::hud::decode_bytes(&std::fs::read(&file).ok()?).ok()?;
+            let (w, h, rgba) = crate::hud::decode_bytes(&horizon_os::fs::read(&file).ok()?).ok()?;
             process(w, h, &rgba)
         });
         let Some(image) = image else {
@@ -808,7 +808,7 @@ impl Downloader {
 fn http_get(url: &str) -> Option<Vec<u8>> {
     use std::io::Read;
     let response = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(horizon_os::time::Duration::from_secs(15))
         .user_agent("Java")
         .build()
         .get(url)
@@ -949,7 +949,7 @@ mod tests {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        std::thread::spawn(move || {
+        horizon_os::thread::spawn(move || {
             let reply = |status: &str, body: &str| {
                 format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1002,7 +1002,7 @@ mod tests {
     /// A skin evicted from the atlas re-uploads (`again`), once per ask.
     #[test]
     fn evicted_skins_upload_again() {
-        let mut d = super::Downloader::new(std::env::temp_dir().join("horizon-test-skins"));
+        let mut d = super::Downloader::new(horizon_os::env::temp_dir().join("horizon-test-skins"));
         d.remember("skins/abc".into(), vec![1, 2, 3]);
         assert!(d.again("skins/abc"));
         assert!(!d.again("skins/missing"));
@@ -1069,7 +1069,7 @@ mod tests {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        std::thread::spawn(move || {
+        horizon_os::thread::spawn(move || {
             for stream in listener.incoming().take(2) {
                 let mut stream = stream.unwrap();
                 let mut line = String::new();

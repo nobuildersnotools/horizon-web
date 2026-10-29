@@ -7,6 +7,7 @@ rust-version = "1.90"
 description = "The dedicated server's vanilla files: server.properties, eula.txt, ops, whitelist and bans, and account lookups"
 
 [dependencies]
+horizon-os = { path = "../horizon-os" }
 horizon-core = { path = "../horizon-core" }
 horizon-protocol = { path = "../horizon-protocol" }
 horizon-world = { path = "../horizon-world" }
@@ -18,3 +19,8 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [lints]
 workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+rustls-pki-types = { version = "1", features = ["web"] }

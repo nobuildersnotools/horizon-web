@@ -3,6 +3,7 @@
 //! check of the codecs against a real vanilla server:
 //!
 //!     cargo run -p horizon-protocol --example protocol_probe -- 127.0.0.1:25565 [seconds] [registries.json]
+use horizon_os::time::{Duration, Instant};
 use horizon_protocol::{
     PROTOCOL_VERSION, State,
     connection::Connection,
@@ -11,10 +12,7 @@ use horizon_protocol::{
     registry::{Builtin, Dynamic, ceil_log2},
     servers::parse_address,
 };
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
+use std::collections::BTreeMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();

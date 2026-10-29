@@ -6,8 +6,9 @@ use horizon_client::{
     fast_hash::FxHashMap,
     random_tick_sections::RandomTickSections,
 };
+use horizon_os::time::Instant;
 use horizon_world::registry::BlockStateId;
-use std::{hint::black_box, path::Path, sync::Arc, time::Instant};
+use std::{hint::black_box, path::Path, sync::Arc};
 
 fn select_baseline(chunks: &FxHashMap<(i32, i32), Arc<Chunk>>, facts: &BlockFacts) -> usize {
     let mut ticking = Vec::new();

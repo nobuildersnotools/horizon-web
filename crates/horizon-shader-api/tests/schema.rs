@@ -10,7 +10,7 @@ fn sample_dir() -> &'static Path {
 }
 
 fn sample_text() -> String {
-    std::fs::read_to_string(sample_dir().join(MANIFEST)).unwrap()
+    horizon_os::fs::read_to_string(sample_dir().join(MANIFEST)).unwrap()
 }
 
 fn refused(text: &str) -> String {
@@ -184,12 +184,13 @@ fn reads_the_sample_folder_and_its_package_alike() {
         folder.package().unwrap(),
         "packaging is reproducible"
     );
-    let dir = std::env::temp_dir().join(format!("horizon-shader-api-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = horizon_os::env::temp_dir()
+        .join(format!("horizon-shader-api-{}", horizon_os::process::id()));
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("sample_pack.hshader");
-    std::fs::write(&path, &bytes).unwrap();
+    horizon_os::fs::write(&path, &bytes).unwrap();
     let packaged = Pack::read(&path).unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
+    horizon_os::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(packaged.files, folder.files);
     assert_eq!(packaged.manifest, folder.manifest);
 }

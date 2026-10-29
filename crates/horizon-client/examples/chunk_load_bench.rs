@@ -26,13 +26,13 @@ use horizon_client::{
     world::World,
 };
 use horizon_core::biome::{BiomeZoom, obfuscate_seed};
+use horizon_os::thread;
+use horizon_os::time::{Duration, Instant};
 use horizon_world::registry::BlockStateId;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
     sync::Arc,
-    thread,
-    time::{Duration, Instant},
 };
 
 type Error = Box<dyn std::error::Error>;

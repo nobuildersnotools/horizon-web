@@ -60,7 +60,7 @@ impl UserCache {
             resolve_offline_users: true,
         };
         let mut warnings = Vec::new();
-        let entries = match std::fs::read_to_string(&cache.file) {
+        let entries = match horizon_os::fs::read_to_string(&cache.file) {
             Ok(text) => cache.parse(&text, &mut warnings),
             Err(_) => Vec::new(),
         };
@@ -210,7 +210,7 @@ impl UserCache {
 
     /// `save`: errors are ignored, as vanilla does.
     pub fn save(&self) {
-        let _ = std::fs::write(&self.file, self.to_json());
+        let _ = horizon_os::fs::write(&self.file, self.to_json());
     }
 }
 
@@ -221,14 +221,14 @@ mod tests {
     const DAY: i64 = 86_400_000;
 
     fn cache(text: &str) -> (UserCache, Vec<String>) {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = horizon_os::env::temp_dir().join(format!(
             "horizon-usercache-{}-{}",
-            std::process::id(),
+            horizon_os::process::id(),
             text.len()
         ));
-        std::fs::create_dir_all(&dir).unwrap();
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("usercache.json");
-        std::fs::write(&file, text).unwrap();
+        horizon_os::fs::write(&file, text).unwrap();
         UserCache::load(file)
     }
 

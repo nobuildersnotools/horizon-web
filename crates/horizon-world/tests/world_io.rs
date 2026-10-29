@@ -1,4 +1,6 @@
 use horizon_core::position::{BlockPos, ChunkPos};
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use horizon_world::{
     DATA_VERSION,
     chunk::{BlockState, ChunkData, PalettedContainer},
@@ -7,7 +9,6 @@ use horizon_world::{
     region::{ChunkRecord, RegionFile, RegionWriter},
 };
 use std::{
-    fs,
     io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -17,13 +18,13 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Directory(PathBuf);
 impl Directory {
     fn new() -> Self {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let stamp = horizon_os::time::SystemTime::now()
+            .duration_since(horizon_os::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
+        let path = horizon_os::env::temp_dir().join(format!(
             "horizon-world-test-{}-{stamp}-{}",
-            std::process::id(),
+            horizon_os::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
@@ -58,8 +59,8 @@ fn external_threshold_negative_coordinates_and_timestamps_roundtrip() {
     writer.write(a, &inline).unwrap();
     writer.write(b, &external).unwrap();
     writer.finish().unwrap();
-    assert!(!dir.0.join("c.-32.0.mcc").exists());
-    assert!(dir.0.join("c.-1.31.mcc").exists());
+    assert!(!dir.0.join("c.-32.0.mcc").fs_exists());
+    assert!(dir.0.join("c.-1.31.mcc").fs_exists());
     let mut reader = RegionFile::open(dir.region()).unwrap();
     assert_eq!(
         reader.chunks().collect::<Vec<_>>(),
@@ -96,9 +97,9 @@ fn in_place_writes_reuse_freed_sectors_and_keep_other_chunks() {
     region.write(c, &record(2 * 4096 - 5)).unwrap();
     assert_eq!(sectors(&dir.region()), 8);
     region.write(c, &record(256 * 4096)).unwrap();
-    assert!(dir.0.join("c.-1.31.mcc").exists());
+    assert!(dir.0.join("c.-1.31.mcc").fs_exists());
     region.write(c, &record(10)).unwrap();
-    assert!(!dir.0.join("c.-1.31.mcc").exists());
+    assert!(!dir.0.join("c.-1.31.mcc").fs_exists());
     assert!(region.clear(b, 7).unwrap());
     assert!(!region.clear(b, 7).unwrap());
     region.sync().unwrap();
@@ -145,10 +146,10 @@ fn failed_writer_cannot_commit_and_removes_its_own_external_files() {
     writer
         .write(ChunkPos::new(-1, 0), &record(1_100_000))
         .unwrap();
-    assert!(dir.0.join("c.-1.0.mcc").exists());
+    assert!(dir.0.join("c.-1.0.mcc").fs_exists());
     assert!(writer.write(ChunkPos::new(0, 0), &record(4)).is_err());
     assert!(writer.finish().is_err());
-    assert!(!dir.region().exists());
+    assert!(!dir.region().fs_exists());
     assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 0);
 }
 
@@ -290,7 +291,7 @@ fn benchmark_saving_into_a_full_region() {
     region.sync().unwrap();
     drop(region);
     let rounds = 100;
-    let start = std::time::Instant::now();
+    let start = horizon_os::time::Instant::now();
     for round in 0..rounds {
         let changed = chunks[round * 7 % 1024];
         let mut existing = RegionFile::open(dir.region()).unwrap();
@@ -316,7 +317,7 @@ fn benchmark_saving_into_a_full_region() {
     }
     let rewrite = start.elapsed() / rounds as u32;
     let mut region = RegionFile::open_writable(dir.region(), false).unwrap();
-    let start = std::time::Instant::now();
+    let start = horizon_os::time::Instant::now();
     for round in 0..rounds {
         region.write(chunks[round * 7 % 1024], &saved).unwrap();
         region.sync().unwrap();

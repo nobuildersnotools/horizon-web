@@ -36,7 +36,7 @@ pub fn free_columns<T: Send + 'static>(columns: T, count: usize) {
         return;
     }
     // Should the thread not start, the closure drops `columns` here.
-    let _ = std::thread::Builder::new()
+    let _ = horizon_os::thread::Builder::new()
         .name("Chunk freeing".into())
         .spawn(move || drop(columns));
 }

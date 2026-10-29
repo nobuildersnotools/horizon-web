@@ -123,6 +123,7 @@ pub trait Clipboard {
 /// data-control protocol and falls back to X11 (XWayland) on compositors
 /// without it. When no system clipboard can be reached, text copied in the
 /// game can still be pasted in the game.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub struct SystemClipboard {
     system: Option<arboard::Clipboard>,
@@ -130,6 +131,7 @@ pub struct SystemClipboard {
     copied: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SystemClipboard {
     /// The text last copied by the game.
     pub fn copied(&self) -> Option<&str> {
@@ -143,6 +145,7 @@ impl SystemClipboard {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Clipboard for SystemClipboard {
     fn get(&mut self) -> String {
         let Some(system) = self.system() else {
@@ -489,5 +492,15 @@ mod tests {
         };
         assert!(!sel.apply(id, &mut value, EditShortcut::Paste, &mut clip, fits));
         assert_eq!(value, "ok");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub type SystemClipboard = MemoryClipboard;
+
+#[cfg(target_arch = "wasm32")]
+impl MemoryClipboard {
+    pub fn copied(&self) -> Option<&str> {
+        Some(&self.0)
     }
 }

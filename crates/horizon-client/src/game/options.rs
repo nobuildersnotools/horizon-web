@@ -80,7 +80,7 @@ impl Game<'_> {
         }
     }
     pub(super) fn options_path() -> std::path::PathBuf {
-        std::env::current_dir()
+        horizon_os::env::current_dir()
             .unwrap_or_default()
             .join("options.txt")
     }
@@ -234,7 +234,7 @@ impl Game<'_> {
                 }
                 Event::OpenPackFolder => {
                     let dir = super::packs::packs_dir();
-                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = horizon_os::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
                 Event::DataPacks(ids) => {
@@ -243,12 +243,12 @@ impl Game<'_> {
                     }
                 }
                 Event::OpenDataPackFolder(dir) => {
-                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = horizon_os::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
                 Event::OpenModFolder => {
                     let dir = Self::options_path().with_file_name(horizon_client::mod_list::DIR);
-                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = horizon_os::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
                 Event::ListShaderPacks => {
@@ -259,7 +259,7 @@ impl Game<'_> {
                 Event::ShaderPack => self.settings.save(&Self::options_path()),
                 Event::OpenShaderPackFolder => {
                     let dir = Self::shader_packs_dir();
-                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = horizon_os::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
                 Event::NativeSettings(i) => self.native_settings_refresh(i),

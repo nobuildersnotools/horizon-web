@@ -52,6 +52,7 @@ use horizon_core::{
     geometry::Aabb,
     random::{LegacyRandom, RandomSource},
 };
+use horizon_os::fs;
 use horizon_world::{
     block_collision::BlockCollisionRegistry, chunk::BlockState, nbt::Tag, registry::BlockStateId,
 };
@@ -60,7 +61,6 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as _,
-    fs,
     path::Path,
 };
 

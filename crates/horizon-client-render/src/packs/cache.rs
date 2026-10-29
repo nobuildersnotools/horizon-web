@@ -1,10 +1,12 @@
 //! Overlay reuse validated by source topology and filesystem stamps.
 //! Published output is an owned cache artifact; hits do not traverse its tree.
 use super::{Pack, Source, build_overlay_uncached};
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
+use std::{collections::BTreeSet, io, path::Path, path::PathBuf};
 
 // Bump when overlay/merge semantics change. Markers are disposable cache data.
 // Version 4 mirrored every untouched directory file by file on Windows.
@@ -161,7 +163,7 @@ fn tree_inner(
             return Ok(());
         }
     }
-    if path.is_dir() {
+    if path.fs_is_dir() {
         let canonical = if pack.is_some() {
             let canonical = fs::canonicalize(path)?;
             if !active.insert(canonical.clone()) {
@@ -257,7 +259,7 @@ fn absolute(path: &Path) -> io::Result<PathBuf> {
     if path.is_absolute() {
         Ok(path.into())
     } else {
-        std::env::current_dir().map(|cwd| cwd.join(path))
+        horizon_os::env::current_dir().map(|cwd| cwd.join(path))
     }
 }
 
@@ -288,7 +290,7 @@ pub(super) fn build(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()
         && marker.vanilla == vanilla_key
         && marker.packs == *signature
         && marker.dependencies.valid()
-        && out.is_dir()
+        && out.fs_is_dir()
     {
         return Ok(());
     }
@@ -336,9 +338,9 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
-            let path = std::env::temp_dir().join(format!(
+            let path = horizon_os::env::temp_dir().join(format!(
                 "horizon-overlay-cache-{}-{}",
-                std::process::id(),
+                horizon_os::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             let _ = fs::remove_dir_all(&path);
@@ -364,7 +366,7 @@ mod tests {
             let start = stamp(0);
             // A second at most: no clock is that coarse, and a test never hangs on one.
             for n in 1..1000 {
-                std::thread::sleep(std::time::Duration::from_millis(1));
+                horizon_os::thread::sleep(horizon_os::time::Duration::from_millis(1));
                 if stamp(n) != start {
                     break;
                 }
@@ -613,7 +615,7 @@ mod tests {
         // still tolerates it, and does not publish a marker for an incomplete input.
         fs::remove_dir_all(f.0.join("low")).unwrap();
         f.rebuild_matches(&[low]);
-        assert!(!marker.exists());
+        assert!(!marker.fs_exists());
     }
 
     #[test]
@@ -656,14 +658,14 @@ mod tests {
         assert!(
             packs::build_overlay(&f.0.join("vanilla"), std::slice::from_ref(&pack), &out).is_err()
         );
-        assert!(!marker_path(&out).exists());
+        assert!(!marker_path(&out).fs_exists());
         f.write("pack.zip", &archive(&files(b"ddd"), true));
         f.rebuild_matches(std::slice::from_ref(&pack));
         fs::remove_file(f.0.join("pack.zip")).unwrap();
         assert!(
             packs::build_overlay(&f.0.join("vanilla"), std::slice::from_ref(&pack), &out).is_err()
         );
-        assert!(!marker_path(&out).exists());
+        assert!(!marker_path(&out).fs_exists());
         assert!(
             packs::resource_root(&f.0.join("vanilla"), &[pack], &f.0.join("selection-cache"))
                 .is_err()
@@ -691,7 +693,7 @@ mod tests {
         packs::build_overlay(&vanilla, std::slice::from_ref(&pack), &out).unwrap();
         // A rebuild empties the output first: this file survives a cache hit only.
         fs::write(out.join("kept"), b"").unwrap();
-        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        let later = horizon_os::time::SystemTime::now() + horizon_os::time::Duration::from_secs(60);
         fs::OpenOptions::new()
             .append(true)
             .open(&zip)
@@ -699,7 +701,7 @@ mod tests {
             .set_modified(later)
             .unwrap();
         packs::build_overlay(&vanilla, std::slice::from_ref(&pack), &out).unwrap();
-        assert!(out.join("kept").exists(), "the overlay was rebuilt");
+        assert!(out.join("kept").fs_exists(), "the overlay was rebuilt");
     }
 
     #[cfg(unix)]
@@ -712,7 +714,7 @@ mod tests {
         fs::create_dir_all(f.0.join("pack/docs")).unwrap();
         std::os::unix::fs::symlink(f.0.join("pack"), f.0.join("pack/docs/back")).unwrap();
         f.rebuild_matches(std::slice::from_ref(&pack));
-        assert!(!marker_path(&f.0.join("cached")).exists());
+        assert!(!marker_path(&f.0.join("cached")).fs_exists());
     }
 
     #[cfg(unix)]
@@ -771,7 +773,7 @@ mod tests {
             pack.overlays = vec![overlay.into()];
             f.rebuild_matches(std::slice::from_ref(&pack));
             let marker = marker_path(&f.0.join("cached"));
-            assert!(marker.exists());
+            assert!(marker.fs_exists());
             f.write(&format!("pack/extra/{name}"), br#"{"p":2}"#);
             f.rebuild_matches(std::slice::from_ref(&pack));
             assert_eq!(
@@ -787,7 +789,7 @@ mod tests {
         ] {
             pack.overlays = vec![overlay];
             f.rebuild_matches(std::slice::from_ref(&pack));
-            assert!(!marker_path(&f.0.join("cached")).exists());
+            assert!(!marker_path(&f.0.join("cached")).fs_exists());
             f.write(&format!("outside/{name}"), br#"{"p":4}"#);
             f.rebuild_matches(std::slice::from_ref(&pack));
             assert_eq!(
@@ -835,7 +837,8 @@ mod tests {
 
     #[test]
     fn concurrent_selections_wait_and_never_publish_mismatched_markers() {
-        use std::{sync::mpsc, time::Duration};
+        use horizon_os::time::Duration;
+        use std::sync::mpsc;
         let f = Fixture::new();
         let name = "assets/minecraft/lang/en_us.json";
         f.write(&format!("vanilla/{name}"), br#"{"v":1}"#);
@@ -854,7 +857,7 @@ mod tests {
         held.lock().unwrap();
         let (started, starts) = mpsc::channel();
         let (done, finishes) = mpsc::channel();
-        std::thread::scope(|scope| {
+        horizon_os::thread::scope(|scope| {
             for pack in [&a, &b] {
                 let started = started.clone();
                 let done = done.clone();
@@ -887,7 +890,7 @@ mod tests {
             };
             assert_eq!(fs::read(out.join(name)).unwrap(), expected);
         }
-        assert!(lock_path(&out).exists());
+        assert!(lock_path(&out).fs_exists());
     }
 
     #[cfg(unix)]
@@ -898,7 +901,7 @@ mod tests {
         let mut pack = f.dir_pack("pack");
         let name = "assets/minecraft/textures/a";
         f.write(&format!("pack/{name}"), b"pack");
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = horizon_os::env::current_dir().unwrap();
         let mut relative = PathBuf::new();
         for component in cwd.components() {
             if matches!(component, std::path::Component::Normal(_)) {
@@ -931,9 +934,10 @@ mod tests {
     #[test]
     #[ignore = "requires prepared resources and real pack paths in environment"]
     fn benchmark_real_resource_root() {
-        use std::{hint::black_box, time::Instant};
+        use horizon_os::time::Instant;
+        use std::hint::black_box;
         let vanilla = PathBuf::from(std::env::var("HORIZON_OVERLAY_BENCH_VANILLA").unwrap());
-        assert!(vanilla.join("horizon-resources.json").is_file());
+        assert!(vanilla.join("horizon-resources.json").fs_is_file());
         let paths: Vec<PathBuf> =
             serde_json::from_str(&std::env::var("HORIZON_OVERLAY_BENCH_PACKS").unwrap()).unwrap();
         // The original resource_root selection/cache-key path, with its original builder.
@@ -969,7 +973,7 @@ mod tests {
             let reference = original(&vanilla, selected, &reference_cache);
             let out = packs::resource_root(&vanilla, selected, &cached_cache).unwrap();
             assert_ne!(out, vanilla, "resource_root must not fall back to vanilla");
-            assert!(marker_path(&out).exists());
+            assert!(marker_path(&out).fs_exists());
             let expected = output_signature(&reference).unwrap();
             assert_eq!(output_signature(&out).unwrap(), expected);
             for _ in 0..2 {

@@ -11,7 +11,8 @@ fn fixtures() -> PathBuf {
 }
 
 fn sample() -> Index {
-    Index::parse(&std::fs::read_to_string(fixtures().join("index-v1.json")).unwrap()).unwrap()
+    Index::parse(&horizon_os::fs::read_to_string(fixtures().join("index-v1.json")).unwrap())
+        .unwrap()
 }
 
 fn hud_entry() -> String {
@@ -91,11 +92,13 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(name: &str) -> Scratch {
-        let dir =
-            std::env::temp_dir().join(format!("horizon-registry-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = horizon_os::env::temp_dir().join(format!(
+            "horizon-registry-{name}-{}",
+            horizon_os::process::id()
+        ));
+        let _ = horizon_os::fs::remove_dir_all(&dir);
         for sub in ["repo/mods", "repo/icons", "files"] {
-            std::fs::create_dir_all(dir.join(sub)).unwrap();
+            horizon_os::fs::create_dir_all(dir.join(sub)).unwrap();
         }
         let s = Scratch(dir);
         s.write("mods/coords_hud.toml", &hud_entry());
@@ -108,13 +111,13 @@ impl Scratch {
             ("cozy-1.0.0.hpack", HPACK),
             ("glow-1.0.0.hshader", HSHADER),
         ] {
-            std::fs::copy(fixtures().join(name), s.0.join("files").join(hash)).unwrap();
+            horizon_os::fs::copy(fixtures().join(name), s.0.join("files").join(hash)).unwrap();
         }
         s
     }
 
     fn write(&self, path: &str, text: &str) {
-        std::fs::write(self.0.join("repo").join(path), text).unwrap();
+        horizon_os::fs::write(self.0.join("repo").join(path), text).unwrap();
     }
 
     fn build(&self) -> Result<Index, Vec<String>> {
@@ -131,7 +134,7 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = horizon_os::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -152,7 +155,7 @@ fn lists_every_problem_of_a_registry() {
     let s = Scratch::new("bad");
     // A file that isn't the one its hash names, an unsigned version of a
     // signed project, a shader pack, and a mod whose file is another mod.
-    std::fs::write(s.0.join("files").join(HPACK), b"other bytes").unwrap();
+    horizon_os::fs::write(s.0.join("files").join(HPACK), b"other bytes").unwrap();
     s.write(
         "mods/coords_hud.toml",
         &hud_entry().replace("signature = \"\"\"", "changelog = \"\"\""),
@@ -277,7 +280,7 @@ fn only_open_kinds_are_taken() {
     assert!(open(&Kind::Other("world".into())).is_err());
     let mut submit: Entry = toml::from_str(COZY).unwrap();
     submit.id = "submit".into();
-    let dir = std::env::temp_dir();
+    let dir = horizon_os::env::temp_dir();
     let src = Sources {
         registry: &dir,
         files: &dir,

@@ -1,8 +1,9 @@
 //! Measure registry and behaviour load times using prepared client resources.
 //! `behaviour_load_profile RESOURCES [CACHE_DIR]`: with CACHE_DIR, loads use and
 //! refresh the snapshot there, as the client does with its `.horizon-cache`.
+use horizon_os::time::Instant;
 use horizon_world::level::{Behaviours, data::load_registry};
-use std::{path::Path, time::Instant};
+use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::args()

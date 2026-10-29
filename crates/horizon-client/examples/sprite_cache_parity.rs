@@ -3,10 +3,10 @@
 //! and writes it), loads again (reads it) and compares the sprite arrays.
 //! cargo run --profile fast -p horizon-client --example sprite_cache_parity -- ROOT
 use horizon_client::assets::{Assets, RenderAssets};
+use horizon_os::time::Instant;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     path::Path,
-    time::Instant,
 };
 
 fn digest(render: &RenderAssets) -> u64 {
@@ -39,11 +39,11 @@ fn main() -> horizon_client::Result<()> {
         .ok_or("usage: sprite_cache_parity ROOT")?;
     let root = Path::new(&root);
     let assets = Assets::load(root)?;
-    let _ = std::fs::remove_file(root.join("horizon-sprites.cache"));
+    let _ = horizon_os::fs::remove_file(root.join("horizon-sprites.cache"));
     let start = Instant::now();
     let cold = digest(&assets.reload(root)?);
     let cold_ms = start.elapsed().as_secs_f64() * 1000.;
-    let size = std::fs::metadata(root.join("horizon-sprites.cache"))?.len();
+    let size = horizon_os::fs::metadata(root.join("horizon-sprites.cache"))?.len();
     let start = Instant::now();
     let warm = digest(&assets.reload(root)?);
     let warm_ms = start.elapsed().as_secs_f64() * 1000.;

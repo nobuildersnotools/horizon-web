@@ -4,13 +4,13 @@
 //! batch at a time on a thread of its own, every download logged in
 //! `downloads/log.json`, and the cache cut to its 20 newest files on start.
 use super::{Batch, Request};
+use horizon_os::fs::PathExt;
+use horizon_os::{fs, time::SystemTime};
 use sha1::{Digest, Sha1};
 use std::{
-    fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::mpsc::{Receiver, Sender, channel},
-    time::SystemTime,
 };
 
 /// `DownloadedPackSource`'s MAX_PACK_SIZE_BYTES (250 MiB).
@@ -61,7 +61,7 @@ impl Queue {
         vacuum(&dir, MAX_KEPT);
         let (jobs, todo) = channel::<Job>();
         let (finished, done) = channel();
-        std::thread::Builder::new()
+        horizon_os::thread::Builder::new()
             .name("download-queue".into())
             .spawn(move || {
                 for (requests, headers, progress) in todo {
@@ -176,7 +176,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 /// `checkExistingFile`: the file is there with that hash.
 fn matches(path: &Path, sha1: &str) -> bool {
-    path.exists() && sha1_of(path).is_ok_and(|actual| actual == sha1)
+    path.fs_exists() && sha1_of(path).is_ok_and(|actual| actual == sha1)
 }
 /// `updateModificationTime`: used now, so the cleaner keeps it longest.
 fn touch(path: &Path) {
@@ -203,7 +203,7 @@ pub fn download_file(
             touch(target);
             return Ok(target.clone());
         }
-        if target.exists() {
+        if target.fs_exists() {
             log::warn!(
                 "Horizon: existing file {} not found or had mismatched hash",
                 target.display()
@@ -269,7 +269,7 @@ pub fn download_file(
 }
 fn rand_suffix() -> u64 {
     use std::hash::{BuildHasher, RandomState};
-    RandomState::new().hash_one(std::time::Instant::now())
+    RandomState::new().hash_one(horizon_os::time::Instant::now())
 }
 /// `downloadAndHash`: write what comes, at most `max_size` bytes.
 fn save_hashed(
@@ -366,11 +366,11 @@ mod tests {
     use std::net::TcpListener;
 
     /// A one-shot HTTP server answering `status` with `body`; the request it got.
-    fn serve(status: &str, body: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
+    fn serve(status: &str, body: Vec<u8>) -> (String, horizon_os::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/pack.zip", listener.local_addr().unwrap());
         let status = status.to_owned();
-        let handle = std::thread::spawn(move || {
+        let handle = horizon_os::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = Vec::new();
             let mut buf = [0u8; 1024];
@@ -392,7 +392,7 @@ mod tests {
         hex(&Sha1::digest(bytes))
     }
     fn scratch() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("horizon-packs-{:016x}", rand_suffix()));
+        let dir = horizon_os::env::temp_dir().join(format!("horizon-packs-{:016x}", rand_suffix()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -450,7 +450,7 @@ mod tests {
             sha1: None,
         };
         assert!(download_file(&dir.join("dead"), &dead, &[], MAX_SIZE, &channel().0).is_err());
-        assert!(!dir.join("dead").exists());
+        assert!(!dir.join("dead").fs_exists());
         let (url, server) = serve("200 OK", vec![0; 100]);
         let large = Request {
             id: 3,
@@ -491,7 +491,7 @@ mod tests {
             if let Some(b) = queue.finished().pop() {
                 break b;
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            horizon_os::thread::sleep(horizon_os::time::Duration::from_millis(10));
         };
         server.join().unwrap();
         let file = dir
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn the_cleaner_keeps_the_newest_file_of_each_pack_longest() {
         let dir = scratch();
-        let at = |secs| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let at = |secs| SystemTime::UNIX_EPOCH + horizon_os::time::Duration::from_secs(secs);
         for (pack, file, time) in [
             ("a", "1", 10),
             ("a", "2", 20),
@@ -537,9 +537,9 @@ mod tests {
         }
         fs::write(dir.join("log.json"), b"").unwrap();
         vacuum(&dir, 2);
-        assert!(dir.join("a/3").exists() && dir.join("b/1").exists());
-        assert!(!dir.join("a/1").exists() && !dir.join("a/2").exists());
-        assert!(dir.join("log.json").exists());
+        assert!(dir.join("a/3").fs_exists() && dir.join("b/1").fs_exists());
+        assert!(!dir.join("a/1").fs_exists() && !dir.join("a/2").fs_exists());
+        assert!(dir.join("log.json").fs_exists());
         fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -12,9 +12,9 @@ use crate::sound_events::{Sound, SoundRegistry};
 #[cfg(feature = "audio")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_os::fs;
 use std::{
     collections::HashMap,
-    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -171,7 +171,11 @@ fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
         audio::SampleBuffer, codecs::DecoderOptions, formats::FormatOptions, io::MediaSourceStream,
         meta::MetadataOptions, probe::Hint,
     };
+    #[cfg(not(target_arch = "wasm32"))]
     let file = fs::File::open(path).ok()?;
+    // symphonia reads std files; the web's virtual ones go through memory.
+    #[cfg(target_arch = "wasm32")]
+    let file = std::io::Cursor::new(fs::read(path).ok()?);
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     hint.with_extension("ogg");
@@ -273,7 +277,7 @@ impl Backend for MixerBackend {
         if sound.stream {
             // A streamed sound loops by restarting its stream.
             let mixer = self.mixer.clone();
-            std::thread::spawn(move || {
+            horizon_os::thread::spawn(move || {
                 let samples = decode(&file).map(|(s, r)| (Arc::new(s), r));
                 attach(&mixer, channel, samples, looping);
             });
@@ -288,7 +292,7 @@ impl Backend for MixerBackend {
         let decoder = self.decoder.get_or_insert_with(|| {
             let (send, receive) = std::sync::mpsc::channel::<Decode>();
             let (mixer, cache) = (self.mixer.clone(), self.cache.clone());
-            std::thread::Builder::new()
+            horizon_os::thread::Builder::new()
                 .name("sound decoder".into())
                 .spawn(move || {
                     for job in receive {

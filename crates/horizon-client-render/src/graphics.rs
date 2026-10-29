@@ -2,8 +2,8 @@
 //! `horizon-graphics.txt` next to `options.txt` so that file stays exactly
 //! vanilla's. Every default reproduces vanilla's rendering; only choices the
 //! player makes here depart from it.
+use horizon_os::fs;
 use std::{
-    fs,
     path::Path,
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -594,7 +594,7 @@ impl Graphics {
         // and render threads are raised above four cores, where vanilla
         // raises its server thread). Leaving two idled a core of a 4-thread
         // laptop while a world loaded: a teleport there took ~15% longer.
-        let auto = std::thread::available_parallelism()
+        let auto = horizon_os::thread::available_parallelism()
             .map_or(2, |n| n.get())
             .saturating_sub(1)
             .max(1);
@@ -805,7 +805,7 @@ mod tests {
     fn automatic_workers_leave_a_core_as_vanilla_does() {
         let g = Graphics::default();
         assert_eq!(g.workers, 0);
-        let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+        let cores = horizon_os::thread::available_parallelism().map_or(2, |n| n.get());
         assert_eq!(g.worker_threads(), cores.saturating_sub(1).max(1));
         // A manual count is the player's own choice, kept as asked.
         let manual = Graphics { workers: 3, ..g };

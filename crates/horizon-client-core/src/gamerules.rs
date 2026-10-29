@@ -1,12 +1,13 @@
 //! Game rules (26.3 `GameRules`): the registered rules with their category,
 //! type, default and bounds, a value map, and persistence in the world's
 //! `data/minecraft/game_rules.dat` saved-data file.
+use horizon_os::fs;
 use horizon_world::{
     DATA_VERSION,
     compression::Compression,
     nbt::{self, Limits, NamedTag, Tag},
 };
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Value {
@@ -287,7 +288,8 @@ mod tests {
         let back = GameRules::from_nbt(&rules.to_nbt().tag);
         assert_eq!(back, rules);
         assert!(back.bool("keep_inventory"));
-        let dir = std::env::temp_dir().join(format!("horizon-gamerules-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-gamerules-{}", horizon_os::process::id()));
         rules.save(&dir).unwrap();
         assert_eq!(GameRules::load(&dir), rules);
         let _ = fs::remove_dir_all(dir);

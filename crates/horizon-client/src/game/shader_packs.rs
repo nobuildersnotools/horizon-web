@@ -64,7 +64,7 @@ impl Game<'_> {
             && renderer.shader_pack_dimension() != Some(dimension)
         {
             let name = name.as_str();
-            let started = std::time::Instant::now();
+            let started = horizon_os::time::Instant::now();
             // A pack is not the game's own code: one that makes the shader compiler (or our
             // translation of it) panic is turned off instead of crashing every world load (#3525).
             let loaded = horizon_client::crash::contain(|| {
@@ -115,7 +115,7 @@ impl Game<'_> {
                             blocks: ids.clone(),
                             block_states: RefCell::default(),
                         });
-                        let started_ids = std::time::Instant::now();
+                        let started_ids = horizon_os::time::Instant::now();
                         let table = block_id_table(&self.pack, &ids);
                         log::info!(
                             "shader pack {name}: mc_Entity for {} of {} block sprites in {} ms",

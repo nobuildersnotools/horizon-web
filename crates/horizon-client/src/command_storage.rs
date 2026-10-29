@@ -25,7 +25,7 @@ impl CommandStorage {
     /// Read every `data/<namespace>/command_storage.dat` under a world.
     pub fn load(root: &Path) -> Self {
         let mut s = Self::default();
-        let Ok(dirs) = std::fs::read_dir(root.join("data")) else {
+        let Ok(dirs) = horizon_os::fs::read_dir(root.join("data")) else {
             return s;
         };
         for dir in dirs.flatten() {
@@ -106,8 +106,9 @@ mod tests {
 
     #[test]
     fn stores_per_namespace_and_persists() {
-        let dir = std::env::temp_dir().join(format!("hz-storage-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir =
+            horizon_os::env::temp_dir().join(format!("hz-storage-{}", horizon_os::process::id()));
+        let _ = horizon_os::fs::remove_dir_all(&dir);
         let mut s = CommandStorage::default();
         assert_eq!(s.get("minecraft:x"), Tag::Compound(Compound::new()));
         s.set("minecraft:x", parse_snbt("{a:1}").unwrap().0);
@@ -121,6 +122,6 @@ mod tests {
         let mut s = back;
         s.set("x", Tag::Compound(Compound::new()));
         assert_eq!(s.keys(), vec!["my:pack/y"]);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 }

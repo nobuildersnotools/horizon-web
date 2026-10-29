@@ -9,11 +9,11 @@ use horizon_client::{
 };
 use horizon_core::geometry::Vec3;
 use horizon_core::{position::BlockPos, random::RandomSource};
+use horizon_os::fs;
 use horizon_world::attributes::{Modifier, Operation};
 use horizon_world::movement_statistics::{self, MovementStat, MovementStatisticsWorld};
 use serde_json::Value;
 use std::{
-    fs,
     io::{BufRead, Write},
     path::PathBuf,
 };

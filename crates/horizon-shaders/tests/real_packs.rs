@@ -2,8 +2,9 @@
 //! horizon-shaders --release -- --ignored --nocapture`. The folder (and its subfolders) holds
 //! pack zips or folders, which are never committed; this prints what was read and how long it took.
 
+use horizon_os::fs::PathExt;
+use horizon_os::time::Instant;
 use std::path::Path;
-use std::time::Instant;
 
 use std::collections::BTreeMap;
 
@@ -18,8 +19,8 @@ fn real_packs_read() {
     let dir = std::env::var_os("HORIZON_TEST_SHADER_PACKS").expect("HORIZON_TEST_SHADER_PACKS");
     let dir = Path::new(&dir);
     let mut found = discover(dir);
-    for sub in std::fs::read_dir(dir).unwrap().flatten() {
-        if sub.path().is_dir() {
+    for sub in horizon_os::fs::read_dir(dir).unwrap().flatten() {
+        if sub.path().fs_is_dir() {
             found.extend(discover(&sub.path()));
         }
     }
@@ -160,7 +161,7 @@ fn real_packs_read() {
         }
         // The post-processing set of each dimension, as the game loads it.
         for id in [0, -1, 1] {
-            let start = std::time::Instant::now();
+            let start = horizon_os::time::Instant::now();
             let folder = dimension_folder(&pack, id);
             // Vertex inputs like the game's (gfx/pack_post.rs writes the real ones).
             let terrain = horizon_shaders::GbuffersInputs {

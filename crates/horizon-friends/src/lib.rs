@@ -24,12 +24,12 @@ pub use code::Code;
 pub use guest::{JoinError, Tunnel};
 pub use host::{Host, HostConfig, HostEvent, HostState};
 
+use horizon_os::thread::JoinHandle;
+use horizon_os::time::Duration;
 use std::{
     io,
     net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
     sync::mpsc::{RecvTimeoutError, Sender, channel},
-    thread::JoinHandle,
-    time::Duration,
 };
 
 /// The game's server address for a friend's world: `friend:K7QM-3XPD`
@@ -55,7 +55,7 @@ pub struct Deadline {
 pub fn deadline(stream: &TcpStream, limit: Duration) -> io::Result<Deadline> {
     let stream = stream.try_clone()?;
     let (tx, rx) = channel::<()>();
-    std::thread::Builder::new()
+    horizon_os::thread::Builder::new()
         .name("horizon-friends-deadline".into())
         .spawn(move || {
             if rx.recv_timeout(limit) == Err(RecvTimeoutError::Timeout) {
@@ -125,7 +125,7 @@ pub fn pump(
     }
     let mut plain_in = plain.try_clone()?;
     let mut plain_out = plain;
-    let outbound = std::thread::Builder::new()
+    let outbound = horizon_os::thread::Builder::new()
         .name("horizon-friends-out".into())
         .spawn(move || {
             let mut buf = vec![0u8; crypto::MAX_PAYLOAD];
@@ -142,7 +142,7 @@ pub fn pump(
             let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
             let _ = plain_in.shutdown(std::net::Shutdown::Both);
         })?;
-    std::thread::Builder::new()
+    horizon_os::thread::Builder::new()
         .name("horizon-friends-in".into())
         .spawn(move || {
             while let Ok(Some(frame)) = reader.read_frame() {
@@ -161,11 +161,8 @@ pub fn pump(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        io::Read,
-        net::TcpListener,
-        time::{Duration, Instant},
-    };
+    use horizon_os::time::{Duration, Instant};
+    use std::{io::Read, net::TcpListener};
 
     #[test]
     fn a_deadline_ends_the_stream_unless_dropped() {

@@ -69,7 +69,9 @@ impl Hardware {
             os_version: os_version(),
             arch: std::env::consts::ARCH.to_owned(),
             cpu: cpu(),
-            cpu_threads: std::thread::available_parallelism().ok().map(|n| n.get()),
+            cpu_threads: horizon_os::thread::available_parallelism()
+                .ok()
+                .map(|n| n.get()),
             cpu_cores: probes.cores,
             cpu_base_mhz: probes.base,
             cpu_boost_mhz: probes.boost,
@@ -120,7 +122,7 @@ pub fn load_average() -> Option<f64> {
             .parse()
             .ok()
     } else {
-        std::fs::read_to_string("/proc/loadavg")
+        horizon_os::fs::read_to_string("/proc/loadavg")
             .ok()?
             .split_whitespace()
             .next()?
@@ -142,7 +144,7 @@ pub fn rss_bytes(pid: u32) -> Option<u64> {
             .ok()
             .map(|kb| kb * 1024);
     }
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let status = horizon_os::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
     line.split_whitespace()
         .nth(1)?
@@ -166,7 +168,7 @@ pub fn cpu_seconds(pid: u32) -> Option<f64> {
         return Some(days * 86_400.0 + seconds);
     }
     // utime and stime, fields 14 and 15, in clock ticks (100 per second on Linux).
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let stat = horizon_os::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
     let ticks: f64 = fields.get(11)?.parse::<f64>().ok()? + fields.get(12)?.parse::<f64>().ok()?;
     Some(ticks / 100.0)
@@ -189,7 +191,7 @@ fn ram_bytes() -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn os_version() -> Option<String> {
-    let release = std::fs::read_to_string("/etc/os-release").ok()?;
+    let release = horizon_os::fs::read_to_string("/etc/os-release").ok()?;
     let name = key_value(&release, "PRETTY_NAME", '=')?
         .trim_matches('"')
         .to_owned();
@@ -201,7 +203,7 @@ fn os_version() -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn cpu() -> Option<String> {
-    let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    let info = horizon_os::fs::read_to_string("/proc/cpuinfo").ok()?;
     // x86 names the CPU per core; ARM boards name the machine once.
     key_value(&info, "model name", ':')
         .or_else(|| key_value(&info, "Model", ':'))
@@ -210,7 +212,7 @@ fn cpu() -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn ram_bytes() -> Option<u64> {
-    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let info = horizon_os::fs::read_to_string("/proc/meminfo").ok()?;
     let kb = key_value(&info, "MemTotal", ':')?
         .trim_end_matches("kB")
         .trim();
@@ -277,8 +279,8 @@ mod tests {
             assert!(hw.ram_mb.unwrap() > 256, "{hw:?}");
             assert!(hw.os_version.is_some(), "{hw:?}");
             assert!(load_average().is_some());
-            assert!(rss_bytes(std::process::id()).unwrap() > 1 << 20);
-            assert!(cpu_seconds(std::process::id()).unwrap() >= 0.0);
+            assert!(rss_bytes(horizon_os::process::id()).unwrap() > 1 << 20);
+            assert!(cpu_seconds(horizon_os::process::id()).unwrap() >= 0.0);
         }
     }
 }

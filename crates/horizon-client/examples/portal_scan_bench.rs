@@ -12,8 +12,9 @@ use horizon_core::{
     geometry::{Aabb, Vec3},
     position::BlockPos,
 };
+use horizon_os::time::Instant;
 use horizon_world::{level::Behaviours, registry::BlockStateId};
-use std::{hint::black_box, path::Path, sync::Arc, time::Instant};
+use std::{hint::black_box, path::Path, sync::Arc};
 
 /// `Game::swept_portal`'s reach (`Entity.checkInsideBlocks`'s swept box).
 fn reach(from: Vec3, to: Vec3, width: f32, height: f32) -> Aabb {

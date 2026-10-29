@@ -3,8 +3,10 @@
 //! `datafix_world IN_WORLD OUT_WORLD [TARGET]` (used by tools/test_datafix_parity.py).
 //! With a TARGET DataVersion only the data fixes up to it run, on a world in the
 //! layout of before 1.16.
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use horizon_world::datafix::files;
-use std::{fs, io, path::Path, process::ExitCode};
+use std::{io, path::Path, process::ExitCode};
 
 fn copy(from: &Path, to: &Path) -> io::Result<()> {
     fs::create_dir_all(to)?;
@@ -32,7 +34,7 @@ pub fn main() -> ExitCode {
     };
     let output = Path::new(output);
     let result = (|| {
-        if output.exists() {
+        if output.fs_exists() {
             fs::remove_dir_all(output)?;
         }
         copy(Path::new(input), output)?;

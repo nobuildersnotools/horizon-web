@@ -49,10 +49,12 @@ use horizon_core::{
     position::{BlockPos, ChunkPos},
     random::{LegacyRandom, PositionalRandom, RandomSource, XoroshiroRandom},
 };
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    fs, io,
+    io,
     path::Path,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -223,7 +225,7 @@ fn read_optional_bundle(
     overrides: &WorldgenOverrides,
     name: &str,
 ) -> Result<Option<Bundle>, GeneratorError> {
-    if dir.join(format!("{name}.json")).exists() {
+    if dir.join(format!("{name}.json")).fs_exists() {
         read_bundle(dir, overrides, name).map(Some)
     } else {
         Ok(None)
@@ -319,13 +321,13 @@ fn quantize_parameter_report(json: &str) -> Result<String, GeneratorError> {
 /// `load` on a thread of its own ("Worldgen loader").
 fn loading<T: Send + 'static>(
     load: impl FnOnce() -> T + Send + 'static,
-) -> io::Result<std::thread::JoinHandle<T>> {
-    std::thread::Builder::new()
+) -> io::Result<horizon_os::thread::JoinHandle<T>> {
+    horizon_os::thread::Builder::new()
         .name("Worldgen loader".into())
         .spawn(load)
 }
 /// A loading thread's result; its panic goes on in this thread.
-fn joined<T>(thread: std::thread::JoinHandle<T>) -> T {
+fn joined<T>(thread: horizon_os::thread::JoinHandle<T>) -> T {
     thread
         .join()
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
@@ -403,7 +405,7 @@ impl GeneratorData {
         let behaviours = loading({
             let root = dir.parent().map(Path::to_owned);
             move || {
-                root.filter(|root| root.join("block-behaviours.json").exists())
+                root.filter(|root| root.join("block-behaviours.json").fs_exists())
                     .and_then(|root| crate::level::Behaviours::load(registry, &root).ok())
                     .map(Arc::new)
             }
@@ -461,7 +463,7 @@ impl GeneratorData {
         )?;
         let mut presets = read_optional_bundle(dir, ov, "presets")?.unwrap_or_default();
         let reports = dir.join("biome_parameters");
-        if reports.is_dir() {
+        if reports.fs_is_dir() {
             for entry in fs::read_dir(&reports)? {
                 let path = entry?.path();
                 let Some(stem) = path
@@ -1235,7 +1237,7 @@ where
             self.settings.noise_height,
             self.settings.sea_level,
         );
-        let mut clock = std::time::Instant::now();
+        let mut clock = horizon_os::time::Instant::now();
         let mut neighbors = Vec::with_capacity(9);
         // The biome ids present, as a bitset: ascending like a sorted set.
         let mut seen: Vec<u64> = Vec::new();
@@ -1886,8 +1888,8 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
     }
 }
 
-fn lap(clock: &mut std::time::Instant) -> std::time::Duration {
-    let now = std::time::Instant::now();
+fn lap(clock: &mut horizon_os::time::Instant) -> horizon_os::time::Duration {
+    let now = horizon_os::time::Instant::now();
     let elapsed = now - *clock;
     *clock = now;
     elapsed
@@ -1896,14 +1898,14 @@ fn lap(clock: &mut std::time::Instant) -> std::time::Duration {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StageTimings {
     pub chunks: u64,
-    pub biomes: std::time::Duration,
+    pub biomes: horizon_os::time::Duration,
     /// Noise fill including aquifer setup.
-    pub noise: std::time::Duration,
-    pub surface: std::time::Duration,
+    pub noise: horizon_os::time::Duration,
+    pub surface: horizon_os::time::Duration,
     /// Structure starts/references and terrain adaptation.
-    pub structures: std::time::Duration,
+    pub structures: horizon_os::time::Duration,
     /// Carving mask generation/application and final heightmap priming.
-    pub carvers: std::time::Duration,
+    pub carvers: horizon_os::time::Duration,
 }
 /// Worker-owned mutable caches. Biome temperature caches mirror vanilla's
 /// thread-local caches and never change results.
@@ -3073,7 +3075,7 @@ mod tests {
             .unwrap_or_else(|| {
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
             });
-        if !root.join("worldgen/world_presets.json").exists() {
+        if !root.join("worldgen/world_presets.json").fs_exists() {
             eprintln!("skipping: no worldgen bundle at {}", root.display());
             return;
         }
@@ -3112,7 +3114,7 @@ mod tests {
             .unwrap_or_else(|| {
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
             });
-        if !root.join("worldgen/world_presets.json").exists() {
+        if !root.join("worldgen/world_presets.json").fs_exists() {
             eprintln!("skipping: no worldgen bundle at {}", root.display());
             return;
         }
@@ -3299,7 +3301,7 @@ mod tests {
             .unwrap_or_else(|| {
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
             });
-        if !root.join("worldgen/world_presets.json").exists() {
+        if !root.join("worldgen/world_presets.json").fs_exists() {
             eprintln!("skipping: no worldgen bundle at {}", root.display());
             return;
         }
@@ -3341,7 +3343,7 @@ mod tests {
             sample.water.is_some(),
             "fixture includes underwater terrain"
         );
-        let started = std::time::Instant::now();
+        let started = horizon_os::time::Instant::now();
         let mut exact = Vec::new();
         for z in 0..8 {
             for x in 0..8 {
@@ -3349,7 +3351,7 @@ mod tests {
             }
         }
         let dense_time = started.elapsed();
-        let started = std::time::Instant::now();
+        let started = horizon_os::time::Instant::now();
         let direct = worker.lod_grid(-1024, 0, 32, 8, false).unwrap();
         for z in 0..8 {
             for x in 0..8 {
@@ -3403,7 +3405,7 @@ mod tests {
             .unwrap_or_else(|| {
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
             });
-        if !root.join("worldgen/world_presets.json").exists() {
+        if !root.join("worldgen/world_presets.json").fs_exists() {
             eprintln!("skipping: no worldgen bundle at {}", root.display());
             return;
         }
@@ -3454,7 +3456,7 @@ mod tests {
             .unwrap_or_else(|| {
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
             });
-        if !root.join("worldgen/world_presets.json").exists() {
+        if !root.join("worldgen/world_presets.json").fs_exists() {
             eprintln!("skipping: no worldgen bundle at {}", root.display());
             return None;
         }
@@ -3666,7 +3668,7 @@ mod tests {
             .unwrap_or_else(|| {
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
             });
-        if !root.join("worldgen/world_presets.json").exists() {
+        if !root.join("worldgen/world_presets.json").fs_exists() {
             eprintln!("skipping: no worldgen bundle at {}", root.display());
             return;
         }
@@ -3697,7 +3699,7 @@ mod tests {
         };
         let barrier = std::sync::Barrier::new(6);
         let pos = ChunkPos::new(11, -11); // ancient city for this seed
-        let results = std::thread::scope(|scope| {
+        let results = horizon_os::thread::scope(|scope| {
             let handles: Vec<_> = (0..6)
                 .map(|_| {
                     scope.spawn(|| {

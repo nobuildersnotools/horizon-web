@@ -6,6 +6,7 @@ use horizon_client::{
     mod_list::{self, Installed},
     text::Text,
 };
+use horizon_os::fs::PathExt;
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -27,7 +28,7 @@ pub(super) fn content_root(
 ) -> std::path::PathBuf {
     use horizon_client::mod_content::{self, ContentMod};
     use horizon_mods::{Capability, Content, Package};
-    let here = std::env::current_dir().unwrap_or_default();
+    let here = horizon_os::env::current_dir().unwrap_or_default();
     let mut paths = horizon_mods::find(&here.join(mod_list::DIR));
     paths.retain(|p| !dev.contains(p));
     paths.extend(dev.iter().cloned());
@@ -143,12 +144,12 @@ impl Game<'_> {
         let seen = Self::options_path()
             .with_file_name(mod_list::DIR)
             .join(NOTICE_SEEN);
-        if seen.exists() {
+        if seen.fs_exists() {
             return;
         }
         self.system_message(Text::literal(format!(
             "Horizon mods are native now: {names} stopped running until they have a native version. The launcher's Mods page has the native ones."
         )));
-        let _ = std::fs::write(&seen, "");
+        let _ = horizon_os::fs::write(&seen, "");
     }
 }

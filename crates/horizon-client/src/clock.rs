@@ -287,7 +287,7 @@ const SAMPLES: usize = 100;
 pub struct FixedStep {
     timer: Timer,
     manager: ServerTickRateManager,
-    now: std::time::Duration,
+    now: horizon_os::time::Duration,
     pause: bool,
     sprint_checked: bool,
     sprint_report: Option<SprintReport>,
@@ -303,7 +303,7 @@ pub struct FixedStep {
     /// In-frame ticks dropped since the last overload warning (`drop_ticks`).
     dropped: u32,
     /// When the last overload warning was due, on the frame clock.
-    last_overload_warning: std::time::Duration,
+    last_overload_warning: horizon_os::time::Duration,
 }
 
 impl Default for FixedStep {
@@ -311,7 +311,7 @@ impl Default for FixedStep {
         Self {
             timer: Timer::new(20.0, 0),
             manager: ServerTickRateManager::default(),
-            now: std::time::Duration::ZERO,
+            now: horizon_os::time::Duration::ZERO,
             pause: false,
             sprint_checked: false,
             sprint_report: None,
@@ -321,7 +321,7 @@ impl Default for FixedStep {
             client: false,
             step_changes: 0,
             dropped: 0,
-            last_overload_warning: std::time::Duration::ZERO,
+            last_overload_warning: horizon_os::time::Duration::ZERO,
         }
     }
 }
@@ -342,12 +342,14 @@ impl FixedStep {
         self.now.as_nanos() as i64
     }
     /// The length of one tick at the current rate.
-    pub fn tick_duration(&self) -> std::time::Duration {
-        std::time::Duration::from_nanos(self.manager.base.nanoseconds_per_tick().max(1) as u64)
+    pub fn tick_duration(&self) -> horizon_os::time::Duration {
+        horizon_os::time::Duration::from_nanos(
+            self.manager.base.nanoseconds_per_tick().max(1) as u64
+        )
     }
     /// Feed one frame's elapsed time; returns the ticks to run (at most ten,
     /// or a sprint frame's worth).
-    pub fn advance(&mut self, elapsed: std::time::Duration) -> u32 {
+    pub fn advance(&mut self, elapsed: horizon_os::time::Duration) -> u32 {
         self.now += elapsed;
         let now_ms = self.now_ms();
         if self.manager.is_sprinting() {
@@ -446,7 +448,7 @@ impl FixedStep {
     /// ticks have taken a tick's length: ticks of a few milliseconds keep the
     /// full ten, and a world that cannot keep up runs one tick a frame,
     /// slower but drawn. A sprint (`/tick sprint`) runs its own frame's worth.
-    pub fn tick_fits(&self, spent: std::time::Duration) -> bool {
+    pub fn tick_fits(&self, spent: horizon_os::time::Duration) -> bool {
         self.sprinting() || spent < self.tick_duration()
     }
     /// The frame skips its remaining `ticks` (`tick_fits`): the world runs
@@ -457,8 +459,8 @@ impl FixedStep {
         self.dropped = self.dropped.saturating_add(ticks);
         let tick = self.tick_duration();
         let behind = tick * self.dropped;
-        let threshold = std::time::Duration::from_secs(1) + tick * 20;
-        let interval = std::time::Duration::from_secs(10) + tick * 100;
+        let threshold = horizon_os::time::Duration::from_secs(1) + tick * 20;
+        let interval = horizon_os::time::Duration::from_secs(10) + tick * 100;
         if behind <= threshold || self.now < self.last_overload_warning + interval {
             return None;
         }
@@ -503,7 +505,7 @@ impl FixedStep {
     }
     /// Record how long a tick took (`MinecraftServer.tickServer` bookkeeping
     /// and `endTickWork`).
-    pub fn record(&mut self, took: std::time::Duration) {
+    pub fn record(&mut self, took: horizon_os::time::Duration) {
         let took = took.as_nanos() as i64;
         let index = (self.tick_count % SAMPLES as i64) as usize;
         self.aggregated -= self.tick_times[index];
@@ -534,7 +536,7 @@ mod tests {
     #[test]
     fn a_frame_stops_ticking_after_a_ticks_length() {
         let clock = FixedStep::default();
-        let ms = std::time::Duration::from_millis;
+        let ms = horizon_os::time::Duration::from_millis;
         // Ticks of 4 ms: the ten the timer allows fit in 50 ms.
         assert!(clock.tick_fits(ms(4 * 9)));
         // Ticks of 40 ms: the second one runs, not a third.
@@ -547,7 +549,7 @@ mod tests {
     #[test]
     fn dropped_ticks_warn_once_a_second_behind_and_not_again_for_ten() {
         let mut clock = FixedStep::default();
-        let s = std::time::Duration::from_secs;
+        let s = horizon_os::time::Duration::from_secs;
         clock.now = s(20);
         assert_eq!(
             clock.drop_ticks(40),
@@ -598,7 +600,7 @@ mod tests {
         let mut clock = FixedStep::default();
         clock.set_frozen(true);
         clock.world_runs();
-        clock.advance(std::time::Duration::from_millis(25));
+        clock.advance(horizon_os::time::Duration::from_millis(25));
         clock.end_frame(false);
         assert_eq!(clock.fraction(), 1.0, "frozen entities stay put");
         assert_eq!(clock.camera_fraction(), 0.5, "the player does not");
@@ -619,7 +621,7 @@ mod tests {
     }
     #[test]
     fn a_servers_tick_rate_only_slows_its_client_down() {
-        let quarter = std::time::Duration::from_millis(250);
+        let quarter = horizon_os::time::Duration::from_millis(250);
         let mut client = FixedStep::client();
         client.set_rate(40.0);
         assert_eq!(client.advance(quarter), 5, "still 20 a second");

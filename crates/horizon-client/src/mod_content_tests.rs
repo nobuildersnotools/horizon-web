@@ -1,5 +1,6 @@
 use super::*;
 use crate::{assets::Assets, blocks::BlockFacts, items::Items};
+use horizon_os::fs::PathExt;
 
 #[test]
 fn renames_ids_keys_and_states() {
@@ -85,7 +86,8 @@ fn tags_merge_without_repeats() {
 /// Registry IDs and state IDs must not depend on package discovery order.
 #[test]
 fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-order-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir()
+        .join(format!("horizon-mod-order-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let base = scratch.join("base");
     fs::create_dir_all(&base).unwrap();
@@ -222,7 +224,7 @@ fn prepared() -> Option<PathBuf> {
         manifest.join("../../../../.local/horizon-client/26.3"),
     ]
     .into_iter()
-    .find(|root| root.join("gameplay-facts.json").exists())
+    .find(|root| root.join("gameplay-facts.json").fs_exists())
 }
 
 /// A content mod folder: a full block, a door and an item-less glass from
@@ -294,7 +296,8 @@ fn content_root_loads_with_every_table() {
     let Some(base) = prepared() else {
         return;
     };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-content-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir()
+        .join(format!("horizon-mod-content-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let m = ruby_mod(&scratch.join("ruby"));
     // The base as a relative path (cargo runs tests in the crate's folder):
@@ -446,7 +449,7 @@ fn content_root_loads_with_every_table() {
     crate::light::LightTables::load(&root, new, &facts).unwrap();
     crate::motion::MotionResources::load(&root, &assets).unwrap();
     horizon_world::worldgen::generator::GeneratorData::load(&root.join("worldgen"), new).unwrap();
-    assert!(root.join("assets/ruby/lang/en_us.json").is_file());
+    assert!(root.join("assets/ruby/lang/en_us.json").fs_is_file());
     // Blocks without a blockstate of their own take their template's.
     assert_eq!(
         fs::read(root.join("assets/ruby/blockstates/ruby_door.json")).unwrap(),
@@ -467,7 +470,8 @@ fn refuses_unknown_templates_and_vanilla_ids() {
     let Some(base) = prepared() else {
         return;
     };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-refuse-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir()
+        .join(format!("horizon-mod-refuse-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let mut m = ruby_mod(&scratch.join("ruby"));
     m.content.blocks[0].template = "minecraft:not_a_block".into();
@@ -481,7 +485,8 @@ fn refuses_more_states_than_a_world_holds() {
     let Some(base) = prepared() else {
         return;
     };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-states-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir()
+        .join(format!("horizon-mod-states-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let mut m = ruby_mod(&scratch.join("ruby"));
     // Redstone wire has 1296 states: 810 copies pass 2^20 with any game.
@@ -507,7 +512,8 @@ fn builds_past_sixteen_bit_states() {
     let Some(base) = prepared() else {
         return;
     };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-wide-{}", std::process::id()));
+    let scratch =
+        horizon_os::env::temp_dir().join(format!("horizon-mod-wide-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let mut m = ruby_mod(&scratch.join("ruby"));
     // 40 redstone wires: 51,840 states, past 65,536 with vanilla's 35,723.
@@ -539,7 +545,7 @@ fn shared_behaviour_document_matches_independent_loaders() {
     let Some(root) = prepared() else { return };
     let assets = Assets::load(&root).expect("assets");
     let doc: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
-        std::fs::File::open(root.join("block-behaviours.json")).unwrap(),
+        horizon_os::fs::File::open(root.join("block-behaviours.json")).unwrap(),
     ))
     .unwrap();
     let original = BlockFacts::load(&root, assets.registry).unwrap();
@@ -600,7 +606,10 @@ fn shared_behaviour_document_matches_independent_loaders() {
 #[ignore = "full content root: CI and pr_ready run it"]
 fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
     let Some(base) = prepared() else { return };
-    let scratch = std::env::temp_dir().join(format!("horizon-json-reloads-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir().join(format!(
+        "horizon-json-reloads-{}",
+        horizon_os::process::id()
+    ));
     let _ = fs::remove_dir_all(&scratch);
     fs::create_dir_all(&scratch).unwrap();
     // Keep the remaining resource tree intact without copying a huge prepared client.
@@ -724,7 +733,8 @@ fn content_root_is_reused_until_a_mod_changes() {
     let Some(base) = prepared() else {
         return;
     };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-reuse-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir()
+        .join(format!("horizon-mod-reuse-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let m = ruby_mod(&scratch.join("ruby"));
     let cache = scratch.join("cache");
@@ -736,14 +746,16 @@ fn content_root_is_reused_until_a_mod_changes() {
         resource_root(&base, std::slice::from_ref(&m), &cache).unwrap(),
         root
     );
-    assert!(sentinel.exists(), "an unchanged mod rebuilt the root");
+    assert!(sentinel.fs_exists(), "an unchanged mod rebuilt the root");
     let lang = scratch.join("ruby/assets/ruby/lang/en_us.json");
     fs::write(&lang, r#"{"block.ruby.ruby_block": "Ruby Block"}"#).unwrap();
     let file = fs::File::options().write(true).open(&lang).unwrap();
-    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
-        .unwrap();
+    file.set_modified(
+        horizon_os::time::SystemTime::now() + horizon_os::time::Duration::from_secs(5),
+    )
+    .unwrap();
     resource_root(&base, std::slice::from_ref(&m), &cache).unwrap();
-    assert!(!sentinel.exists(), "a changed mod kept the old root");
+    assert!(!sentinel.fs_exists(), "a changed mod kept the old root");
     assert!(
         fs::read_to_string(root.join("assets/ruby/lang/en_us.json"))
             .unwrap()
@@ -761,7 +773,10 @@ fn content_root_carries_a_structure_mod() {
     let Some(base) = prepared() else {
         return;
     };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-worldgen-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir().join(format!(
+        "horizon-mod-worldgen-{}",
+        horizon_os::process::id()
+    ));
     let _ = fs::remove_dir_all(&scratch);
     let dir = scratch.join("huts");
     let files = [
@@ -820,7 +835,7 @@ fn content_root_carries_a_structure_mod() {
         content: Content::read(&dir, &package.manifest).unwrap(),
     };
     let root = resource_root(&base, &[m], &scratch.join("cache")).unwrap();
-    assert!(root.join("worldgen/structure/huts/hut.nbt").exists());
+    assert!(root.join("worldgen/structure/huts/hut.nbt").fs_exists());
     let tags: BTreeMap<String, String> =
         serde_json::from_slice(&fs::read(root.join("worldgen/biome_tags.json")).unwrap()).unwrap();
     let hut: serde_json::Value = serde_json::from_str(&tags["huts:has_hut"]).unwrap();
@@ -922,7 +937,8 @@ fn listed_namespaces_join_the_root() {
     let Some(base) = prepared() else {
         return;
     };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-ns-{}", std::process::id()));
+    let scratch =
+        horizon_os::env::temp_dir().join(format!("horizon-mod-ns-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let toml = manifest("towers", "\"kaisyn\"");
     let m = folder_mod(
@@ -961,7 +977,8 @@ fn listed_namespaces_join_the_root() {
 /// or both list it) are refused together, naming both.
 #[test]
 fn mods_sharing_a_namespace_are_refused() {
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-clash-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir()
+        .join(format!("horizon-mod-clash-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let towers = folder_mod(
         &scratch.join("towers"),
@@ -1036,7 +1053,8 @@ fn a_replacing_mod_tag_reaches_the_root() {
     let Some(base) = prepared() else {
         return;
     };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-replace-{}", std::process::id()));
+    let scratch = horizon_os::env::temp_dir()
+        .join(format!("horizon-mod-replace-{}", horizon_os::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let file = "data/minecraft/tags/worldgen/biome/has_structure/village_plains.json";
     let adds = folder_mod(

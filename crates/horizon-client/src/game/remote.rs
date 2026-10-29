@@ -28,6 +28,7 @@ use horizon_client::{
     world::World,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_os::time::{Duration, Instant};
 use horizon_protocol::{
     entity_data::{ITEM_ENTITY_ITEM, Value},
     item::{Hashed, Stack},
@@ -47,7 +48,6 @@ use horizon_world::{
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
-    time::{Duration, Instant},
 };
 use winit::{event::MouseButton, keyboard::KeyCode};
 
@@ -322,7 +322,7 @@ impl Game<'_> {
             log::warn!("Horizon: could not join server: {error}");
             if self.title.is_none() {
                 self.title = Some(horizon_client::title::Title::new(
-                    std::env::current_dir()?.join("saves"),
+                    horizon_os::env::current_dir()?.join("saves"),
                     &self.options.resources,
                 ));
             }
@@ -405,7 +405,7 @@ impl Game<'_> {
         self.streaming = streaming;
         self.world = World::new(self.res.facts().air, 0);
         self.save = Arc::new(SaveDir::new(
-            std::env::temp_dir().join("horizon-remote-unused"),
+            horizon_os::env::temp_dir().join("horizon-remote-unused"),
         ));
         self.inventory = vec![None; 36];
         self.armor = [None, None, None, None];
@@ -611,7 +611,7 @@ impl Game<'_> {
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
-        let saves = std::env::current_dir()?.join("saves");
+        let saves = horizon_os::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
         title.last_server = self.settings.file.string("lastServer");
         title.skip_multiplayer_warning = self.settings.file.bool("skipMultiplayerWarning");
@@ -1320,7 +1320,7 @@ impl Game<'_> {
         if self.integrated.is_some() {
             return;
         }
-        if let Ok(dir) = std::env::current_dir() {
+        if let Ok(dir) = horizon_os::env::current_dir() {
             horizon_client::multiplayer::save_server_icon(
                 &dir.join("saves"),
                 &r.session.address,
@@ -5848,8 +5848,8 @@ impl Game<'_> {
                 command: command.to_owned(),
             }));
         } else {
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let timestamp = horizon_os::time::SystemTime::now()
+                .duration_since(horizon_os::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as i64);
             self.send(S::Chat(play::Chat {
                 message: message.chars().take(256).collect(),

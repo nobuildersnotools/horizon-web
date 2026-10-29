@@ -2,7 +2,7 @@
 //! Controls, Key Binds, Mouse Settings, Chat Settings, Accessibility,
 //! Language and Resource Packs, laid out like vanilla's HeaderAndFooter /
 //! OptionsList screens and drawn with the shared widgets.
-use std::time::Instant;
+use horizon_os::time::Instant;
 
 pub use crate::settings::Opt;
 
@@ -1183,7 +1183,7 @@ pub struct OptionsUi {
     data_pack_resources: std::path::PathBuf,
     /// The folder's entries when its packs were listed, and when they were
     /// last compared with it.
-    data_pack_stamp: (Vec<(String, Option<std::time::SystemTime>)>, Instant),
+    data_pack_stamp: (Vec<(String, Option<horizon_os::time::SystemTime>)>, Instant),
     /// A reload failure, dismissed before returning to the current page.
     pub resource_error: Option<String>,
     /// When the pack screen's search box took the focus (its cursor blink).
@@ -4083,7 +4083,7 @@ mod tests {
         ui.slider_value = Some((
             Opt::RenderDistance,
             0.51,
-            Instant::now() - std::time::Duration::from_millis(600),
+            Instant::now() - horizon_os::time::Duration::from_millis(600),
         ));
         assert_eq!(ui.slider_shown(Opt::RenderDistance, 0.5), 0.5);
     }

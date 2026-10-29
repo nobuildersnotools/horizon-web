@@ -16,8 +16,9 @@ use horizon_client::{
         TabView, draw, overlay_cells, overlay_origin,
     },
 };
+use horizon_os::fs;
 use serde_json::{Value, json};
-use std::{fmt::Write as _, fs, path::Path};
+use std::{fmt::Write as _, path::Path};
 
 fn runs(r: &[Run]) -> Value {
     Value::Array(

@@ -20,8 +20,9 @@ use horizon_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
 };
+use horizon_os::fs;
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path};
+use std::{collections::HashMap, path::Path};
 
 pub use crate::biome::{SpawnCost, parse_costs, parse_entries};
 

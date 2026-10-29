@@ -21,12 +21,12 @@ use std::{
 
 /// Where overlay roots are built (beside options.txt).
 pub fn cache_dir() -> PathBuf {
-    std::env::current_dir()
+    horizon_os::env::current_dir()
         .unwrap_or_default()
         .join(".horizon-cache/resourcepacks")
 }
 pub fn packs_dir() -> PathBuf {
-    std::env::current_dir()
+    horizon_os::env::current_dir()
         .unwrap_or_default()
         .join("resourcepacks")
 }
@@ -96,7 +96,7 @@ fn vanilla_info(vanilla: &Path) -> PackInfo {
         description_style: Style::default(),
         source: PackSource::BuiltIn,
         compat: Compat::Compatible,
-        icon: std::fs::read(vanilla.join("pack.png"))
+        icon: horizon_os::fs::read(vanilla.join("pack.png"))
             .ok()
             .as_deref()
             .and_then(pack_screen::load_icon),

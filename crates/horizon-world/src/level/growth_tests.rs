@@ -2,6 +2,7 @@
 //! prepared client resources and worldgen bundle (skipped when absent).
 use super::*;
 use crate::{chunk::BlockState, worldgen::generator::GeneratorData, worldgen::live::LiveFeatures};
+use horizon_os::fs::PathExt;
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
@@ -25,8 +26,10 @@ fn fixture() -> Option<&'static Fixture> {
                         .join(horizon_core::VANILLA_VERSION)
                 });
             // Trees need the feature block-behaviour exports in the worldgen bundle.
-            if !root.join("block-behaviours.json").exists()
-                || !root.join("worldgen/blocks/block-properties.nbt").exists()
+            if !root.join("block-behaviours.json").fs_exists()
+                || !root
+                    .join("worldgen/blocks/block-properties.nbt")
+                    .fs_exists()
             {
                 eprintln!("skipping growth tests: no resources at {}", root.display());
                 return None;

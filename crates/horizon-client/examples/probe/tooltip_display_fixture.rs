@@ -6,7 +6,7 @@ use std::{error::Error, fmt::Write};
 pub fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = crate::args().collect();
     let mut output = String::new();
-    for line in std::fs::read_to_string(&args[1])?.lines() {
+    for line in horizon_os::fs::read_to_string(&args[1])?.lines() {
         let fields: Vec<&str> = line.split('\t').collect();
         let hide_tooltip: bool = fields[0].parse()?;
         let creative: bool = fields[1].parse()?;
@@ -35,6 +35,6 @@ pub fn main() -> Result<(), Box<dyn Error>> {
             display.shows("minecraft:attribute_modifiers")
         )?;
     }
-    std::fs::write(&args[2], output)?;
+    horizon_os::fs::write(&args[2], output)?;
     Ok(())
 }

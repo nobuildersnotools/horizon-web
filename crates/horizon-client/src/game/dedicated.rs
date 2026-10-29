@@ -21,6 +21,8 @@ use horizon_client::{
     },
     text::Text,
 };
+use horizon_os::fs::PathExt;
+use horizon_os::time::{Duration, Instant};
 use horizon_protocol::text::translatable;
 use horizon_world::nbt::{JavaString, Tag};
 use std::{
@@ -31,7 +33,6 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
-    time::{Duration, Instant},
 };
 
 mod status;
@@ -57,7 +58,7 @@ impl Watchdog {
             running: AtomicBool::new(true),
         });
         let shared = watchdog.clone();
-        std::thread::Builder::new()
+        horizon_os::thread::Builder::new()
             .name("Server Watchdog".into())
             .spawn(move || shared.run(max))
             .ok()?;
@@ -107,7 +108,7 @@ impl Watchdog {
                         "ERROR",
                         &format!(
                             "This crash report has been saved to: {}",
-                            path.canonicalize().unwrap_or(path).display()
+                            path.fs_canonicalize().unwrap_or(path).display()
                         ),
                     ),
                     None => log_from(
@@ -120,7 +121,7 @@ impl Watchdog {
             }
             // Thread.sleep(nextTickTime + maxTickTime - now).
             let wait = (next + max).saturating_sub(now).max(1_000_000);
-            std::thread::sleep(Duration::from_nanos(wait));
+            horizon_os::thread::sleep(Duration::from_nanos(wait));
         }
     }
 }
@@ -239,7 +240,7 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
             "serverId" | "pidFile" => {
                 let value = it.next().ok_or("missing value")?;
                 if name == "pidFile" {
-                    std::fs::write(value, std::process::id().to_string())?;
+                    horizon_os::fs::write(value, horizon_os::process::id().to_string())?;
                 }
             }
             _ => return Err(format!("{arg} is not a recognized option").into()),
@@ -269,7 +270,7 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
         }
     };
     if init_settings {
-        let abs = |p: &PathBuf| std::env::current_dir().map_or(p.clone(), |d| d.join(p));
+        let abs = |p: &PathBuf| horizon_os::env::current_dir().map_or(p.clone(), |d| d.join(p));
         log(
             "INFO",
             &format!(
@@ -336,7 +337,7 @@ impl Lists {
         warn("load operators list", l.ops.load());
         warn("load white-list", l.white.load());
         warn("save operators list", saved(l.ops.save()));
-        if !l.white.file.exists() {
+        if !l.white.file.fs_exists() {
             warn("save white-list", saved(l.white.save()));
         }
         l
@@ -550,14 +551,16 @@ impl Game<'_> {
             .ok_or("dedicated server not prepared")?;
         // Main's WorldLoader: a new world's dimensions come from
         // server.properties before the server starts.
-        let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
-        let new_world = !world_dir.join("level.dat").exists();
+        let world_dir = horizon_os::env::current_dir()?
+            .join(&universe)
+            .join(&level_name);
+        let new_world = !world_dir.join("level.dat").fs_exists();
         if new_world {
             self.write_world_gen(&world_dir, &props)?;
         }
         // The console thread starts first, as in initServer.
         let (tx, console) = mpsc::channel();
-        std::thread::Builder::new()
+        horizon_os::thread::Builder::new()
             .name("Server console handler".into())
             .spawn(move || {
                 let stdin = std::io::stdin();
@@ -690,7 +693,7 @@ impl Game<'_> {
             gate_lists.lock().unwrap().can_login(address, &user)
         });
         let bypass_lists = lists.clone();
-        let favicon = std::fs::read("server-icon.png")
+        let favicon = horizon_os::fs::read("server-icon.png")
             .ok()
             .filter(|b| png_size(b) == Some((64, 64)));
         let net = NetConfig {
@@ -861,7 +864,7 @@ impl Game<'_> {
             if Instant::now() > deadline {
                 return Err("the spawn area did not load".into());
             }
-            std::thread::sleep(Duration::from_millis(2));
+            horizon_os::thread::sleep(Duration::from_millis(2));
         }
         self.player = None;
         Ok(())
@@ -1476,7 +1479,7 @@ impl Game<'_> {
                 );
             }
         }
-        std::thread::sleep(Duration::from_millis(100));
+        horizon_os::thread::sleep(Duration::from_millis(100));
         log("INFO", "Saving worlds");
         // ServerPlayer.disconnect: nobody is left in a bed.
         self.free_player_beds()?;
@@ -1500,11 +1503,13 @@ fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{capture_log, log, log_from};
-    use std::{
+    use horizon_os::{
         fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    use std::{
         io::{self, BufRead, BufReader, Read, Write},
         process::{Command, Stdio},
-        time::{SystemTime, UNIX_EPOCH},
     };
 
     const LOGIN: &str = "Player[/127.0.0.1:0] logged in with entity id 2 at (0.5, 115.0, 0.5)";
@@ -1533,7 +1538,7 @@ mod tests {
             io::stdout().write_all(READY.as_bytes()).unwrap();
             io::stdout().flush().unwrap();
             io::stdin().read_exact(&mut [0]).unwrap();
-            std::thread::Builder::new()
+            horizon_os::thread::Builder::new()
                 .name("Server thread".into())
                 .spawn(|| {
                     let captured = capture_log(|| {
@@ -1555,12 +1560,12 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let home = std::env::temp_dir().join(format!(
+            let home = horizon_os::env::temp_dir().join(format!(
                 "horizon-console-log-test-{}-{unique}",
-                std::process::id()
+                horizon_os::process::id()
             ));
             fs::create_dir(&home).unwrap();
-            let mut child = Command::new(std::env::current_exe().unwrap())
+            let mut child = Command::new(horizon_os::env::current_exe().unwrap())
                 .args([
                     "--exact",
                     "game::dedicated::tests::console_logging_survives_closed_stdout",

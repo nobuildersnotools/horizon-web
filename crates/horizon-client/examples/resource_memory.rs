@@ -57,7 +57,7 @@ const MB: f64 = 1048576.0;
 
 fn rss_mb() -> f64 {
     let out = Command::new("ps")
-        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .args(["-o", "rss=", "-p", &horizon_os::process::id().to_string()])
         .output()
         .ok();
     out.and_then(|o| String::from_utf8(o.stdout).ok())
@@ -133,7 +133,7 @@ fn main() -> Result<()> {
         rss_mb()
     );
     if let Ok(out) = Command::new("footprint")
-        .arg(std::process::id().to_string())
+        .arg(horizon_os::process::id().to_string())
         .output()
     {
         let text = String::from_utf8_lossy(&out.stdout);

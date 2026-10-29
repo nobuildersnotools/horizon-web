@@ -49,7 +49,7 @@ const COPPER_GOLEM_LAYERS: [(&str, &str); 4] = [
 ];
 
 pub(super) fn load_parts(root: &Path) -> HashMap<String, ModelPart> {
-    let Ok(all) = std::fs::read(root.join("entity-models.json"))
+    let Ok(all) = horizon_os::fs::read(root.join("entity-models.json"))
         .map_err(|_| ())
         .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|_| ()))
     else {
@@ -691,11 +691,13 @@ mod tests {
     /// the glint goes over the patterns, and nothing covers them after.
     #[test]
     fn an_enchanted_banner_shield_keeps_its_patterns_under_the_glint() {
-        let root =
-            std::env::temp_dir().join(format!("horizon-shield-glint-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("items.json"), "{}").unwrap();
-        std::fs::write(
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-shield-glint-{}",
+            horizon_os::process::id()
+        ));
+        horizon_os::fs::create_dir_all(&root).unwrap();
+        horizon_os::fs::write(root.join("items.json"), "{}").unwrap();
+        horizon_os::fs::write(
             root.join("entity-models.json"),
             serde_json::json!({"minecraft:shield#main": {
                 "pose": [0, 0, 0, 0, 0, 0, 1, 1, 1],
@@ -708,7 +710,7 @@ mod tests {
         .unwrap();
         let library = crate::model_library::ParsedModels::default().into_item_library();
         let renderer = ItemRenderer::load_with_library(&root, library).unwrap();
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
         let textures = [
             "entity/shield/shield_base",
             "entity/shield/shield_base_nopattern",

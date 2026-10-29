@@ -11,6 +11,7 @@ description = "Horizon simulation foundations for the pinned vanilla Java Editio
 rng-trace = []
 
 [dependencies]
+horizon-os = { path = "../horizon-os" }
 libm = "=0.2.16"
 
 [[bin]]

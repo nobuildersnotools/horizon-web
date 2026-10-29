@@ -13,6 +13,9 @@ use horizon_client::{
     },
     world::World,
 };
+use horizon_os::fs::PathExt;
+use horizon_os::thread;
+use horizon_os::time::{Duration, Instant};
 use horizon_protocol::{
     PROTOCOL_VERSION,
     connection::Connection,
@@ -26,18 +29,13 @@ use horizon_protocol::{
     },
 };
 use horizon_world::registry::BlockStateId;
-use std::{
-    path::Path,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{path::Path, sync::Arc};
 
 fn resources() -> Option<std::path::PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.local/horizon-client")
         .join(horizon_core::VANILLA_VERSION);
-    root.join("items.json").exists().then_some(root)
+    root.join("items.json").fs_exists().then_some(root)
 }
 
 const STONE: u32 = 1;

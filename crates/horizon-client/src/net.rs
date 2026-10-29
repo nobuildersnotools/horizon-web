@@ -7,6 +7,8 @@
 //! (crate::auth): the login joins the server through the session service and
 //! encrypts the connection (ClientHandshakePacketListenerImpl.handleHello).
 use crate::auth::AuthSession;
+use horizon_os::thread::JoinHandle;
+use horizon_os::time::Duration;
 use horizon_protocol::{
     PROTOCOL_VERSION,
     connection::{ConnReader, ConnWriter, Connection, Counters},
@@ -24,8 +26,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, Sender, channel},
     },
-    thread::JoinHandle,
-    time::Duration,
 };
 
 /// `CommonListenerCookie.serverCookies`: cookies the server asked the client
@@ -160,7 +160,7 @@ impl Session {
             (writer.clone(), counters.clone(), cookies.clone());
         let thread_configuring = configuring.clone();
         let (address_owned, name_owned) = (address.to_owned(), name.to_owned());
-        let thread = std::thread::Builder::new()
+        let thread = horizon_os::thread::Builder::new()
             .name("horizon-net".into())
             .spawn(move || {
                 let result = run(
@@ -315,14 +315,14 @@ pub fn shown_address(address: &str) -> String {
 /// The relay the player set (`friendsRelay` in horizon.txt, beside
 /// options.txt), else `HORIZON_RELAY_URL`. None by default.
 pub fn friends_relay_setting() -> Option<String> {
-    let dir = std::env::current_dir().ok()?;
+    let dir = horizon_os::env::current_dir().ok()?;
     crate::ui_theme::preference(&dir, "friendsRelay")
         .filter(|r| !r.is_empty())
         .or_else(horizon_friends::relay_url)
 }
 /// Remember the relay typed on Join a friend (empty forgets it).
 pub fn save_friends_relay(relay: &str) {
-    if let Ok(dir) = std::env::current_dir() {
+    if let Ok(dir) = horizon_os::env::current_dir() {
         crate::ui_theme::set_preference(&dir, "friendsRelay", (!relay.is_empty()).then_some(relay));
     }
 }
@@ -754,7 +754,7 @@ pub fn load_language(resources: &std::path::Path) -> Language {
     if let Some(lang) = crate::lang::current() {
         return lang.map().clone();
     }
-    std::fs::read(resources.join("assets/minecraft/lang/en_us.json"))
+    horizon_os::fs::read(resources.join("assets/minecraft/lang/en_us.json"))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
@@ -789,7 +789,7 @@ pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128
         }
         _ => return Err("unexpected status reply".into()),
     };
-    let start = std::time::Instant::now();
+    let start = horizon_os::time::Instant::now();
     c.send(&status::Serverbound::PingRequest(status::Ping { time: 1 }).encode())
         .map_err(e)?;
     let _ = c.recv().map_err(e)?;
@@ -811,8 +811,8 @@ mod tests {
             let (_send, events) = channel();
             let (release, stalled) = channel();
             let (finished, completed) = channel();
-            let thread = std::thread::spawn(move || {
-                let _ = stalled.recv_timeout(std::time::Duration::from_secs(3));
+            let thread = horizon_os::thread::spawn(move || {
+                let _ = stalled.recv_timeout(horizon_os::time::Duration::from_secs(3));
                 let _ = finished.send(());
             });
             let mut session = Session {
@@ -826,7 +826,7 @@ mod tests {
                 cookies: Cookies::default(),
                 debug: false,
             };
-            let started = std::time::Instant::now();
+            let started = horizon_os::time::Instant::now();
             if explicit_disconnect {
                 session.disconnect();
                 session.disconnect(); // Repeated cleanup is harmless.
@@ -839,7 +839,7 @@ mod tests {
             let _ = release.send(());
             if reader_still_pending {
                 completed
-                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .recv_timeout(horizon_os::time::Duration::from_secs(2))
                     .unwrap();
             }
             assert!(
@@ -851,7 +851,7 @@ mod tests {
                 "disconnect waited for the stalled reader"
             );
             assert!(
-                elapsed < std::time::Duration::from_secs(1),
+                elapsed < horizon_os::time::Duration::from_secs(1),
                 "disconnect took {elapsed:?}"
             );
         }
@@ -864,7 +864,7 @@ mod tests {
         let writer = Arc::new(Mutex::new(Some(writer)));
         let (send, events) = channel();
         let thread_writer = writer.clone();
-        let thread = std::thread::spawn(move || {
+        let thread = horizon_os::thread::spawn(move || {
             receive_play(
                 &mut reader,
                 &thread_writer,
@@ -926,7 +926,7 @@ mod tests {
         };
         let (thread_writer, thread_configuring) =
             (session.writer.clone(), session.configuring.clone());
-        let thread = std::thread::spawn(move || {
+        let thread = horizon_os::thread::spawn(move || {
             receive_play(
                 &mut reader,
                 &thread_writer,
@@ -972,7 +972,7 @@ mod tests {
         let (send, events) = channel();
         let cookies = Cookies::default();
         let (thread_writer, thread_cookies) = (writer.clone(), cookies.clone());
-        let thread = std::thread::spawn(move || {
+        let thread = horizon_os::thread::spawn(move || {
             receive_play(
                 &mut reader,
                 &thread_writer,

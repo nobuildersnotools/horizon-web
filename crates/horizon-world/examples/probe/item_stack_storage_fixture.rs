@@ -1,10 +1,10 @@
+use horizon_os::fs;
 use horizon_world::{
     component_patch::{Patch, Prototype},
     item_stack_storage::{CopyResult, ItemStackData},
 };
 use serde_json::Value;
 use std::{
-    fs,
     io::{self, Write},
     path::Path,
 };

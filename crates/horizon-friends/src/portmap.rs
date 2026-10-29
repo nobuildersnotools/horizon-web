@@ -3,10 +3,10 @@
 //! UPnP IGD (SSDP discovery, then SOAP `AddPortMapping`). The mapping is
 //! renewed while sharing and deleted when it stops; a crashed game's mapping
 //! expires with its lease.
+use horizon_os::time::{Duration, Instant};
 use std::{
     io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket},
-    time::{Duration, Instant},
 };
 
 /// How long a mapping is asked for; it is renewed at half-time.
@@ -664,7 +664,7 @@ impl Igd {
 pub fn default_gateway() -> Option<Ipv4Addr> {
     #[cfg(target_os = "linux")]
     {
-        linux_gateway(&std::fs::read_to_string("/proc/net/route").ok()?)
+        linux_gateway(&horizon_os::fs::read_to_string("/proc/net/route").ok()?)
     }
     #[cfg(any(target_os = "macos", target_os = "freebsd", target_os = "openbsd"))]
     {
@@ -738,7 +738,7 @@ mod tests {
         let addr = s.local_addr().unwrap();
         let table: Table = Arc::default();
         let t = table.clone();
-        std::thread::spawn(move || {
+        horizon_os::thread::spawn(move || {
             let mut buf = [0u8; 1100];
             while let Ok((n, from)) = s.recv_from(&mut buf) {
                 let r = &buf[..n];
@@ -830,7 +830,7 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         let table: Arc<Mutex<HashMap<u16, (u16, String, u32)>>> = Arc::default();
         let t = table.clone();
-        std::thread::spawn(move || {
+        horizon_os::thread::spawn(move || {
             for s in l.incoming() {
                 let Ok(mut s) = s else { continue };
                 let mut req = Vec::new();

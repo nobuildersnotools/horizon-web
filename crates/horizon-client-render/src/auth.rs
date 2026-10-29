@@ -3,10 +3,10 @@
 //! online-mode servers need: authlib's MinecraftServicesSessionService.joinServer
 //! through the services discovery document. The access token stays in this
 //! process's memory: it is never logged, printed or written anywhere.
+use horizon_os::time::{Duration, SystemTime};
 use std::{
     path::Path,
     sync::{Arc, Mutex, OnceLock},
-    time::{Duration, SystemTime},
 };
 
 /// MinecraftServicesEnvironment.PROD.
@@ -77,9 +77,10 @@ impl AuthSession {
     /// Read the session file the launcher wrote and delete it at once. It
     /// must be fresh and, on Unix, readable by its owner only.
     pub fn load(path: &Path) -> Result<Self, String> {
-        let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let meta =
+            horizon_os::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let refuse = |why: &str| {
-            let _ = std::fs::remove_file(path);
+            let _ = horizon_os::fs::remove_file(path);
             Err(format!("{}: {why}", path.display()))
         };
         #[cfg(unix)]
@@ -97,8 +98,8 @@ impl AuthSession {
         if age > MAX_SESSION_FILE_AGE {
             return refuse("it is too old (start the game from the launcher)");
         }
-        let text = std::fs::read_to_string(path);
-        let _ = std::fs::remove_file(path);
+        let text = horizon_os::fs::read_to_string(path);
+        let _ = horizon_os::fs::remove_file(path);
         Self::parse(&text.map_err(|e| format!("{}: {e}", path.display()))?)
     }
 }
@@ -321,11 +322,12 @@ mod tests {
 
     fn write(dir: &Path, text: &str, mode: u32) -> std::path::PathBuf {
         let path = dir.join("session.json");
-        std::fs::write(&path, text).unwrap();
+        horizon_os::fs::write(&path, text).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            horizon_os::fs::set_permissions(&path, horizon_os::fs::Permissions::from_mode(mode))
+                .unwrap();
         }
         let _ = mode;
         path
@@ -347,8 +349,9 @@ mod tests {
 
     #[test]
     fn session_files_are_read_once_and_must_be_private() {
-        let dir = std::env::temp_dir().join(format!("horizon-auth-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-auth-test-{}", horizon_os::process::id()));
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let text = r#"{"name":"Notch","uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","access_token":"mock-token","user_type":"msa"}"#;
         let path = write(&dir, text, 0o600);
         let s = AuthSession::load(&path).unwrap();
@@ -365,7 +368,7 @@ mod tests {
             );
             assert!(!path.exists());
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 
     #[test]

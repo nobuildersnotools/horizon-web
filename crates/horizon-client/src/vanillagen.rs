@@ -11,6 +11,7 @@ use horizon_core::{
     position::ChunkPos,
     ticks::{ProtoChunkTicks, SavedTick, TickTypeId},
 };
+use horizon_os::fs::PathExt;
 use horizon_world::{
     heightmap::HeightmapType,
     nbt::Tag,
@@ -53,7 +54,7 @@ pub struct VanillaTerrain {
     /// When the last proto chunk was generated, in milliseconds since
     /// `created`: the ring search waits for a pause in generation.
     last_proto: std::sync::atomic::AtomicU64,
-    created: std::time::Instant,
+    created: horizon_os::time::Instant,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -195,7 +196,7 @@ impl VanillaTerrain {
                 "Horizon: {} placed features cannot run and will be skipped",
                 unsupported.len()
             );
-            if !dir.join("blocks/block-properties.nbt").exists() {
+            if !dir.join("blocks/block-properties.nbt").fs_exists() {
                 log::warn!(
                     "Horizon: the worldgen bundle lacks the block behavior exports (worldgen/blocks/*.nbt); \
                      prepare again (the launcher, or horizon-prepare --prepare) to add them"
@@ -241,7 +242,7 @@ impl VanillaTerrain {
             preset: preset.to_owned(),
             dimension: dimension.to_owned(),
             last_proto: std::sync::atomic::AtomicU64::new(0),
-            created: std::time::Instant::now(),
+            created: horizon_os::time::Instant::now(),
         })
     }
     /// The difficulty (0 peaceful to 3 hard) and overworld clock structure
@@ -404,12 +405,12 @@ impl VanillaTerrain {
         const QUIET: u64 = 2_000;
         const LATEST: u64 = 60_000;
         let terrain = Arc::downgrade(self);
-        let spawned = std::thread::Builder::new()
+        let spawned = horizon_os::thread::Builder::new()
             .name("Ring search".into())
             .spawn(move || {
                 horizon_threads::idle_current();
                 loop {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    horizon_os::thread::sleep(horizon_os::time::Duration::from_millis(500));
                     // The world closed: nothing to search for.
                     let Some(terrain) = terrain.upgrade() else {
                         return;
@@ -471,7 +472,7 @@ pub fn shared_data_with(
     {
         return Ok(data.clone());
     }
-    let started = std::time::Instant::now();
+    let started = horizon_os::time::Instant::now();
     let data = GeneratorData::load_with(dir, registry, overrides)?;
     log::info!("Horizon: worldgen data loaded in {:?}", started.elapsed());
     for warning in data.warnings() {

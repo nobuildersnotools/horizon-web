@@ -246,7 +246,7 @@ impl NativeMaterial {
                 ),
             )
         });
-        if let Some(e) = pollster::block_on(scope.pop()) {
+        if let Some(e) = horizon_os::block_on(scope.pop()).flatten() {
             return Err(format!("{}: {e}", stage.file));
         }
         Ok(Self {

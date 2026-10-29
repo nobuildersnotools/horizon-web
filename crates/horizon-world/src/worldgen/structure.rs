@@ -359,7 +359,7 @@ impl StructureResources {
         }
         let (namespace, path) = id.split_once(':').unwrap();
         let file = self.dir.join(namespace).join(format!("{path}.nbt"));
-        let loaded = std::fs::read(&file).ok().and_then(|bytes| {
+        let loaded = horizon_os::fs::read(&file).ok().and_then(|bytes| {
             let mut raw = Vec::new();
             flate2::read::GzDecoder::new(bytes.as_slice())
                 .read_to_end(&mut raw)

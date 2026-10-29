@@ -167,8 +167,8 @@ pub struct FrameUniforms {
     pub values: Vec<Value>,
     /// The block atlas's size (`atlasSize`), 0 without one.
     pub atlas: [u32; 2],
-    start: std::time::Instant,
-    last: Option<std::time::Instant>,
+    start: horizon_os::time::Instant,
+    last: Option<horizon_os::time::Instant>,
     frame: u32,
     previous: Option<(Vec3, Mat4, Mat4)>,
     wetness: f32,
@@ -182,7 +182,7 @@ impl Default for FrameUniforms {
         Self {
             values: Vec::new(),
             atlas: [0; 2],
-            start: std::time::Instant::now(),
+            start: horizon_os::time::Instant::now(),
             last: None,
             frame: 0,
             previous: None,
@@ -277,7 +277,7 @@ fn smooth(value: f32, target: f32, half_life: f32, dt: f32) -> f32 {
 impl FrameUniforms {
     /// This frame's values for a render size of `size` pixels.
     pub fn update(&mut self, frame: &Frame, inputs: &PackInputs, size: [u32; 2]) {
-        let now = std::time::Instant::now();
+        let now = horizon_os::time::Instant::now();
         let dt = self.last.map_or(0.0, |l| (now - l).as_secs_f32());
         self.last = Some(now);
         let aspect = size[0] as f32 / size[1].max(1) as f32;

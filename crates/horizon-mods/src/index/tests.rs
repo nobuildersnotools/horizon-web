@@ -13,7 +13,8 @@ fn fixtures() -> PathBuf {
 }
 
 fn sample() -> Index {
-    Index::parse(&std::fs::read_to_string(fixtures().join("index-v1.json")).unwrap()).unwrap()
+    Index::parse(&horizon_os::fs::read_to_string(fixtures().join("index-v1.json")).unwrap())
+        .unwrap()
 }
 
 fn check(index: &Index, id: &str, file: &Path) -> Result<Trust, String> {
@@ -61,14 +62,15 @@ fn files_pass_against_their_entries() {
 #[test]
 fn a_changed_file_key_or_manifest_is_refused() {
     let index = sample();
-    let dir = std::env::temp_dir().join(format!("horizon-index-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir =
+        horizon_os::env::temp_dir().join(format!("horizon-index-{}", horizon_os::process::id()));
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let hmod = fixtures().join("coords_hud-0.1.0.hmod");
-    let mut bytes = std::fs::read(&hmod).unwrap();
+    let mut bytes = horizon_os::fs::read(&hmod).unwrap();
     let last = bytes.len() - 1;
     bytes[last] ^= 1;
     let tampered = dir.join("coords_hud-0.1.0.hmod");
-    std::fs::write(&tampered, &bytes).unwrap();
+    horizon_os::fs::write(&tampered, &bytes).unwrap();
     let e = check(&index, "coords_hud", &tampered).unwrap_err();
     assert!(e.contains("SHA-256"), "{e}");
 
@@ -100,7 +102,7 @@ fn a_changed_file_key_or_manifest_is_refused() {
     });
     let e = check(&revoked, "coords_hud", &hmod).unwrap_err();
     assert!(e.contains("taken down: Test."), "{e}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    horizon_os::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -114,7 +116,7 @@ fn revocations_match_by_hash_or_by_id() {
 
 #[test]
 fn refuses_broken_indexes() {
-    let text = std::fs::read_to_string(fixtures().join("index-v1.json")).unwrap();
+    let text = horizon_os::fs::read_to_string(fixtures().join("index-v1.json")).unwrap();
     let newer = text.replacen("\"schema\": 1", "\"schema\": 2", 1);
     assert!(Index::parse(&newer).unwrap_err().contains("schema 2"));
     let broken = |edit: &dyn Fn(&mut Index)| {
@@ -155,11 +157,12 @@ fn refuses_broken_indexes() {
 #[test]
 fn resource_packs_need_a_pack_mcmeta() {
     use std::io::Write;
-    let dir = std::env::temp_dir().join(format!("horizon-index-rp-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir =
+        horizon_os::env::temp_dir().join(format!("horizon-index-rp-{}", horizon_os::process::id()));
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let pack = |files: &[(&str, &str)]| {
         let path = dir.join("look.zip");
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let mut zip = zip::ZipWriter::new(horizon_os::fs::File::create(&path).unwrap());
         for (name, text) in files {
             zip.start_file(*name, zip::write::SimpleFileOptions::default())
                 .unwrap();
@@ -179,7 +182,7 @@ fn resource_packs_need_a_pack_mcmeta() {
     assert!(e.contains("\"pack\""), "{e}");
     let e = check_resource_pack(&pack(&[("pack.mcmeta", meta), ("../x", "")])).unwrap_err();
     assert!(e.contains("plain path"), "{e}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    horizon_os::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -222,16 +225,17 @@ fn shader_packs_pass_the_game_s_own_check() {
             .package()
             .unwrap()
     };
-    let dir = std::env::temp_dir().join(format!("horizon-mods-shader-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = horizon_os::env::temp_dir()
+        .join(format!("horizon-mods-shader-{}", horizon_os::process::id()));
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let good = dir.join("glow-1.0.0.hshader");
-    std::fs::write(
+    horizon_os::fs::write(
         &good,
         pack("fn post(input: PostInput) -> vec4<f32> { return input.color; }\n"),
     )
     .unwrap();
     let bad = dir.join("bad.hshader");
-    std::fs::write(
+    horizon_os::fs::write(
         &bad,
         pack("fn post(input: PostInput) -> vec4<f32> { return input.color }\n"),
     )
@@ -239,7 +243,7 @@ fn shader_packs_pass_the_game_s_own_check() {
     let facts = inspect(&Kind::Shader, &good);
     let refused = inspect(&Kind::Shader, &bad).unwrap_err();
     let not_a_pack = inspect(&Kind::Shader, &fixtures().join("cozy-1.0.0.hpack")).unwrap_err();
-    std::fs::remove_dir_all(&dir).unwrap();
+    horizon_os::fs::remove_dir_all(&dir).unwrap();
     let facts = facts.unwrap();
     assert_eq!(
         (

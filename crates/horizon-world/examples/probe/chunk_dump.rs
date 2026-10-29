@@ -18,6 +18,8 @@
 //! NAME X Y Z PRIORITY` line per scheduled tick.
 use crate::support::common::tag;
 use horizon_core::position::ChunkPos;
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use horizon_world::{
     DATA_VERSION,
     nbt::Tag,
@@ -28,7 +30,7 @@ use horizon_world::{
     },
 };
 use serde_json::Value;
-use std::{collections::HashMap, fmt::Write as _, fs, io::Write as _, path::Path};
+use std::{collections::HashMap, fmt::Write as _, io::Write as _, path::Path};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -114,7 +116,7 @@ fn datapacks(dir: &Path) -> Result<WorldgenOverrides, Error> {
         let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         entries.sort();
         for path in entries {
-            if path.is_dir() {
+            if path.fs_is_dir() {
                 walk(root, &path, out);
             } else if let Ok(rel) = path.strip_prefix(root) {
                 out.push(rel.to_string_lossy().replace('\\', "/"));
@@ -124,7 +126,7 @@ fn datapacks(dir: &Path) -> Result<WorldgenOverrides, Error> {
     let mut packs: Vec<_> = fs::read_dir(dir)?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.join("pack.mcmeta").exists())
+        .filter(|p| p.join("pack.mcmeta").fs_exists())
         .collect();
     packs.sort();
     let mut overrides = WorldgenOverrides::default();

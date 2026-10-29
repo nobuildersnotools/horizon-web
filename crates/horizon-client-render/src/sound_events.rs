@@ -5,10 +5,11 @@
 //! `WeighedSoundEvents.getSound` drawing `nextInt(totalWeight)` from the sound
 //! instance's random.
 use horizon_core::random::RandomSource;
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    fs,
     path::Path,
 };
 
@@ -243,7 +244,7 @@ fn sound_files(namespace: &Path) -> HashSet<String> {
                 continue;
             };
             let (dir, file) = if kind.is_symlink() {
-                (path.is_dir(), path.is_file())
+                (path.fs_is_dir(), path.fs_is_file())
             } else {
                 (kind.is_dir(), kind.is_file())
             };
@@ -409,7 +410,8 @@ mod tests {
 
     #[test]
     fn load_keeps_the_sound_files_a_root_holds() {
-        let root = std::env::temp_dir().join(format!("horizon-sounds-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir()
+            .join(format!("horizon-sounds-{}", horizon_os::process::id()));
         let ns = root.join("assets/minecraft");
         fs::create_dir_all(ns.join("sounds/block/note")).unwrap();
         fs::write(ns.join("sounds/block/note/harp.ogg"), b"").unwrap();

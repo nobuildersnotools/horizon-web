@@ -4,10 +4,8 @@
 //! The endpoints go into the invite code; the verdict tells the host what
 //! friends outside its network can expect, and what to do when it's nothing.
 use crate::portmap::{self, Mapping};
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::Duration,
-};
+use horizon_os::time::Duration;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Where the troubleshooting lives (shown to hosts nobody can reach).
 pub const HELP_URL: &str =
@@ -55,6 +53,7 @@ fn shared(ip: IpAddr) -> bool {
 }
 
 /// Interface names of containers and VMs, whose addresses nobody else reaches.
+#[cfg(not(target_arch = "wasm32"))]
 fn virtual_interface(name: &str) -> bool {
     [
         "docker", "br-", "veth", "virbr", "vboxnet", "vmnet", "lxc", "cni", "podman",
@@ -66,6 +65,7 @@ fn virtual_interface(name: &str) -> bool {
 /// This machine's addresses worth offering, best first: private IPv4 (the
 /// LAN), shared IPv4 (Tailscale's 100.64/10, CGNAT), other IPv4, one global
 /// IPv6. No link-local or unique-local; loopback on request.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn interface_addresses(loopback: bool) -> Vec<IpAddr> {
     let mut found: Vec<(u8, IpAddr)> = Vec::new();
     for i in if_addrs::get_if_addrs().unwrap_or_default() {
@@ -113,13 +113,21 @@ pub fn interface_addresses(loopback: bool) -> Vec<IpAddr> {
     out
 }
 
+/// A page can't list the machine's addresses.
+#[cfg(target_arch = "wasm32")]
+pub fn interface_addresses(_loopback: bool) -> Vec<IpAddr> {
+    Vec::new()
+}
+
 impl Reach {
     /// Find out (takes a few seconds: router discovery and STUN).
     pub fn discover(port: u16, options: &Options) -> Self {
         let local = interface_addresses(options.loopback);
         let stun = {
             let servers = options.stun.clone();
-            std::thread::spawn(move || crate::stun::public_ip(&servers, Duration::from_secs(2)))
+            horizon_os::thread::spawn(move || {
+                crate::stun::public_ip(&servers, Duration::from_secs(2))
+            })
         };
         let (mapping, mapping_error) = if options.map_port {
             match local.iter().find_map(|ip| match ip {

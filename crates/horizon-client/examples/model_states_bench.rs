@@ -2,6 +2,7 @@
 //! Run: cargo run -p horizon-client --profile fast --example model_states_bench -- 15
 use horizon_client::{Result, models::StateModels, sprites::Sprites};
 use horizon_core::position::BlockPos;
+use horizon_os::{fs, time::Instant};
 use horizon_world::{
     DATA_VERSION,
     chunk::BlockState,
@@ -9,7 +10,7 @@ use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fs, hint::black_box, path::PathBuf, time::Instant};
+use std::{collections::BTreeMap, hint::black_box, path::PathBuf};
 
 struct Fixture {
     root: PathBuf,
@@ -19,8 +20,10 @@ struct Fixture {
 }
 impl Fixture {
     fn new(target_bytes: usize) -> Result<Self> {
-        let root =
-            std::env::temp_dir().join(format!("horizon-model-states-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-model-states-{}",
+            horizon_os::process::id()
+        ));
         fs::create_dir_all(root.join("assets/minecraft/blockstates"))?;
         fs::create_dir_all(root.join("assets/minecraft/models/block"))?;
         let mut possible = Vec::new();

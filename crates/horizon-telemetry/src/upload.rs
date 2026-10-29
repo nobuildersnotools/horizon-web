@@ -2,8 +2,8 @@
 //! consent again and deletes what the player no longer allows, so with everything off it
 //! returns without opening a connection. Failures back off (a minute, doubling, at most a day)
 //! and at most [`MAX_BATCHES_A_DAY`] batches leave a day.
+use horizon_os::time::Duration;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -42,7 +42,7 @@ fn state_path(home: &Path) -> PathBuf {
 }
 
 fn load(home: &Path) -> State {
-    std::fs::read(state_path(home))
+    horizon_os::fs::read(state_path(home))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
@@ -95,12 +95,16 @@ pub fn flush(home: &Path, endpoint: &str) -> Flush {
                 state.failures = 0;
                 items += paths.len();
                 batches += 1;
-                paths.iter().for_each(|p| drop(std::fs::remove_file(p)));
+                paths
+                    .iter()
+                    .for_each(|p| drop(horizon_os::fs::remove_file(p)));
             }
             // Refused for what it is (not for load): sending it again would not help.
             Err(ureq::Error::Status(code, _)) if (400..500).contains(&code) && code != 429 => {
                 state.batches += 1;
-                paths.iter().for_each(|p| drop(std::fs::remove_file(p)));
+                paths
+                    .iter()
+                    .for_each(|p| drop(horizon_os::fs::remove_file(p)));
             }
             Err(e) => {
                 state.failures = (state.failures + 1).min(16);

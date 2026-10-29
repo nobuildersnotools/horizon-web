@@ -16,20 +16,21 @@ use horizon_client::{
     world::World,
 };
 use horizon_core::biome::BiomeZoom;
+use horizon_os::fs::PathExt;
+use horizon_os::thread;
+use horizon_os::time::{Duration, Instant};
 use horizon_world::registry::BlockStateId;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
     sync::Arc,
-    thread,
-    time::{Duration, Instant},
 };
 
 fn resources() -> Option<std::path::PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.local/horizon-client")
         .join(horizon_core::VANILLA_VERSION);
-    root.join("items.json").exists().then_some(root)
+    root.join("items.json").fs_exists().then_some(root)
 }
 
 /// A saved world: every column loads with its light, as saved chunks do.

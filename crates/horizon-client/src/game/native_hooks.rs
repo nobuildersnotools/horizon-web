@@ -29,7 +29,8 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use horizon_os::{fs, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the

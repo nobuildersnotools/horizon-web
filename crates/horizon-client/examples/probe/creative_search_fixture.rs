@@ -8,8 +8,9 @@ use horizon_client::{
     creative::{Creative, Names},
     item_data::canon_stack,
 };
+use horizon_os::fs;
 use serde_json::{Value, json};
-use std::{fs, path::Path};
+use std::path::Path;
 
 pub fn main() -> horizon_client::Result<()> {
     let args: Vec<String> = crate::args().collect();

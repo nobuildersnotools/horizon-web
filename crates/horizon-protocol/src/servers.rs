@@ -68,7 +68,7 @@ impl ServerEntry {
 
 /// ServerList.load: missing or unreadable files give an empty list.
 pub fn load(path: &Path) -> Vec<ServerEntry> {
-    let Ok(bytes) = std::fs::read(path) else {
+    let Ok(bytes) = horizon_os::fs::read(path) else {
         return Vec::new();
     };
     let Ok((root, _)) = nbt::read_named(&bytes, nbt::Limits::default()) else {
@@ -98,7 +98,7 @@ pub fn save(path: &Path, servers: &[ServerEntry]) -> std::io::Result<()> {
 /// Puts `entry` first, keeping every other entry and field as the file has them (the hidden
 /// ones too). A file that is there but can't be read is left as it is.
 pub fn prepend(path: &Path, entry: &ServerEntry) -> std::io::Result<()> {
-    let mut root = match std::fs::read(path) {
+    let mut root = match horizon_os::fs::read(path) {
         Ok(bytes) => {
             nbt::read_named(&bytes, nbt::Limits::default())
                 .map_err(std::io::Error::other)?
@@ -125,8 +125,8 @@ pub fn prepend(path: &Path, entry: &ServerEntry) -> std::io::Result<()> {
 fn write(path: &Path, root: &NamedTag) -> std::io::Result<()> {
     let bytes = nbt::write_named(root, nbt::Limits::default()).map_err(std::io::Error::other)?;
     let tmp = path.with_extension("dat_tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(tmp, path)
+    horizon_os::fs::write(&tmp, bytes)?;
+    horizon_os::fs::rename(tmp, path)
 }
 
 /// ServerAddress.parseString: `host`, `host:port` or `[v6]:port`; default 25565.
@@ -157,8 +157,9 @@ mod tests {
 
     #[test]
     fn servers_dat_round_trips() {
-        let dir = std::env::temp_dir().join(format!("horizon-servers-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-servers-{}", horizon_os::process::id()));
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("servers.dat");
         let list = vec![
             ServerEntry::new("Minecraft Server", "localhost:25565"),
@@ -170,17 +171,21 @@ mod tests {
         save(&path, &list).unwrap();
         assert_eq!(load(&path), list);
         // Vanilla layout: an unnamed root compound with a "servers" list.
-        let (root, _) =
-            nbt::read_named(&std::fs::read(&path).unwrap(), nbt::Limits::default()).unwrap();
+        let (root, _) = nbt::read_named(
+            &horizon_os::fs::read(&path).unwrap(),
+            nbt::Limits::default(),
+        )
+        .unwrap();
         assert_eq!(root.name, JavaString::from(""));
         assert!(matches!(root.tag.get("servers"), Some(Tag::List(l)) if l.len() == 2));
-        std::fs::remove_dir_all(dir).unwrap();
+        horizon_os::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn prepend_keeps_hidden_entries_and_unknown_fields() {
-        let dir = std::env::temp_dir().join(format!("horizon-prepend-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-prepend-{}", horizon_os::process::id()));
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("servers.dat");
         prepend(&path, &ServerEntry::new("First", "a.example")).unwrap();
         assert_eq!(load(&path), [ServerEntry::new("First", "a.example")]);
@@ -196,8 +201,11 @@ mod tests {
         };
         write(&path, &root).unwrap();
         prepend(&path, &ServerEntry::new("Top", "c.example")).unwrap();
-        let (root, _) =
-            nbt::read_named(&std::fs::read(&path).unwrap(), nbt::Limits::default()).unwrap();
+        let (root, _) = nbt::read_named(
+            &horizon_os::fs::read(&path).unwrap(),
+            nbt::Limits::default(),
+        )
+        .unwrap();
         let Some(Tag::List(list)) = root.tag.get("servers") else {
             panic!("a server list");
         };
@@ -206,10 +214,10 @@ mod tests {
             &[ServerEntry::new("Top", "c.example").to_tag(), hidden]
         );
         // A file that can't be read stays as it is.
-        std::fs::write(&path, b"not nbt").unwrap();
+        horizon_os::fs::write(&path, b"not nbt").unwrap();
         assert!(prepend(&path, &ServerEntry::new("Top", "c.example")).is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), b"not nbt");
-        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(horizon_os::fs::read(&path).unwrap(), b"not nbt");
+        horizon_os::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

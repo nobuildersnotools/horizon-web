@@ -4,11 +4,9 @@
 //! `particles::item_use_particles`.
 use horizon_client::{Result, particles};
 use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_os::fs::File;
 use serde_json::Value;
-use std::{
-    fs::File,
-    io::{BufRead, BufReader, BufWriter, Write},
-};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 
 fn d(v: f64) -> String {
     format!("{:016x}", v.to_bits())

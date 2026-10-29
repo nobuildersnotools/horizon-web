@@ -14,6 +14,7 @@ use horizon_client::{
     scoreboard::bracketed,
     text::{self, Text},
 };
+use horizon_os::fs::PathExt;
 use horizon_world::nbt::Tag;
 use std::collections::BTreeSet;
 
@@ -72,7 +73,7 @@ impl Game<'_> {
     }
     pub(super) fn reload_datapacks(&mut self, run_load: bool) {
         self.fns.packs = datapack::discover(&self.world_root);
-        let saved: Option<serde_json::Value> = std::fs::read(self.datapack_settings_path())
+        let saved: Option<serde_json::Value> = horizon_os::fs::read(self.datapack_settings_path())
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
         let list = |key: &str| -> Vec<String> {
@@ -134,7 +135,7 @@ impl Game<'_> {
             .filter(|id| !self.fns.enabled.contains(id))
             .collect();
         let json = serde_json::json!({"enabled": self.fns.enabled, "disabled": disabled});
-        let _ = std::fs::write(self.datapack_settings_path(), json.to_string());
+        let _ = horizon_os::fs::write(self.datapack_settings_path(), json.to_string());
     }
     pub(super) fn sync_function_registries(&mut self) {
         let reg = &mut self.ui.registries;
@@ -208,7 +209,7 @@ impl Game<'_> {
                 ])
             })
             .collect();
-        if events.is_empty() && !self.schedule_path().exists() {
+        if events.is_empty() && !self.schedule_path().fs_exists() {
             return;
         }
         let _ = save::write_dat(
@@ -624,7 +625,7 @@ impl Game<'_> {
         }
         let datapacks = self.world_root.join("datapacks");
         let pack = datapacks.join(&id);
-        if pack.exists() {
+        if pack.fs_exists() {
             return Err(err("commands.datapack.create.already_exists", &[&id]));
         }
         // The data pack version (SharedConstants), written as a bare major
@@ -637,11 +638,11 @@ impl Game<'_> {
                 "max_format": pack_format,
             }
         });
-        let written = std::fs::create_dir_all(&datapacks)
-            .and_then(|()| std::fs::create_dir(&pack))
-            .and_then(|()| std::fs::create_dir(pack.join("data")))
+        let written = horizon_os::fs::create_dir_all(&datapacks)
+            .and_then(|()| horizon_os::fs::create_dir(&pack))
+            .and_then(|()| horizon_os::fs::create_dir(pack.join("data")))
             .and_then(|()| {
-                std::fs::write(
+                horizon_os::fs::write(
                     pack.join("pack.mcmeta"),
                     serde_json::to_string_pretty(&mcmeta).unwrap_or_default(),
                 )

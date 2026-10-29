@@ -2,6 +2,7 @@
 //! resource root and enabled packs layered over `en_us`, the language list
 //! from `pack.mcmeta` `language` sections, and a process-wide current
 //! language used by every screen.
+use horizon_os::fs::PathExt;
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
@@ -73,17 +74,17 @@ impl ResourceSource for Bundled {
 }
 impl ResourceSource for std::path::PathBuf {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
-        std::fs::read(self.join(path)).ok()
+        horizon_os::fs::read(self.join(path)).ok()
     }
     fn exists(&self, path: &str) -> bool {
-        self.join(path).is_file()
+        self.join(path).fs_is_file()
     }
     fn namespaces(&self) -> Vec<String> {
-        std::fs::read_dir(self.join("assets"))
+        horizon_os::fs::read_dir(self.join("assets"))
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|e| e.path().is_dir())
+            .filter(|e| e.path().fs_is_dir())
             .filter_map(|e| e.file_name().to_str().map(str::to_owned))
             .collect()
     }

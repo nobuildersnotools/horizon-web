@@ -174,7 +174,7 @@ impl Game<'_> {
             std::sync::OnceLock::new();
         EYE_HEIGHTS
             .get_or_init(|| {
-                std::fs::read(self.options.resources.join("entity-types.json"))
+                horizon_os::fs::read(self.options.resources.join("entity-types.json"))
                     .ok()
                     .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
                     .and_then(|v| {
@@ -1109,7 +1109,7 @@ impl Game<'_> {
             .options
             .resources
             .join(format!("data/{ns}/tags/worldgen/biome/{path}.json"));
-        let Ok(bytes) = std::fs::read(file) else {
+        let Ok(bytes) = horizon_os::fs::read(file) else {
             return self.res.mob_data().biome_has(tag, biome);
         };
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();

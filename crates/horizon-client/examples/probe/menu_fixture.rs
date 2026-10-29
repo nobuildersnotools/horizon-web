@@ -12,12 +12,12 @@ use horizon_client::{
     items::Items,
     menu::{Env, Input, Kind, Menu},
 };
+use horizon_os::fs;
 use horizon_protocol::registry::Ids;
 use serde_json::Value;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    fs,
     path::Path,
 };
 

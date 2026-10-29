@@ -27,11 +27,11 @@ use horizon_core::{
     geometry::{Aabb, Vec3},
     random::LegacyRandom,
 };
+use horizon_os::fs;
 use horizon_world::{chunk::BlockState, registry::BlockRegistry, registry::BlockStateId};
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Write as _,
-    fs,
     path::Path,
     sync::Arc,
 };

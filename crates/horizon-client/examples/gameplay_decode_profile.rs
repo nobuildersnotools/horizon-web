@@ -5,7 +5,8 @@
 #[path = "../../horizon-items/src/blocks/decode.rs"]
 mod decode;
 
-use std::{hint::black_box, path::Path, time::Instant};
+use horizon_os::time::Instant;
+use std::{hint::black_box, path::Path};
 
 // The included private decoder expects the parent crate Result alias.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -18,7 +19,7 @@ fn main() -> Result<()> {
         return Err("expected validate or typed".into());
     }
     let total = Instant::now();
-    let bytes = std::fs::read(Path::new(&root).join("gameplay-facts.json"))?;
+    let bytes = horizon_os::fs::read(Path::new(&root).join("gameplay-facts.json"))?;
     let started = Instant::now();
     if mode == "validate" {
         let parsed: decode::Validate = serde_json::from_slice(&bytes)?;

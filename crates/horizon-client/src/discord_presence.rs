@@ -5,12 +5,12 @@
 //! which connects when Discord runs, retries every 15 s when it doesn't, keeps under Discord's
 //! update limit and clears the activity on quit. Nothing is sent with the setting off,
 //! or with `HORIZON_NO_DISCORD=1`.
+use horizon_os::thread::Thread;
+use horizon_os::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock};
-use std::thread::Thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -122,7 +122,7 @@ pub fn start(enabled: bool, automated: bool) {
     if !enabled {
         lock().wanted.status = Status::Off;
     }
-    match std::thread::Builder::new()
+    match horizon_os::thread::Builder::new()
         .name("Discord presence".into())
         .spawn(run)
     {
@@ -185,13 +185,13 @@ fn run() {
                 STOPPED.notify_all();
                 return;
             }
-            std::thread::park();
+            horizon_os::thread::park();
             continue;
         }
         let now = Instant::now();
         if client.is_none() {
             if let Some(wait) = last_try.and_then(|t| RETRY.checked_sub(now - t)) {
-                std::thread::park_timeout(wait);
+                horizon_os::thread::park_timeout(wait);
                 continue;
             }
             last_try = Some(now);
@@ -203,12 +203,12 @@ fn run() {
         let due = sent.is_none_or(|(w, at)| w != wanted || now - at >= REFRESH);
         if !due {
             let (_, at) = sent.expect("sent");
-            std::thread::park_timeout(REFRESH - (now - at));
+            horizon_os::thread::park_timeout(REFRESH - (now - at));
             continue;
         }
         let wait = limit.wait(now);
         if !wait.is_zero() {
-            std::thread::park_timeout(wait);
+            horizon_os::thread::park_timeout(wait);
             continue;
         }
         limit.record(now);
@@ -268,7 +268,7 @@ fn activity(status: Status, since: Option<u64>) -> Option<Value> {
     if let Some(players) = party {
         let max = crate::lan::MAX_PLAYERS;
         a["party"] = json!({
-            "id": format!("horizon-{}", std::process::id()),
+            "id": format!("horizon-{}", horizon_os::process::id()),
             "size": [players.clamp(1, max), max],
         });
     }
@@ -358,7 +358,7 @@ impl Client {
         let nonce = self.nonce.to_string();
         let command = json!({
             "cmd": "SET_ACTIVITY",
-            "args": {"pid": std::process::id(), "activity": activity},
+            "args": {"pid": horizon_os::process::id(), "activity": activity},
             "nonce": nonce,
         });
         self.pipe.write_all(&encode(FRAME, &command))?;
@@ -430,11 +430,16 @@ fn open(path: &std::path::Path) -> io::Result<Box<dyn Pipe>> {
 
 #[cfg(windows)]
 fn open(path: &std::path::Path) -> io::Result<Box<dyn Pipe>> {
-    let pipe = std::fs::OpenOptions::new()
+    let pipe = horizon_os::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)?;
     Ok(Box::new(pipe))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open(_path: &std::path::Path) -> io::Result<Box<dyn Pipe>> {
+    Err(io::ErrorKind::Unsupported.into())
 }
 
 #[cfg(test)]
@@ -581,12 +586,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn talks_to_discord_over_its_socket() {
-        let dir = std::env::temp_dir().join(format!("horizon-discord-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-discord-{}", horizon_os::process::id()));
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("discord-ipc-0");
-        let _ = std::fs::remove_file(&path);
+        let _ = horizon_os::fs::remove_file(&path);
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-        let server = std::thread::spawn(move || {
+        let server = horizon_os::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
             let (op, hello) = read_frame(&mut s).unwrap();
             assert_eq!((op, &hello["v"]), (HANDSHAKE, &json!(1)));
@@ -614,10 +620,10 @@ mod tests {
         client.set_activity(None).unwrap();
         let got = server.join().unwrap();
         assert_eq!(got[0]["cmd"], "SET_ACTIVITY");
-        assert_eq!(got[0]["args"]["pid"], std::process::id());
+        assert_eq!(got[0]["args"]["pid"], horizon_os::process::id());
         assert_eq!(got[0]["args"]["activity"], shown.unwrap());
         assert_eq!(got[1]["args"]["activity"], Value::Null);
         assert_ne!(got[0]["nonce"], got[1]["nonce"]);
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = horizon_os::fs::remove_dir_all(dir);
     }
 }

@@ -10,11 +10,11 @@ use horizon_client::{
     toasts::Slide,
 };
 use horizon_core::geometry::Vec3;
+use horizon_os::time::Instant;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
-    time::Instant,
 };
 
 pub(super) struct Toast {
@@ -115,7 +115,7 @@ pub(super) struct AdvState {
     pub(super) announced: Vec<Text>,
     /// The tree being read on another thread since the world opened
     /// (`prefetch_advancement_tree`), taken by the first `advancement_tree`.
-    pub(super) pending_tree: Option<std::thread::JoinHandle<Tree>>,
+    pub(super) pending_tree: Option<horizon_os::thread::JoinHandle<Tree>>,
     /// `inventory_changed`'s criteria by item, built for `tree`.
     inventory_index: Option<(Arc<Tree>, Arc<adv::InventoryIndex>)>,
 }
@@ -218,8 +218,8 @@ impl adv::World for View<'_, '_> {
     }
 }
 fn now_text() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let secs = horizon_os::time::SystemTime::now()
+        .duration_since(horizon_os::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs()) as i64;
     adv::date_text(secs)
 }
@@ -297,7 +297,7 @@ impl Game<'_> {
             return;
         }
         let data = self.options.resources.join("data");
-        self.adv.pending_tree = std::thread::Builder::new()
+        self.adv.pending_tree = horizon_os::thread::Builder::new()
             .name("horizon-advancements".into())
             .spawn(move || Tree::load(&data))
             .ok();
@@ -310,7 +310,7 @@ impl Game<'_> {
         self.advancement_tree();
         let progress = self
             .adv_path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|p| horizon_os::fs::read_to_string(p).ok())
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
             .map(|v| Progress::from_json(&v))
             .unwrap_or_default();
@@ -332,10 +332,10 @@ impl Game<'_> {
             .progress
             .to_json(&self.adv.tree, horizon_world::DATA_VERSION);
         if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+            let _ = horizon_os::fs::create_dir_all(dir);
         }
         if let Ok(text) = serde_json::to_string_pretty(&json) {
-            let _ = std::fs::write(path, text);
+            let _ = horizon_os::fs::write(path, text);
         }
     }
     /// The player as predicates see it.

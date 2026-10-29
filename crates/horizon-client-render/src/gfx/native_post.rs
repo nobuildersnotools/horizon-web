@@ -36,7 +36,7 @@ pub struct NativeFrame {
     /// Group 3 of the stages that read only the frame (the sky).
     pub layout: wgpu::BindGroupLayout,
     pub group: wgpu::BindGroup,
-    start: std::time::Instant,
+    start: horizon_os::time::Instant,
     frames: u32,
 }
 
@@ -78,7 +78,7 @@ impl NativeFrame {
             buffer,
             layout,
             group,
-            start: std::time::Instant::now(),
+            start: horizon_os::time::Instant::now(),
             frames: 0,
         }
     }
@@ -198,7 +198,7 @@ impl NativePost {
                 multiview_mask: None,
                 cache: None,
             });
-            if let Some(e) = pollster::block_on(scope.pop()) {
+            if let Some(e) = horizon_os::block_on(scope.pop()).flatten() {
                 return Err(format!("{}: {e}", stage.file));
             }
             passes.push((stage.label, pipeline));

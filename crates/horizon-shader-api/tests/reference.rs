@@ -107,9 +107,9 @@ fn the_reference_is_up_to_date() {
     let path = root().join(DOC);
     let want = reference::markdown();
     if std::env::var_os("HORIZON_WRITE_DOCS").is_some() {
-        std::fs::write(&path, &want).unwrap();
+        horizon_os::fs::write(&path, &want).unwrap();
     }
-    let have = std::fs::read_to_string(&path)
+    let have = horizon_os::fs::read_to_string(&path)
         .unwrap_or_default()
         .replace("\r\n", "\n");
     assert!(

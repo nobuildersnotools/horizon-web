@@ -179,7 +179,7 @@ mod tests {
             let buffer = crate::gfx::copy_frame(&device, &mut encoder, &frame, [70, 3]);
             readback.present(&device, &mut encoder, &surface);
             queue.submit([encoder.finish()]);
-            if let Some(error) = pollster::block_on(scope.pop()) {
+            if let Some(error) = horizon_os::block_on(scope.pop()).flatten() {
                 panic!("{error}");
             }
             assert_eq!(last_pixel(&device, &buffer), bgra);

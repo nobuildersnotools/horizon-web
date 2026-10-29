@@ -16,12 +16,12 @@ use horizon_client::{
     items::Items,
 };
 use horizon_core::random::LegacyRandom;
+use horizon_os::fs;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use serde_json::Value;
 use std::{
     collections::HashMap,
     fmt::Write as _,
-    fs,
     io::{BufWriter, Write},
     path::PathBuf,
 };

@@ -1,5 +1,6 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
+use horizon_os::fs::PathExt;
 mod advancements;
 mod advancements_screen;
 mod agent;
@@ -249,6 +250,8 @@ use horizon_core::{
     position::BlockPos,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_os::thread::JoinHandle;
+use horizon_os::time::{Duration, Instant};
 use horizon_world::{
     block_collision::BlockCollisionRegistry,
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
@@ -268,8 +271,6 @@ use std::{
         atomic::{AtomicU32, Ordering},
         mpsc::{Receiver, TryRecvError},
     },
-    thread::JoinHandle,
-    time::{Duration, Instant},
 };
 use winit::{
     application::ApplicationHandler,
@@ -344,19 +345,19 @@ impl Options {
     /// next to options.txt (created on first use).
     fn player_name(&self) -> String {
         self.player_name.clone().unwrap_or_else(|| {
-            std::env::current_dir().map_or_else(
+            horizon_os::env::current_dir().map_or_else(
                 |_| horizon_client::offline_name::generate(0),
                 |dir| horizon_client::offline_name::load_or_create(&dir),
             )
         })
     }
     fn read() -> Result<Option<Self>> {
-        let sibling = std::env::current_exe()?
+        let sibling = horizon_os::env::current_exe()?
             .parent()
             .ok_or("missing executable directory")?
             .join("resources");
         let mut o = Self {
-            resources: if sibling.join("horizon-resources.json").exists() {
+            resources: if sibling.join("horizon-resources.json").fs_exists() {
                 sibling
             } else {
                 std::path::Path::new(".local/horizon-client").join(horizon_core::VANILLA_VERSION)
@@ -467,8 +468,8 @@ impl Options {
                         // Vanilla's quick play (Main, QuickPlay.joinSingleplayerWorld): only a
                         // world that exists opens; else the title screen. --world also creates one.
                         "--quickPlaySingleplayer" => {
-                            let folder = std::env::current_dir()?.join("saves").join(&value);
-                            if folder.join("level.dat").is_file() {
+                            let folder = horizon_os::env::current_dir()?.join("saves").join(&value);
+                            if folder.join("level.dat").fs_is_file() {
                                 o.world = Some(value);
                             } else {
                                 eprintln!("Quick play: there is no world {value} in saves/");
@@ -1503,7 +1504,7 @@ struct Game<'a> {
     /// The wheel and hovered slot of `BundleMouseActions`.
     bundle_mouse: bundles::BundleMouse,
     /// The last inventory click, for the double click that gathers a stack.
-    last_inv_click: Option<(std::time::Instant, usize, bool)>,
+    last_inv_click: Option<(horizon_os::time::Instant, usize, bool)>,
     /// `lastQuickMoved`: what the last Shift click moved, which a Shift
     /// double click moves every stack of.
     last_quick_moved: Option<ItemStack>,
@@ -7661,7 +7662,7 @@ impl Game<'_> {
             && shift
             && slot != 200
         {
-            let now = std::time::Instant::now();
+            let now = horizon_os::time::Instant::now();
             let double = self.last_inv_click.is_some_and(|(at, last, was_right)| {
                 last == slot && was_right == right && now.duration_since(at).as_millis() < 250
             });
@@ -7703,7 +7704,7 @@ impl Game<'_> {
         {
             // An item tab's display slots take no drags or PICKUP_ALL.
             let display = slot >= Creative::DISPLAY;
-            let now = std::time::Instant::now();
+            let now = horizon_os::time::Instant::now();
             let double = !right
                 && !display
                 && self.carried.is_some()
@@ -9255,12 +9256,12 @@ impl Game<'_> {
         self.join_world_rest()?;
         // Create World's data packs, in the world before it opens.
         if let Some(dir) = create.and_then(|o| o.pack_dir.as_deref()) {
-            let world = std::env::current_dir()?.join("saves").join(folder);
+            let world = horizon_os::env::current_dir()?.join("saves").join(folder);
             let packs = create.map_or(&[][..], |o| &o.data_packs[..]);
             if let Err(e) = horizon_client::datapack::install(dir, &world, packs) {
                 log::warn!("Horizon: data packs for {folder}: {e}");
             }
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = horizon_os::fs::remove_dir_all(dir);
         }
         if self
             .options
@@ -9274,7 +9275,7 @@ impl Game<'_> {
             self.perf.world_opening();
             if self.title.is_none() {
                 self.title = Some(Title::new(
-                    std::env::current_dir()?.join("saves"),
+                    horizon_os::env::current_dir()?.join("saves"),
                     &self.options.resources,
                 ));
             }
@@ -9689,7 +9690,7 @@ impl Game<'_> {
         while self.pending_save.is_some() {
             self.poll_closing_save()?;
             if self.pending_save.is_some() {
-                std::thread::sleep(Duration::from_millis(1));
+                horizon_os::thread::sleep(Duration::from_millis(1));
             }
         }
         if self.title.is_some() || self.saved_for_exit {
@@ -9752,7 +9753,7 @@ impl Game<'_> {
             r.clear_sections();
         }
         self.title = Some(Title::new(
-            std::env::current_dir()?.join("saves"),
+            horizon_os::env::current_dir()?.join("saves"),
             &self.options.resources,
         ));
         if let Some(title) = &mut self.title {
@@ -11915,7 +11916,7 @@ impl Game<'_> {
         {
             return;
         }
-        if icon.path.is_file() {
+        if icon.path.fs_is_file() {
             // tryTakeScreenshotIfNeeded's hasWorldScreenshot: it has one, stop asking.
             self.world_icon = None;
             return;
@@ -13029,7 +13030,7 @@ impl Game<'_> {
                 // A finished job can hold hundreds of tiles: spread them
                 // over frames rather than stall one.
                 horizon_client::spans::time("lod_upload", || {
-                    renderer.upload_lods(std::time::Duration::from_millis(2))
+                    renderer.upload_lods(horizon_os::time::Duration::from_millis(2))
                 });
             }
         }
@@ -13047,6 +13048,10 @@ impl ApplicationHandler for Game<'_> {
         let attributes = Window::default_attributes()
             .with_title("Horizon")
             .with_window_icon(horizon_client::window::icon());
+        // The canvas goes into the page.
+        #[cfg(target_arch = "wasm32")]
+        let attributes =
+            winit::platform::web::WindowAttributesExtWebSys::with_append(attributes, true);
         // Wayland names the window by its app id, which the horizon.desktop entry matches.
         #[cfg(target_os = "linux")]
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
@@ -14085,6 +14090,7 @@ impl ApplicationHandler for Game<'_> {
                         window.request_redraw();
                     }
                     // Yield between polls even when disk I/O is slow.
+                    #[cfg(not(target_arch = "wasm32"))]
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
                         Instant::now() + Duration::from_millis(4),
                     ));
@@ -14186,7 +14192,7 @@ impl<'a> Game<'a> {
         streaming.paused = true;
         let level = Level::default();
         let save = Arc::new(SaveDir::new(
-            std::env::current_dir()?
+            horizon_os::env::current_dir()?
                 .join("saves")
                 .join(".horizon-title"),
         ));
@@ -14459,7 +14465,7 @@ impl<'a> Game<'a> {
             knot_ids: Default::default(),
             text_display_vertices: 0,
             skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
-                std::env::current_dir()
+                horizon_os::env::current_dir()
                     .unwrap_or_default()
                     .join("assets/skins"),
             )),
@@ -14694,7 +14700,7 @@ impl Game<'_> {
         self.perf.world_opening();
         if self.title.is_none() {
             self.title = Some(Title::new(
-                std::env::current_dir()?.join("saves"),
+                horizon_os::env::current_dir()?.join("saves"),
                 &self.options.resources,
             ));
         }
@@ -14778,7 +14784,7 @@ impl Game<'_> {
             while self.rest_loader.is_some() {
                 self.poll_world_rest()?;
                 if self.rest_loader.is_some() {
-                    std::thread::sleep(Duration::from_millis(10));
+                    horizon_os::thread::sleep(Duration::from_millis(10));
                 }
             }
             log::info!(
@@ -14960,7 +14966,7 @@ fn load_resources(
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(1);
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
-        std::fs::File::open(root.join("block-behaviours.json"))?,
+        horizon_os::fs::File::open(root.join("block-behaviours.json"))?,
     ))?;
     // The block facts, the biomes and the environment are independent reads:
     // run them together, within the worker budget the settings allow.
@@ -14972,7 +14978,7 @@ fn load_resources(
     let load_biomes = || Biomes::load(&root).map_err(|e| e.to_string());
     let load_environment = || Environment::load(&root).map_err(|e| e.to_string());
     let (facts, biomes, environment) = if threads > 1 {
-        std::thread::scope(|scope| {
+        horizon_os::thread::scope(|scope| {
             let facts = scope.spawn(load_facts);
             let biomes = scope.spawn(load_biomes);
             let environment = scope.spawn(load_environment);
@@ -15042,12 +15048,13 @@ fn load_resources(
             prepared_at.elapsed().as_millis()
         );
     }
-    let rest_loader = if menu {
+    // The page has no thread for it: the rest loads now, as without a menu.
+    let rest_loader = if menu && cfg!(not(target_arch = "wasm32")) {
         let resources = resources.clone();
         let root = root.clone();
         let rest_progress = progress.clone();
         let progress = progress.clone();
-        let handle = std::thread::Builder::new()
+        let handle = horizon_os::thread::Builder::new()
             .name("world-rest-loader".into())
             .spawn(move || {
                 let rest = load_world_rest(
@@ -15206,7 +15213,7 @@ fn build_renderer(
     // Chinese and Japanese menu labels go blank when the loading screen hands
     // over to the game.
     atlas.font.reset_cache();
-    let mut renderer = pollster::block_on(Renderer::new(
+    let mut renderer = horizon_os::block_on(Renderer::new(
         window,
         offscreen,
         &assets.pixels,
@@ -15227,7 +15234,8 @@ fn build_renderer(
         prepared,
         previous,
         api,
-    ))?;
+    ))
+    .ok_or("the renderer waited for the browser")??;
     renderer.hud.sprite_animations = atlas
         .sprite_animations
         .iter()
@@ -15240,6 +15248,19 @@ fn build_renderer(
 /// white block-sprite layer, an empty border texture and the title panorama
 /// once the menu bundle is ready.
 fn loading_renderer(
+    window: Arc<Window>,
+    offscreen: bool,
+    gui: Option<&UiResources>,
+    previous: Option<&Renderer>,
+    api: horizon_client::graphics::GraphicsApi,
+) -> Result<Renderer> {
+    horizon_os::block_on(open_loading_renderer(window, offscreen, gui, previous, api))
+        .ok_or("the renderer waited for the browser")?
+}
+
+/// [`loading_renderer`]: on the web, the first one waits for the browser's
+/// adapter and device.
+async fn open_loading_renderer(
     window: Arc<Window>,
     offscreen: bool,
     gui: Option<&UiResources>,
@@ -15269,7 +15290,7 @@ fn loading_renderer(
     if let Some(atlas) = atlas {
         atlas.font.reset_cache();
     }
-    let mut renderer = pollster::block_on(Renderer::new(
+    let mut renderer = Renderer::new(
         window,
         offscreen,
         &[255, 255, 255, 255],
@@ -15286,7 +15307,8 @@ fn loading_renderer(
         None,
         previous,
         api,
-    ))?;
+    )
+    .await?;
     if let Some(atlas) = atlas {
         renderer.hud.sprite_animations = atlas
             .sprite_animations
@@ -15382,7 +15404,7 @@ fn start_game<'a>(
     let handoff = prepared.is_some();
     let mut settings = match settings {
         Some(settings) => settings,
-        None => Settings::load(&std::env::current_dir()?.join("options.txt")),
+        None => Settings::load(&horizon_os::env::current_dir()?.join("options.txt")),
     };
     if let Some(d) = options.distance_override {
         settings.render_distance = d;
@@ -15432,7 +15454,7 @@ fn start_game<'a>(
                 vsync: false,
                 fps_cap: None,
                 offscreen: game.options.offscreen,
-                game_dir: std::env::current_dir()?,
+                game_dir: horizon_os::env::current_dir()?,
             },
         );
     }
@@ -15469,7 +15491,7 @@ fn start_game<'a>(
                 // Start after the window is handed over, so --world uses the
                 // same responsive initialization path as the title screen.
                 game.title = Some(Title::new(
-                    std::env::current_dir()?.join("saves"),
+                    horizon_os::env::current_dir()?.join("saves"),
                     &game.options.resources,
                 ));
                 game.pending_entry = Some(PendingWorldEntry::Local {
@@ -15484,7 +15506,7 @@ fn start_game<'a>(
         None if handoff => {}
         None => {
             let mut title = Title::new(
-                std::env::current_dir()?.join("saves"),
+                horizon_os::env::current_dir()?.join("saves"),
                 &game.options.resources,
             );
             title.last_server = game.settings.file.string("lastServer");
@@ -15512,7 +15534,7 @@ fn write_report(game: &Game<'_>) -> Result<()> {
             "player": game.player.as_ref().map(|p| [p.position.x, p.position.y, p.position.z]),
             "error": game.error.as_ref().map(|e| e.to_string()),
         });
-        std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
+        horizon_os::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
     }
     Ok(())
 }
@@ -15566,6 +15588,9 @@ struct Loading {
     shown: bool,
     menu: startup_menu::StartupMenu,
     error: Option<Box<dyn std::error::Error>>,
+    /// The first renderer, while the browser opens its device.
+    #[cfg(target_arch = "wasm32")]
+    opening: Option<std::rc::Rc<RefCell<Option<Result<Renderer>>>>>,
 }
 impl Loading {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -15583,6 +15608,10 @@ impl Loading {
         let attributes = Window::default_attributes()
             .with_title("Horizon")
             .with_window_icon(horizon_client::window::icon());
+        // The canvas goes into the page.
+        #[cfg(target_arch = "wasm32")]
+        let attributes =
+            winit::platform::web::WindowAttributesExtWebSys::with_append(attributes, true);
         // Wayland names the window by its app id, which the horizon.desktop entry matches.
         #[cfg(target_os = "linux")]
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
@@ -15602,22 +15631,37 @@ impl Loading {
         };
         horizon_client::telemetry::note_display(&window);
         let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
-        match loading_renderer(
-            window.clone(),
-            offscreen,
-            self.gui.as_ref(),
-            None,
-            self.settings.horizon.api,
-        ) {
-            Ok(r) => self.renderer = Some(r),
-            Err(e) => {
-                self.error = Some(e);
-                event_loop.exit();
-                return;
-            }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let slot = std::rc::Rc::new(RefCell::new(None));
+            let out = slot.clone();
+            let (opening, api) = (window.clone(), self.settings.horizon.api);
+            wasm_bindgen_futures::spawn_local(async move {
+                let renderer = open_loading_renderer(opening, offscreen, None, None, api).await;
+                *out.borrow_mut() = Some(renderer);
+            });
+            self.opening = Some(slot);
+            self.window = Some(window);
         }
-        horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);
-        self.window = Some(window);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match loading_renderer(
+                window.clone(),
+                offscreen,
+                self.gui.as_ref(),
+                None,
+                self.settings.horizon.api,
+            ) {
+                Ok(r) => self.renderer = Some(r),
+                Err(e) => {
+                    self.error = Some(e);
+                    event_loop.exit();
+                    return;
+                }
+            }
+            horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);
+            self.window = Some(window);
+        }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, mut event: WindowEvent) {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
@@ -15672,6 +15716,27 @@ impl Loading {
             // No world is open yet: nothing to save.
             event_loop.exit();
             return;
+        }
+        // On the web nothing else starts before the first renderer.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(slot) = &self.opening {
+            let Some(opened) = slot.borrow_mut().take() else {
+                event_loop.set_control_flow(ControlFlow::Poll);
+                return;
+            };
+            self.opening = None;
+            match opened {
+                Ok(r) => {
+                    horizon_client::hud::GUI_SCALE
+                        .store(self.settings.gui_scale, Ordering::Relaxed);
+                    self.renderer = Some(r);
+                }
+                Err(e) => {
+                    self.error = Some(e);
+                    event_loop.exit();
+                    return;
+                }
+            }
         }
         if let Err(error) = self.poll_menu_resources() {
             self.error = Some(error);
@@ -15866,6 +15931,20 @@ impl ApplicationHandler for App {
         if let App::Ready(game) = self {
             game.exiting(event_loop);
         }
+        // On the web `run_app` never returns to `run`, which reports the error.
+        #[cfg(target_arch = "wasm32")]
+        match self {
+            App::Loading(loading) => {
+                if let Some(e) = &loading.error {
+                    log::error!("Horizon: {e}");
+                }
+            }
+            App::Ready(game) => {
+                if let Some(e) = &game.error {
+                    log::error!("Horizon: {e}");
+                }
+            }
+        }
     }
 }
 
@@ -15873,7 +15952,7 @@ impl ApplicationHandler for App {
 /// manifest is `horizon-resources.json`): without them, say where they were
 /// looked for and how to get them, before a window or a loader starts.
 fn missing_resources(root: &std::path::Path) -> Option<String> {
-    if root.join("horizon-resources.json").is_file() {
+    if root.join("horizon-resources.json").fs_is_file() {
         return None;
     }
     let shown = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
@@ -15913,10 +15992,12 @@ fn run_loading(
         receiver,
         loaded: None,
         delivered: false,
-        handle: Some(loader),
+        handle: loader,
         shown: false,
         menu,
         error: None,
+        #[cfg(target_arch = "wasm32")]
+        opening: None,
     };
     let mut app = App::Loading(Box::new(loading));
     let result = EventLoop::new()?.run_app(&mut app);
@@ -15971,7 +16052,8 @@ pub fn run() -> Result<()> {
         && options.world_frames.is_none()
     {
         horizon_client::heartbeat::start();
-        if let Err(e) = horizon_client::multiplayer::add_official_server(&std::env::current_dir()?)
+        if let Err(e) =
+            horizon_client::multiplayer::add_official_server(&horizon_os::env::current_dir()?)
         {
             log::warn!("could not add the official server to servers.dat: {e}");
         }
@@ -15985,7 +16067,7 @@ pub fn run() -> Result<()> {
     if let Some(error) = missing_resources(&vanilla_root) {
         return Err(error.into());
     }
-    let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
+    let early_settings = Settings::load(&horizon_os::env::current_dir()?.join("options.txt"));
     // "Playing Horizon" on Discord: never for a server; an automated run only talks to a test's fake Discord.
     if options.dedicated.is_none() {
         let automated = options.benchmark.is_some()
@@ -15996,7 +16078,7 @@ pub fn run() -> Result<()> {
     }
     // Snapshots of derived tables live in the game folder, never beside the
     // shared resources.
-    Behaviours::set_cache_dir(std::env::current_dir()?.join(".horizon-cache"));
+    Behaviours::set_cache_dir(horizon_os::env::current_dir()?.join(".horizon-cache"));
     if !synchronous_startup(&options) {
         return run_loading(options, early_settings, vanilla_root, None, started);
     }
@@ -16090,24 +16172,26 @@ mod startup_cpu_tests {
 
     #[test]
     fn a_folder_without_prepared_files_is_named_before_loading() {
-        let root = std::env::temp_dir().join(format!("horizon-unprepared-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = horizon_os::env::temp_dir()
+            .join(format!("horizon-unprepared-{}", horizon_os::process::id()));
+        let _ = horizon_os::fs::remove_dir_all(&root);
         let missing = missing_resources(&root.join(".local/horizon-client/26.3"))
             .expect("no manifest is reported");
         assert!(missing.contains("horizon-resources.json"), "{missing}");
         assert!(missing.contains("horizon-unprepared-"), "{missing}");
         assert!(missing.contains("launcher"), "{missing}");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("horizon-resources.json"), "{}").unwrap();
+        horizon_os::fs::create_dir_all(&root).unwrap();
+        horizon_os::fs::write(root.join("horizon-resources.json"), "{}").unwrap();
         assert_eq!(missing_resources(&root), None);
-        std::fs::remove_dir_all(&root).unwrap();
+        horizon_os::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn worker_prepares_owned_models_and_inventory_before_handoff() {
-        let root = std::env::temp_dir().join(format!("horizon-startup-cpu-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
+        let root = horizon_os::env::temp_dir()
+            .join(format!("horizon-startup-cpu-{}", horizon_os::process::id()));
+        horizon_os::fs::create_dir_all(&root).unwrap();
+        horizon_os::fs::write(
             root.join("entity-models.json"),
             r#"{
             "minecraft:end_crystal#main": {}, "minecraft:ender_dragon#main": {},
@@ -16116,7 +16200,7 @@ mod startup_cpu_tests {
         }"#,
         )
         .unwrap();
-        std::fs::write(
+        horizon_os::fs::write(
             root.join("creative-tabs.json"),
             r#"[{
             "id":"minecraft:building_blocks", "items":["minecraft:stone"]
@@ -16124,13 +16208,13 @@ mod startup_cpu_tests {
         )
         .unwrap();
         let worker_root = root.clone();
-        let prepared = std::thread::spawn(move || {
+        let prepared = horizon_os::thread::spawn(move || {
             GameCpuResources::load(&worker_root).map_err(|error| error.to_string())
         })
         .join()
         .unwrap()
         .unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
+        horizon_os::fs::remove_dir_all(&root).unwrap();
         assert!(prepared.crystal_model.is_some());
         assert!(prepared.cushion_model.is_some());
         assert!(prepared.dragon_model.is_some());
@@ -16220,7 +16304,7 @@ mod tests {
         let (release, wait) = std::sync::mpsc::channel();
         let loader = WorldRestLoader {
             progress: Progress::new(),
-            handle: std::thread::spawn(move || {
+            handle: horizon_os::thread::spawn(move || {
                 wait.recv().unwrap();
                 Ok(())
             }),
@@ -16235,7 +16319,7 @@ mod tests {
         let (release, wait) = std::sync::mpsc::channel();
         let loader = WorldRestLoader {
             progress: Progress::new(),
-            handle: std::thread::spawn(move || {
+            handle: horizon_os::thread::spawn(move || {
                 wait.recv().unwrap();
                 Ok(())
             }),
@@ -16244,7 +16328,7 @@ mod tests {
         assert!(!loader.ready().unwrap());
         release.send(()).unwrap();
         while !loader.ready().unwrap() {
-            std::thread::sleep(Duration::from_millis(1));
+            horizon_os::thread::sleep(Duration::from_millis(1));
         }
         loader.finish().unwrap();
     }
@@ -16253,7 +16337,7 @@ mod tests {
     fn world_rest_worker_failure_reaches_the_client() {
         let loader = WorldRestLoader {
             progress: Progress::new(),
-            handle: std::thread::spawn(|| Err("missing world table".to_owned())),
+            handle: horizon_os::thread::spawn(|| Err("missing world table".to_owned())),
         };
         assert_eq!(
             loader.finish().unwrap_err().to_string(),
@@ -16265,7 +16349,7 @@ mod tests {
     fn world_rest_worker_panic_reaches_the_client() {
         let loader = WorldRestLoader {
             progress: Progress::new(),
-            handle: std::thread::spawn(|| panic!("broken loader")),
+            handle: horizon_os::thread::spawn(|| panic!("broken loader")),
         };
         assert_eq!(
             loader.finish().unwrap_err().to_string(),

@@ -13,10 +13,10 @@ use horizon_client::{
     world::World,
 };
 use horizon_core::random::RandomSource;
+use horizon_os::fs::File;
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
     sync::Arc,

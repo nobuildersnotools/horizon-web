@@ -5,6 +5,7 @@
 //!     [--dimension overworld|the_nether|the_end]
 //!     [--warmup] [--json] [--no-map] [--snapshot PATH]
 use horizon_core::position::ChunkPos;
+use horizon_os::{fs, time::Instant};
 use horizon_world::{
     DATA_VERSION,
     heightmap::HeightmapType,
@@ -17,14 +18,12 @@ use horizon_world::{
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Instant,
 };
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -350,7 +349,7 @@ fn main() -> Result<(), Error> {
     let timings = Mutex::new(Vec::new());
     let cpu = cpu_seconds();
     let start = Instant::now();
-    std::thread::scope(|scope| -> Result<(), Error> {
+    horizon_os::thread::scope(|scope| -> Result<(), Error> {
         let handles = (0..threads)
             .map(|_| {
                 scope.spawn(|| -> Result<(), Error> {
@@ -381,11 +380,11 @@ fn main() -> Result<(), Error> {
         cpu_elapsed * 1000. / count as f64
     );
     let timings = timings.into_inner().unwrap();
-    let per_chunk = |f: fn(&StageTimings) -> std::time::Duration| {
+    let per_chunk = |f: fn(&StageTimings) -> horizon_os::time::Duration| {
         timings
             .iter()
             .map(f)
-            .sum::<std::time::Duration>()
+            .sum::<horizon_os::time::Duration>()
             .as_secs_f64()
             * 1000.
             / count as f64
@@ -439,7 +438,7 @@ fn main() -> Result<(), Error> {
             decorated += regions.len();
             let queue = Mutex::new(regions);
             let done = Mutex::new(Vec::new());
-            std::thread::scope(|scope| -> Result<(), Error> {
+            horizon_os::thread::scope(|scope| -> Result<(), Error> {
                 let handles = (0..threads)
                     .map(|_| {
                         scope.spawn(|| -> Result<(), Error> {

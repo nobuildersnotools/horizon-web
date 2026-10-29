@@ -12,14 +12,9 @@ use crate::{
     worldgen::tags::TagDefinitions,
 };
 use horizon_core::geometry::{Aabb, Direction, ShapeOp, Vec3, VoxelShape};
+use horizon_os::fs::{self, File};
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    fs::{self, File},
-    io,
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::HashMap, io, path::Path, sync::Arc};
 #[path = "data/cache.rs"]
 mod cache;
 pub(super) use cache::set_dir as set_cache_dir;

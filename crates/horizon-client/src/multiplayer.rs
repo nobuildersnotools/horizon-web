@@ -6,12 +6,13 @@ use crate::hud::{HudAtlas, HudBatch, rgba};
 use crate::lan::discovery::Scanner;
 use crate::text::{DARK_GRAY, GRAY, Text, format_translation};
 use crate::title::confirm_top;
+use horizon_os::fs::PathExt;
+use horizon_os::time::{Duration, Instant};
 use horizon_protocol::servers::{self, ServerEntry};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
 };
 
 const SERVER_NAME: crate::clipboard::FieldId = ("server.name", 0);
@@ -181,7 +182,7 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) 
             icons.lock().unwrap().insert(address.clone(), pixels);
         }
         let (pings, icons, file) = (pings.clone(), icons.clone(), file.to_owned());
-        let _ = std::thread::Builder::new()
+        let _ = horizon_os::thread::Builder::new()
             .name("horizon-ping".into())
             .spawn(move || {
                 let result = match crate::net::ping(&address, Duration::from_secs(5)) {
@@ -274,7 +275,7 @@ const OFFICIAL_MARKER: &str = "horizon_official_server.txt";
 /// again after the player deletes it, and not when the list has its address.
 pub fn add_official_server(game_dir: &Path) -> std::io::Result<()> {
     let marker = game_dir.join(OFFICIAL_MARKER);
-    if marker.exists() {
+    if marker.fs_exists() {
         return Ok(());
     }
     let (name, address) = OFFICIAL_SERVER;
@@ -287,7 +288,7 @@ pub fn add_official_server(game_dir: &Path) -> std::io::Result<()> {
     {
         servers::prepend(&file, &ServerEntry::new(name, address))?;
     }
-    std::fs::write(marker, format!("{address}\n"))
+    horizon_os::fs::write(marker, format!("{address}\n"))
 }
 
 /// The address of list row `index`: the saved servers, then the LAN games.
@@ -780,8 +781,8 @@ impl Screen {
                 let icons = icons.lock().unwrap();
                 // The row under the pointer (`isHovered`).
                 let hovered = row_at(servers.len(), games.len(), cursor, (w, h), scroll.amount);
-                let millis = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let millis = horizon_os::time::SystemTime::now()
+                    .duration_since(horizon_os::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis());
                 let gray = rgba(128, 128, 128, 255);
                 for (i, row) in rows(servers.len(), games.len()).enumerate() {
@@ -1092,7 +1093,7 @@ impl Screen {
                     centered(batch, line, half(h) - 16.0 + i as f32 * 9.0, u32::MAX);
                 }
                 if let Some(r) = retry {
-                    let text = r.text(std::time::Instant::now());
+                    let text = r.text(horizon_os::time::Instant::now());
                     centered(batch, &text, half(h) + 16.0, rgba(170, 170, 170, 255));
                 }
             }
@@ -1413,7 +1414,7 @@ impl Screen {
         let Self::Disconnected { retry, .. } = self else {
             return None;
         };
-        if !retry.as_ref()?.due(std::time::Instant::now()) {
+        if !retry.as_ref()?.due(horizon_os::time::Instant::now()) {
             return None;
         }
         retry.take()
@@ -1750,13 +1751,14 @@ mod tests {
 
     #[test]
     fn the_official_server_is_added_once_at_the_top() {
-        let dir = std::env::temp_dir().join(format!("horizon-mp-official-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-mp-official-{}", horizon_os::process::id()));
         let (name, address) = OFFICIAL_SERVER;
         let file = dir.join("servers.dat");
         let ips = || -> Vec<String> { servers::load(&file).into_iter().map(|s| s.ip).collect() };
         let fresh = |list: &[ServerEntry]| {
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
+            let _ = horizon_os::fs::remove_dir_all(&dir);
+            horizon_os::fs::create_dir_all(&dir).unwrap();
             if !list.is_empty() {
                 servers::save(&file, list).unwrap();
             }
@@ -1789,14 +1791,15 @@ mod tests {
         servers::save(&file, &mine).unwrap();
         add_official_server(&dir).unwrap();
         assert_eq!(ips(), ["127.0.0.1:2", "example.org"]);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn icon_arrows_join_and_move_servers() {
-        let dir = std::env::temp_dir().join(format!("horizon-mp-arrows-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-mp-arrows-{}", horizon_os::process::id()));
         let saves = dir.join("saves");
-        std::fs::create_dir_all(&saves).unwrap();
+        horizon_os::fs::create_dir_all(&saves).unwrap();
         let file = servers_file(&saves);
         let names = ["a", "b", "c"];
         let list: Vec<ServerEntry> = names
@@ -1845,14 +1848,15 @@ mod tests {
             Outcome::Connect(address) => assert_eq!(address, list[2].ip),
             _ => panic!("the join arrow connects"),
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn delete_asks_before_removing_the_server() {
-        let dir = std::env::temp_dir().join(format!("horizon-mp-delete-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-mp-delete-{}", horizon_os::process::id()));
         let saves = dir.join("saves");
-        std::fs::create_dir_all(&saves).unwrap();
+        horizon_os::fs::create_dir_all(&saves).unwrap();
         let file = servers_file(&saves);
         let list = vec![
             ServerEntry::new("Keep", "127.0.0.1:2"),
@@ -1911,14 +1915,15 @@ mod tests {
             matches!(&screen, Screen::List { selected: None, servers, .. } if servers.len() == 1)
         );
         assert_eq!(names(), ["Keep"]);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn edit_cycles_and_saves_the_server_resource_pack_setting() {
-        let dir = std::env::temp_dir().join(format!("horizon-mp-packs-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-mp-packs-{}", horizon_os::process::id()));
         let saves = dir.join("saves");
-        std::fs::create_dir_all(&saves).unwrap();
+        horizon_os::fs::create_dir_all(&saves).unwrap();
         let file = servers_file(&saves);
         let mut entry = ServerEntry::new("Packs", "127.0.0.1:4");
         entry.accept_textures = Some(false);
@@ -1965,6 +1970,6 @@ mod tests {
         // A new server asks.
         screen.click(Some(42), 0.0, 0.0, size, &saves);
         assert_eq!(cycle(&screen).unwrap().3, "Server Resource Packs: Prompt");
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 }

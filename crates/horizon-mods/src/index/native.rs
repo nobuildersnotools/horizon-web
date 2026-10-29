@@ -72,7 +72,7 @@ pub struct Bundle {
 
 impl Bundle {
     pub fn read(path: &Path) -> Result<Self, String> {
-        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let file = horizon_os::fs::File::open(path).map_err(|e| e.to_string())?;
         let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
         if zip.len() > 512 {
             return Err("native bundle has too many entries".into());
@@ -165,9 +165,11 @@ mod tests {
         }
     }
     fn read(name: &str, extras: &[(&str, &[u8])], mixin: &str) -> Result<Bundle, String> {
-        let path =
-            std::env::temp_dir().join(format!("native-bundle-{name}-{}.hnmod", std::process::id()));
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let path = horizon_os::env::temp_dir().join(format!(
+            "native-bundle-{name}-{}.hnmod",
+            horizon_os::process::id()
+        ));
+        let mut zip = zip::ZipWriter::new(horizon_os::fs::File::create(&path).unwrap());
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file(MANIFEST, options).unwrap();
         zip.write_all(&serde_json::to_vec(&manifest()).unwrap())
@@ -181,7 +183,7 @@ mod tests {
         }
         zip.finish().unwrap();
         let result = Bundle::read(&path);
-        std::fs::remove_file(path).unwrap();
+        horizon_os::fs::remove_file(path).unwrap();
         result
     }
     fn mixin() -> String {

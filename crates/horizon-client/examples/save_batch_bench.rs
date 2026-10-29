@@ -10,12 +10,13 @@ use horizon_client::{
     save::{self, ChunkExtras},
 };
 use horizon_core::paletted::PalettedContainer;
+use horizon_os::time::Instant;
 use horizon_world::{
     DATA_VERSION,
     nbt::{self, Limits, Tag},
     registry::BlockRegistry,
 };
-use std::{collections::HashMap, hint::black_box, sync::Arc, time::Instant};
+use std::{collections::HashMap, hint::black_box, sync::Arc};
 
 type Entities = HashMap<(i32, i32, i32), BlockEntity>;
 type Names = HashMap<(i32, i32, i32), String>;
@@ -142,25 +143,26 @@ fn encoding_fixture() -> horizon_client::Result<(BlockRegistry, Biomes)> {
             ),
         ),
     ]))?;
-    let temp = std::env::temp_dir().join(format!("horizon-save-batch-{}", std::process::id()));
+    let temp = horizon_os::env::temp_dir()
+        .join(format!("horizon-save-batch-{}", horizon_os::process::id()));
     let result = (|| {
         let textures = temp.join("assets/minecraft/textures/colormap");
         let biomes = temp.join("data/minecraft/worldgen/biome");
-        std::fs::create_dir_all(&textures)?;
-        std::fs::create_dir_all(&biomes)?;
+        horizon_os::fs::create_dir_all(&textures)?;
+        horizon_os::fs::create_dir_all(&biomes)?;
         for name in ["grass", "foliage", "dry_foliage"] {
             let mut encoder = png::Encoder::new(
-                std::fs::File::create(textures.join(format!("{name}.png")))?,
+                horizon_os::fs::File::create(textures.join(format!("{name}.png")))?,
                 1,
                 1,
             );
             encoder.set_color(png::ColorType::Rgb);
             encoder.write_header()?.write_image_data(&[0, 128, 0])?;
         }
-        std::fs::write(biomes.join("plains.json"), b"{}")?;
+        horizon_os::fs::write(biomes.join("plains.json"), b"{}")?;
         Biomes::load(&temp)
     })();
-    std::fs::remove_dir_all(&temp)?;
+    horizon_os::fs::remove_dir_all(&temp)?;
     Ok((registry, result?))
 }
 

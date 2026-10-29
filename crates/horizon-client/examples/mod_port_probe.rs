@@ -17,9 +17,11 @@ use horizon_client::{
     stations::StationRecipes,
 };
 use horizon_core::{geometry::Axis, random::LegacyRandom};
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use horizon_world::chunk::BlockState;
 use serde_json::{Map, Value, json};
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
 fn boxes(list: impl IntoIterator<Item = [f64; 6]>) -> Value {
     let mut v: Vec<[f64; 6]> = list.into_iter().collect();
@@ -55,7 +57,7 @@ fn main() -> Result<()> {
     for entry in fs::read_dir(work.join("mods"))?.flatten() {
         let id = entry.file_name().to_string_lossy().into_owned();
         let dir = entry.path().join("carry");
-        if !(wanted.is_empty() || wanted.contains(&id)) || !dir.is_dir() {
+        if !(wanted.is_empty() || wanted.contains(&id)) || !dir.fs_is_dir() {
             continue;
         }
         let package = horizon_mods::Package::read(&dir)?;
@@ -67,7 +69,7 @@ fn main() -> Result<()> {
     }
     mods.sort_by(|a, b| a.id.cmp(&b.id));
     let root = work.join("horizon-root");
-    let began = std::time::Instant::now();
+    let began = horizon_os::time::Instant::now();
     let step = |what: &str| {
         let what = what.to_owned();
         move |e: Box<dyn std::error::Error>| format!("{what}: {e}")

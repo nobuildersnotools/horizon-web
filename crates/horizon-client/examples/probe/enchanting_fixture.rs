@@ -8,7 +8,8 @@ use horizon_client::{
     items::{ItemStack, Items},
     stations,
 };
-use std::{fmt::Write as _, fs, path::Path};
+use horizon_os::fs;
+use std::{fmt::Write as _, path::Path};
 
 pub fn main() -> horizon_client::Result<()> {
     let args: Vec<String> = crate::args().collect();

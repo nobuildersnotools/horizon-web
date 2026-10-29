@@ -7,6 +7,7 @@
 //! versions by the launcher. Its key includes the running executable, so a build
 //! that resolves the tables differently never reads another build's snapshot.
 use super::*;
+use horizon_os::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -16,7 +17,6 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 const MAGIC: &[u8; 8] = b"HZBEHAV\0";
@@ -140,7 +140,7 @@ fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
     hasher.update(b"horizon resolved behaviours 2");
     // The build that resolved the tables: the version constant alone misses
     // loader changes that keep the snapshot layout.
-    let exe = std::env::current_exe()?;
+    let exe = horizon_os::env::current_exe()?;
     let built = fs::metadata(&exe)?;
     hash_str(&mut hasher, &exe.to_string_lossy());
     hasher.update(built.len().to_le_bytes());
@@ -753,7 +753,7 @@ fn write(
     let path = dir.join(FILE_NAME);
     let tmp = dir.join(format!(
         "{FILE_NAME}.tmp-{}-{}",
-        std::process::id(),
+        horizon_os::process::id(),
         NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
@@ -795,9 +795,9 @@ mod tests {
             eprintln!("skipping behaviour cache tests: no client resources");
             return None;
         }
-        let dir = std::env::temp_dir().join(format!(
+        let dir = horizon_os::env::temp_dir().join(format!(
             "horizon-behaviour-cache-test-{}-{}",
-            std::process::id(),
+            horizon_os::process::id(),
             NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
         ));
         fs::create_dir_all(dir.join("data/minecraft/tags/fluid")).unwrap();

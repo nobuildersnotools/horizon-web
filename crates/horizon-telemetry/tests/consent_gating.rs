@@ -19,7 +19,7 @@ fn mock_server(status: u16) -> (String, Seen) {
     let url = format!("http://{}", listener.local_addr().unwrap());
     let seen: Seen = Arc::default();
     let log = seen.clone();
-    std::thread::spawn(move || {
+    horizon_os::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -59,8 +59,8 @@ fn home(name: &str) -> PathBuf {
     let mut bytes = [0u8; 6];
     getrandom::fill(&mut bytes).unwrap();
     let suffix: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    let dir = std::env::temp_dir().join(format!("horizon-telemetry-gating-{name}-{suffix}"));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = horizon_os::env::temp_dir().join(format!("horizon-telemetry-gating-{name}-{suffix}"));
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     dir
 }
 
@@ -89,8 +89,8 @@ fn perf() -> Item {
 /// Puts an item straight into the outbox, as a game from before a withdrawal left it.
 fn leftover(home: &Path, item: &Item, name: &str) {
     let dir = outbox::dir(home);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(name), serde_json::to_vec(item).unwrap()).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::write(dir.join(name), serde_json::to_vec(item).unwrap()).unwrap();
 }
 
 #[test]

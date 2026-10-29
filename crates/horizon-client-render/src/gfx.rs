@@ -10,7 +10,8 @@ use crate::{
     sprites::SpriteAnimation,
 };
 use glam::{DVec3, Mat4, Vec3, Vec4};
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
+use horizon_os::time::Instant;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -27,9 +28,14 @@ const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
 const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
     wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
 
-/// entity.wgsl after the OverlayTexture constants it reads.
+/// entity.wgsl after the OverlayTexture constants it reads. Its fragment
+/// shaders sample the glint and overlay textures in branches on per-vertex
+/// flags, which WGSL's uniformity analysis rejects (browsers enforce it;
+/// naga does not): the derivatives are the interpolated UVs' either way.
 fn entity_shader() -> String {
-    crate::overlay::wgsl_constants() + include_str!("entity.wgsl")
+    "diagnostic(off, derivative_uniformity);\n".to_owned()
+        + &crate::overlay::wgsl_constants()
+        + include_str!("entity.wgsl")
 }
 
 #[cfg(test)]
@@ -389,9 +395,9 @@ pub struct Renderer {
     pub lightmap_pixels: [u8; 16 * 16 * 4],
     /// Time the last `render` spent blocked on the GPU or the display
     /// (acquiring, presenting, offscreen pacing), excluded from CPU time.
-    pub last_wait: std::time::Duration,
+    pub last_wait: horizon_os::time::Duration,
     /// CPU time of the last `render`, waits excluded.
-    pub last_encode: std::time::Duration,
+    pub last_encode: horizon_os::time::Duration,
     /// What the system says about the window's display, watched only while HDR output
     /// is on; before `window`, so it's dropped first.
     display: DisplayWatch,
@@ -831,6 +837,10 @@ impl wgpu::rwh::HasDisplayHandle for WindowDisplay {
 /// the renderer's start (#746). macOS has Metal only.
 fn backend_order(api: GraphicsApi, os: &str, wgpu_backend: bool) -> Vec<wgpu::Backends> {
     use wgpu::Backends;
+    // A page has the browser's WebGPU and nothing else Horizon can draw with.
+    if cfg!(target_arch = "wasm32") {
+        return vec![Backends::BROWSER_WEBGPU];
+    }
     if os == "macos" || wgpu_backend {
         return vec![Backends::default()];
     }
@@ -1007,12 +1017,12 @@ async fn open_device(
             required_limits: limits,
             ..Default::default()
         };
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
         let opened = match info.backend {
             wgpu::Backend::Vulkan => horizon_hdr::open_vulkan_device(&adapter, &desc),
             _ => None,
         };
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
         let opened = None;
         let opened = match opened {
             Some(opened) => opened,
@@ -2616,8 +2626,8 @@ impl Renderer {
             gpu_timer,
             gpu_times: Vec::new(),
             lightmap_pixels: [0; 16 * 16 * 4],
-            last_wait: std::time::Duration::ZERO,
-            last_encode: std::time::Duration::ZERO,
+            last_wait: horizon_os::time::Duration::ZERO,
+            last_encode: horizon_os::time::Duration::ZERO,
             window,
             device,
             queue,
@@ -3323,10 +3333,10 @@ impl Renderer {
             // If the game dies before HDR output shows a frame, the marker is still there at
             // the next start, which then comes up with HDR off.
             if output.is_some() {
-                let _ = std::fs::write(marker, "HDR output was being switched on\n");
+                let _ = horizon_os::fs::write(marker, "HDR output was being switched on\n");
                 self.hdr_marker = Some(marker.to_owned());
             } else if let Some(marker) = self.hdr_marker.take() {
-                let _ = std::fs::remove_file(marker);
+                let _ = horizon_os::fs::remove_file(marker);
             }
             // Only HDR output asks the system about the display, so with HDR off the
             // game never waits on the compositor for it.
@@ -5440,7 +5450,7 @@ impl Renderer {
             if self.hdr.is_some()
                 && let Some(marker) = self.hdr_marker.take()
             {
-                let _ = std::fs::remove_file(marker);
+                let _ = horizon_os::fs::remove_file(marker);
                 log::info!("Horizon renderer: HDR output presented its first frame");
             }
             if reconfigure && let Some(surface) = &self.surface {
@@ -5458,7 +5468,7 @@ impl Renderer {
                 let index = self.in_flight.pop_front();
                 let _ = self.device.poll(wgpu::PollType::Wait {
                     submission_index: index,
-                    timeout: Some(std::time::Duration::from_secs(5)),
+                    timeout: Some(horizon_os::time::Duration::from_secs(5)),
                 });
             }
         }
@@ -5578,7 +5588,7 @@ impl Renderer {
             None => (self.config.width, self.config.height, pixels),
         };
         let mut encoder = png::Encoder::new(
-            std::io::BufWriter::new(std::fs::File::create(&request.path)?),
+            std::io::BufWriter::new(horizon_os::fs::File::create(&request.path)?),
             width,
             height,
         );
@@ -5846,7 +5856,7 @@ mod tests {
     #[test]
     fn shaders_translate_to_hlsl_for_directx_12() {
         fn wgsl_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
+            for entry in horizon_os::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     wgsl_files(&path, out);
@@ -5862,7 +5872,7 @@ mod tests {
         );
         assert!(files.len() >= 10, "{files:?}");
         for path in files {
-            let text = std::fs::read_to_string(&path).unwrap();
+            let text = horizon_os::fs::read_to_string(&path).unwrap();
             // entity.wgsl comes after the overlay's constants (entity_shader).
             let module = naga::front::wgsl::parse_str(&text)
                 .or_else(|_| {
@@ -6192,19 +6202,19 @@ impl DisplayWatch {
 /// held that long, and only the one they settled on is logged.
 struct DisplayLog {
     last: String,
-    at: Option<std::time::Instant>,
-    pending: Option<(String, std::time::Instant)>,
+    at: Option<horizon_os::time::Instant>,
+    pending: Option<(String, horizon_os::time::Instant)>,
 }
 static DISPLAY_LOG: std::sync::Mutex<DisplayLog> = std::sync::Mutex::new(DisplayLog {
     last: String::new(),
     at: None,
     pending: None,
 });
-const DISPLAY_LOG_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
+const DISPLAY_LOG_QUIET: horizon_os::time::Duration = horizon_os::time::Duration::from_secs(1);
 // Only Wayland's HDR reports call it so far.
 #[cfg(target_os = "linux")]
 fn log_display(line: String) {
-    let now = std::time::Instant::now();
+    let now = horizon_os::time::Instant::now();
     let mut log = DISPLAY_LOG
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -6220,7 +6230,7 @@ fn log_display(line: String) {
 /// Logs a change [`log_display`] held back, once the values have held for
 /// [`DISPLAY_LOG_QUIET`].
 fn flush_display_log() {
-    let now = std::time::Instant::now();
+    let now = horizon_os::time::Instant::now();
     let mut log = DISPLAY_LOG
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

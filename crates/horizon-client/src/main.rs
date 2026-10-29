@@ -10,6 +10,14 @@ use horizon_client::{crash, logging};
 static MOD_API_LEVEL: [u8; 27] = horizon_mods::api_level::MARK;
 
 fn main() {
+    // The page starts the game once it has installed the game's files.
+    #[cfg(target_arch = "wasm32")]
+    horizon_os::web::on_start(start);
+    #[cfg(not(target_arch = "wasm32"))]
+    start();
+}
+
+fn start() {
     std::hint::black_box(&MOD_API_LEVEL);
     horizon_client::telemetry::mark_start();
     let args: Vec<String> = std::env::args().skip(1).collect();

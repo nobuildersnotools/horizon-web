@@ -205,8 +205,8 @@ impl Post {
                 multiview_mask: None,
                 cache: None,
             });
-            let internal = pollster::block_on(internal.pop());
-            match internal.or(pollster::block_on(validation.pop())) {
+            let internal = horizon_os::block_on(internal.pop()).flatten();
+            match internal.or(horizon_os::block_on(validation.pop()).flatten()) {
                 None => {
                     let uniform = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("Horizon TAA"),

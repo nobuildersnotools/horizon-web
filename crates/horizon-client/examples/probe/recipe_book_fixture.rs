@@ -5,13 +5,14 @@
 //!
 //! usage: recipe_book_fixture RESOURCES CASES OUTPUT
 use horizon_client::recipe_book::{BookType, RecipeIndex, Settings};
+use horizon_os::fs;
 use horizon_protocol::{
     buf::{Codec, Reader, Writer},
     packets::recipes::RecipeBookChangeSettings,
 };
 use horizon_world::nbt::Tag;
 use serde_json::Value;
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{collections::BTreeSet, path::Path};
 
 fn fnv<'a>(ids: impl IntoIterator<Item = &'a String>) -> u64 {
     let mut sorted: Vec<&String> = ids.into_iter().collect();

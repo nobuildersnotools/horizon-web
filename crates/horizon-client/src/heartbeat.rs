@@ -4,10 +4,10 @@
 //! play-with-friends world is open, every minute and at once when that last one changes.
 //! It sends nothing when sending is turned off (`HORIZON_TELEMETRY_URL=off`) or with
 //! `HORIZON_NO_HEARTBEAT=1` (automated runs).
+use horizon_os::thread::Thread;
+use horizon_os::time::Duration;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::Thread;
-use std::time::Duration;
 
 use horizon_telemetry::live::{self, Ping};
 
@@ -27,7 +27,7 @@ pub fn start() {
     let Some(endpoint) = horizon_telemetry::endpoint() else {
         return;
     };
-    let spawned = std::thread::Builder::new()
+    let spawned = horizon_os::thread::Builder::new()
         .name("Heartbeat".into())
         .spawn(move || run(&endpoint));
     match spawned {
@@ -69,6 +69,6 @@ fn run(endpoint: &str) {
             }
         }
         // Woken early by `set_lan`; a spurious wake only sends one ping more.
-        std::thread::park_timeout(wait);
+        horizon_os::thread::park_timeout(wait);
     }
 }

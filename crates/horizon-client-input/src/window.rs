@@ -168,12 +168,12 @@ pub trait LimiterClock {
 /// `LockSupport.parkNanos` and a CPU spin hint for `Thread.onSpinWait`.
 #[derive(Clone, Copy, Debug)]
 pub struct SystemClock {
-    origin: std::time::Instant,
+    origin: horizon_os::time::Instant,
 }
 impl Default for SystemClock {
     fn default() -> Self {
         Self {
-            origin: std::time::Instant::now(),
+            origin: horizon_os::time::Instant::now(),
         }
     }
 }
@@ -182,7 +182,7 @@ impl LimiterClock for SystemClock {
         i64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(i64::MAX)
     }
     fn park(&mut self, nanos: i64) {
-        std::thread::sleep(std::time::Duration::from_nanos(nanos.max(0) as u64));
+        horizon_os::thread::sleep(horizon_os::time::Duration::from_nanos(nanos.max(0) as u64));
     }
     fn spin(&mut self) {
         std::hint::spin_loop();
@@ -202,7 +202,7 @@ impl LimiterClock for SleepingClock {
         self.0.park(nanos);
     }
     fn spin(&mut self) {
-        std::thread::sleep(std::time::Duration::from_micros(50));
+        horizon_os::thread::sleep(horizon_os::time::Duration::from_micros(50));
     }
 }
 

@@ -1,10 +1,10 @@
 //! The host's public IPv4 address, from a STUN Binding request (RFC 8489)
 //! to public STUN servers. Only the address is used: the port a STUN server
 //! sees is a UDP mapping, while the game listens on TCP.
+use horizon_os::time::Duration;
 use std::{
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket},
-    time::Duration,
 };
 
 /// Two independent operators, so one outage doesn't break discovery; both
@@ -139,7 +139,7 @@ pub(crate) mod tests {
     pub(crate) fn mock(answer: SocketAddr) -> SocketAddr {
         let s = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = s.local_addr().unwrap();
-        std::thread::spawn(move || {
+        horizon_os::thread::spawn(move || {
             let mut buf = [0u8; 576];
             while let Ok((n, from)) = s.recv_from(&mut buf) {
                 if n < 20 {

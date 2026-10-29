@@ -98,7 +98,7 @@ pub fn load(registry: &Path) -> Result<(Vec<Entry>, Vec<Revoked>), Vec<String>> 
     let mut errors = Vec::new();
     let mut entries = Vec::new();
     let dir = registry.join(ENTRIES);
-    let mut paths: Vec<PathBuf> = match std::fs::read_dir(&dir) {
+    let mut paths: Vec<PathBuf> = match horizon_os::fs::read_dir(&dir) {
         Ok(read) => read.filter_map(|e| e.ok().map(|e| e.path())).collect(),
         Err(e) => return Err(vec![format!("{}: {e}", dir.display())]),
     };
@@ -109,7 +109,7 @@ pub fn load(registry: &Path) -> Result<(Vec<Entry>, Vec<Revoked>), Vec<String>> 
             errors.push(format!("{ENTRIES}/{name}: only <id>.toml files go here"));
             continue;
         };
-        let parsed = std::fs::read_to_string(&path)
+        let parsed = horizon_os::fs::read_to_string(&path)
             .map_err(|e| e.to_string())
             .and_then(|text| toml::from_str::<Entry>(&text).map_err(|e| e.to_string()));
         match parsed {
@@ -121,7 +121,7 @@ pub fn load(registry: &Path) -> Result<(Vec<Entry>, Vec<Revoked>), Vec<String>> 
             Err(e) => errors.push(format!("{ENTRIES}/{name}: {e}")),
         }
     }
-    let revoked = match std::fs::read_to_string(registry.join(REVOKED)) {
+    let revoked = match horizon_os::fs::read_to_string(registry.join(REVOKED)) {
         Ok(text) => match toml::from_str::<RevokedFile>(&text) {
             Ok(file) => file.revoked,
             Err(e) => {
@@ -185,7 +185,7 @@ pub fn project(entry: &Entry, src: &Sources) -> Result<Project, Vec<String>> {
             let ok = path
                 .strip_prefix("icons/")
                 .is_some_and(|name| super::plain_name(name) && name.ends_with(".png"));
-            let size = std::fs::metadata(src.registry.join(path)).map(|m| m.len());
+            let size = horizon_os::fs::metadata(src.registry.join(path)).map(|m| m.len());
             match (ok, size) {
                 (true, Ok(n)) if n <= MAX_ICON => Some(format!("{}{path}", src.site)),
                 (true, Ok(_)) => {
@@ -256,7 +256,7 @@ fn version(entry: &Entry, v: &EntryVersion, src: &Sources) -> Result<Version, St
     }
     hex64(&v.sha256)?;
     let path = src.files.join(&v.sha256);
-    let size = std::fs::metadata(&path)
+    let size = horizon_os::fs::metadata(&path)
         .map_err(|e| format!("its file {}: {e}", v.sha256))?
         .len();
     if super::sha256_file(&path)? != v.sha256 {

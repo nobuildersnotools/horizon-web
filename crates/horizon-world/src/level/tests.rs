@@ -3,6 +3,7 @@
 //! repository root) and are skipped when those are absent.
 use super::*;
 use crate::chunk::BlockState;
+use horizon_os::fs::PathExt;
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
@@ -25,7 +26,7 @@ fn fixture() -> Option<&'static Fixture> {
                         .join("../../.local/horizon-client")
                         .join(horizon_core::VANILLA_VERSION)
                 });
-            if !root.join("block-behaviours.json").exists() {
+            if !root.join("block-behaviours.json").fs_exists() {
                 eprintln!("skipping level tests: no resources at {}", root.display());
                 return None;
             }

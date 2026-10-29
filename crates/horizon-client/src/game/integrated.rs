@@ -24,6 +24,8 @@ use horizon_client::{
     settings::Settings,
     title::WorldOptions,
 };
+use horizon_os::thread::JoinHandle;
+use horizon_os::time::{Duration, Instant};
 use horizon_protocol::connection::Pipe;
 use horizon_protocol::{crypto::offline_uuid, text::translatable};
 use std::{
@@ -33,8 +35,6 @@ use std::{
         atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
         mpsc::{Receiver, Sender, channel, sync_channel},
     },
-    thread::JoinHandle,
-    time::{Duration, Instant},
 };
 
 /// What the window tells its server thread.
@@ -258,7 +258,7 @@ impl Game<'_> {
         let (ready_tx, ready) = channel();
         let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
-        let thread = std::thread::Builder::new()
+        let thread = horizon_os::thread::Builder::new()
             .name("Server thread".into())
             .spawn(move || {
                 // MinecraftServer.spin's Thread.setPriority(8).
@@ -296,7 +296,7 @@ impl Game<'_> {
             while self.integrated_starting.is_some() {
                 self.poll_integrated_start()?;
                 if self.integrated_starting.is_some() {
-                    std::thread::sleep(Duration::from_millis(5));
+                    horizon_os::thread::sleep(Duration::from_millis(5));
                 }
             }
         }
@@ -334,7 +334,7 @@ impl Game<'_> {
         // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
         // the Select World list shows, and needs the save folder for it.
         self.world_icon = Some(WorldIcon {
-            path: std::env::current_dir()?
+            path: horizon_os::env::current_dir()?
                 .join("saves")
                 .join(&folder)
                 .join("icon.png"),
@@ -501,7 +501,7 @@ impl Game<'_> {
             }
             self.lan = Some(host);
         }
-        std::thread::sleep(Duration::from_millis(100));
+        horizon_os::thread::sleep(Duration::from_millis(100));
         // ServerPlayer.disconnect: nobody is left in a bed.
         self.free_player_beds()?;
         self.save_game()?;
@@ -811,7 +811,7 @@ impl Game<'_> {
         options.execution_role = ExecutionRole::IntegratedServer;
         options.dedicated = Some(Vec::new());
         options.server_thread = false;
-        let result = std::thread::Builder::new()
+        let result = horizon_os::thread::Builder::new()
             .name("Server thread".into())
             .spawn(move || {
                 let run = || -> Result<()> {
@@ -859,7 +859,7 @@ mod tests {
         let (tasks, _) = channel();
         let server = Integrated {
             flags: flags.clone(),
-            thread: Some(std::thread::spawn(move || wait.recv().unwrap())),
+            thread: Some(horizon_os::thread::spawn(move || wait.recv().unwrap())),
             tasks,
             world_name: String::new(),
         };
@@ -877,7 +877,7 @@ mod tests {
         let (tasks, _) = channel();
         let server = Integrated {
             flags,
-            thread: Some(std::thread::spawn(move || {
+            thread: Some(horizon_os::thread::spawn(move || {
                 *saving.failure.lock().unwrap() = Some("disk write failed".into());
             })),
             tasks,

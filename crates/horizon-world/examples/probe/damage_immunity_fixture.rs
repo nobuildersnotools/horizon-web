@@ -1,7 +1,7 @@
+use horizon_os::fs;
 use horizon_world::damage_immunity::{self, DamageRule, ImmunityTag, ImmunityWorld};
 use serde_json::Value;
 use std::{
-    fs,
     io::{self, Write},
     path::Path,
 };

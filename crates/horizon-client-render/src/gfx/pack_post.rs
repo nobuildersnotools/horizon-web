@@ -482,7 +482,7 @@ fn sampler(
 fn checked<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, String> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let value = crate::crash::contain(create);
-    match pollster::block_on(scope.pop()) {
+    match horizon_os::block_on(scope.pop()).flatten() {
         Some(e) => {
             // The details are in the error's description or its sources.
             let mut message = match &e {

@@ -198,7 +198,9 @@ fn human_readable(bytes: u64) -> String {
 }
 
 pub(super) fn saves() -> PathBuf {
-    std::env::current_dir().unwrap_or_default().join("saves")
+    horizon_os::env::current_dir()
+        .unwrap_or_default()
+        .join("saves")
 }
 
 /// `LoadingOverlay`'s stage lines for a pack reload, indexed by `progress`.
@@ -213,7 +215,7 @@ const RELOAD_LINES: [&str; 4] = [
 /// on the render thread.
 pub(super) struct PackReload {
     pub(super) progress: Progress,
-    handle: std::thread::JoinHandle<std::result::Result<super::packs::StagedPack, String>>,
+    handle: horizon_os::thread::JoinHandle<std::result::Result<super::packs::StagedPack, String>>,
 }
 
 impl Game<'_> {
@@ -367,7 +369,7 @@ impl Game<'_> {
     fn start_pack_downloads(&mut self, requests: Vec<horizon_client::server_packs::Request>) {
         let state = &mut self.server_packs;
         if state.queue.is_none() {
-            let dir = std::env::current_dir()
+            let dir = horizon_os::env::current_dir()
                 .unwrap_or_default()
                 .join("downloads");
             match download::Queue::open(dir) {
@@ -440,7 +442,7 @@ impl Game<'_> {
         let (unicode, japanese) = (self.settings.force_unicode, self.settings.japanese_glyphs);
         let progress = Progress::with(&RELOAD_LINES);
         let worker = progress.clone();
-        let handle = std::thread::Builder::new()
+        let handle = horizon_os::thread::Builder::new()
             .name("server-pack-reload".into())
             .spawn(move || {
                 super::packs::stage_pack(

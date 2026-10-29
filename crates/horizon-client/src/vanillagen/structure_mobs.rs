@@ -243,7 +243,7 @@ mod tests {
         let file = root.join("worldgen/structure/minecraft/bastion/mobs/crossbow_piglin.nbt");
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(
-            &mut flate2::read::GzDecoder::new(std::fs::File::open(file).unwrap()),
+            &mut flate2::read::GzDecoder::new(horizon_os::fs::File::open(file).unwrap()),
             &mut bytes,
         )
         .unwrap();

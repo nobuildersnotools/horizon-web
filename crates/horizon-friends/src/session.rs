@@ -7,6 +7,7 @@ use crate::{
     crypto::{self, Frame, Key, Role, SecureReader, SecureWriter},
     direct,
 };
+use horizon_os::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use std::{
     io,
@@ -16,7 +17,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::{Sender, channel},
     },
-    time::{Duration, Instant},
 };
 
 pub(crate) type Secure = (SecureReader<TcpStream>, SecureWriter<TcpStream>);
@@ -111,12 +111,12 @@ pub(crate) fn settle(
         listen(raw_tx.clone(), deadline, stop.clone());
         direct::dial(direct_port, theirs, session, deadline, stop.clone(), raw_tx);
         let key = key.clone();
-        let _ = std::thread::Builder::new()
+        let _ = horizon_os::thread::Builder::new()
             .name("horizon-friends-auth".into())
             .spawn(move || {
                 for raw in raw_rx {
                     let (key, atx) = (key.clone(), atx.clone());
-                    let _ = std::thread::Builder::new()
+                    let _ = horizon_os::thread::Builder::new()
                         .name("horizon-friends-auth".into())
                         .spawn(move || {
                             let Ok(_) = raw.set_read_timeout(Some(Duration::from_secs(6))) else {

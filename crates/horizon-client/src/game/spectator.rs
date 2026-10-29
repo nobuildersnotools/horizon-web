@@ -46,8 +46,8 @@ impl Game<'_> {
                     return None;
                 }
                 // A random member's face is the team's icon.
-                let pick = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let pick = horizon_os::time::SystemTime::now()
+                    .duration_since(horizon_os::time::UNIX_EPOCH)
                     .map_or(0, |d| d.subsec_nanos() as usize)
                     % members.len();
                 Some(Team {

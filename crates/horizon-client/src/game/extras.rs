@@ -12,7 +12,7 @@ use horizon_client::{
     reconnect::{Retry, Tracker},
     title::Mode,
 };
-use std::time::Duration;
+use horizon_os::time::Duration;
 use winit::event::MouseButton;
 
 #[derive(Default)]
@@ -81,7 +81,9 @@ impl Game<'_> {
     }
     /// Auto-reconnect: the server let the player in.
     pub(super) fn extras_joined(&mut self) {
-        self.extras.reconnect.joined(std::time::Instant::now());
+        self.extras
+            .reconnect
+            .joined(horizon_os::time::Instant::now());
     }
     /// Auto-reconnect: the player left the server on purpose.
     pub(super) fn extras_left(&mut self) {
@@ -94,7 +96,7 @@ impl Game<'_> {
             self.extras.reconnect.reset();
             return None;
         }
-        let now = std::time::Instant::now();
+        let now = horizon_os::time::Instant::now();
         self.extras.reconnect.ended(reason, from_server, now)
     }
     /// Show the attempt's countdown on the Disconnected screen.
@@ -109,7 +111,7 @@ impl Game<'_> {
             log::info!(
                 "Horizon: reconnecting to {} in {} s",
                 horizon_client::net::shown_address(&retry.address),
-                retry.seconds_left(std::time::Instant::now())
+                retry.seconds_left(horizon_os::time::Instant::now())
             );
             *slot = Some(retry);
         }

@@ -8,11 +8,12 @@ use horizon_client::{
     command::CommandError,
     text::{self, Style, Text},
 };
+use horizon_os::time::Instant;
 use horizon_protocol::packets::{
     Empty,
     play::{self, Clientbound as C, DialogHolder},
 };
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 
 /// Waypoint.Icon: the locator bar style and colour of a transmitter.
 #[derive(Clone, Debug, PartialEq)]
@@ -77,8 +78,8 @@ fn two_places(v: f64) -> String {
 }
 /// `Util.getFilenameFormattedDateTime` (`yyyy-MM-dd_HH.mm.ss`, local time).
 fn filename_date_time() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let secs = horizon_os::time::SystemTime::now()
+        .duration_since(horizon_os::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     let (y, mo, d, h, mi, s) = civil(secs);
     format!("{y:04}-{mo:02}-{d:02}_{h:02}.{mi:02}.{s:02}")
@@ -878,7 +879,9 @@ impl Game<'_> {
         };
         let functions = self.functions_named(&id)?;
         let output = format!("debug-trace-{}.txt", filename_date_time());
-        let dir = std::env::current_dir().unwrap_or_default().join("debug");
+        let dir = horizon_os::env::current_dir()
+            .unwrap_or_default()
+            .join("debug");
         let mut trace = String::new();
         let mut total = 0;
         let mut traced: Vec<String> = Vec::new();
@@ -902,8 +905,8 @@ impl Game<'_> {
             trace.push('\n');
             self.trace_function(&f.id, &lines, 0, &mut trace);
         }
-        let written = std::fs::create_dir_all(&dir)
-            .and_then(|()| std::fs::write(dir.join(&output), trace))
+        let written = horizon_os::fs::create_dir_all(&dir)
+            .and_then(|()| horizon_os::fs::write(dir.join(&output), trace))
             .is_ok();
         if !written {
             self.command_failure(Text::translate("commands.debug.function.traceFailed", &[]));
@@ -965,7 +968,9 @@ impl Game<'_> {
             ));
         };
         let relative = format!("debug/client-{stamp}.json");
-        let path = std::env::current_dir().unwrap_or_default().join(&relative);
+        let path = horizon_os::env::current_dir()
+            .unwrap_or_default()
+            .join(&relative);
         let report = serde_json::json!({
             "environment": "client",
             "seconds": started.elapsed().as_secs_f64(),
@@ -973,8 +978,8 @@ impl Game<'_> {
         });
         let written = path
             .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, report.to_string()));
+            .map_or(Ok(()), horizon_os::fs::create_dir_all)
+            .and_then(|()| horizon_os::fs::write(&path, report.to_string()));
         if let Err(e) = written {
             return Err(tr_error(
                 "commands.jfr.dump.failed",

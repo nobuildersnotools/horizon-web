@@ -4,9 +4,10 @@
 //! sizes and modification times and the format version is the same; anything
 //! else (missing, corrupt, stale, unwritable) means the normal decoding path.
 use crate::mipmap::Strategy;
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use std::{
     collections::HashMap,
-    fs,
     hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
 };
@@ -59,7 +60,7 @@ fn fingerprint(root: &Path) -> Option<u64> {
     let mut sum = 0;
     for namespace in fs::read_dir(root.join("assets")).ok()? {
         let textures = namespace.ok()?.path().join("textures");
-        if textures.is_dir() {
+        if textures.fs_is_dir() {
             walk(&textures, root, &mut sum)?;
         }
     }
@@ -98,7 +99,7 @@ impl SpriteCache {
         self.dirty = false;
         let temporary = self
             .path
-            .with_extension(format!("{}.tmp", std::process::id()));
+            .with_extension(format!("{}.tmp", horizon_os::process::id()));
         if fs::write(&temporary, serialize(self.fingerprint, &self.entries)).is_ok()
             && fs::rename(&temporary, &self.path).is_err()
         {
@@ -218,8 +219,10 @@ mod tests {
         }
     }
     fn scratch(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("horizon-sprite-cache-{tag}-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir().join(format!(
+            "horizon-sprite-cache-{tag}-{}",
+            horizon_os::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("assets/minecraft/textures/block")).unwrap();
         dir
@@ -272,7 +275,7 @@ mod tests {
                 .is_some()
         );
         // Same length, new content and time: still stale.
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        horizon_os::thread::sleep(horizon_os::time::Duration::from_millis(30));
         fs::write(&png, b"two").unwrap();
         assert!(
             SpriteCache::open(&root)
@@ -325,13 +328,13 @@ mod tests {
         let png = root.join("assets/minecraft/textures/block/x.png");
         write_png(&png, [255, 0, 0, 255]);
         let decoded = sprite_pixels(&root);
-        assert!(root.join(FILE).exists());
+        assert!(root.join(FILE).fs_exists());
         assert_eq!(
             sprite_pixels(&root),
             decoded,
             "cache hit differs from decoding"
         );
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        horizon_os::thread::sleep(horizon_os::time::Duration::from_millis(30));
         write_png(&png, [0, 255, 0, 255]);
         let fresh = sprite_pixels(&root);
         assert_eq!(&fresh[..4], &[0, 255, 0, 255]);

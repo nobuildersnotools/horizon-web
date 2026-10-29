@@ -4,10 +4,10 @@
 //! pack that fails is refused with its problems in the chat while the last good one keeps
 //! drawing.
 
+use horizon_os::time::{Duration, Instant};
 use std::{
     hash::{Hash, Hasher},
     path::Path,
-    time::{Duration, Instant},
 };
 
 use horizon_client::text::Text;
@@ -96,10 +96,10 @@ impl Game<'_> {
 /// A hash of the pack's file names, sizes and modification times (`None` when unreadable).
 fn fingerprint(path: &Path) -> Option<u64> {
     fn walk(path: &Path, hasher: &mut std::hash::DefaultHasher) -> Option<()> {
-        let meta = std::fs::metadata(path).ok()?;
+        let meta = horizon_os::fs::metadata(path).ok()?;
         path.hash(hasher);
         if meta.is_dir() {
-            let mut entries: Vec<_> = std::fs::read_dir(path)
+            let mut entries: Vec<_> = horizon_os::fs::read_dir(path)
                 .ok()?
                 .flatten()
                 .map(|e| e.path())

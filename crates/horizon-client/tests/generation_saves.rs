@@ -14,20 +14,21 @@ use horizon_client::{
     streaming::{ChunkGenerator, Proto, Streaming, WorkerContext},
     world::World,
 };
+use horizon_os::fs::PathExt;
+use horizon_os::thread;
+use horizon_os::time::{Duration, Instant};
 use horizon_world::registry::BlockStateId;
 use std::{
     collections::HashMap,
     path::Path,
     sync::{Arc, Mutex},
-    thread,
-    time::{Duration, Instant},
 };
 
 fn resources() -> Option<std::path::PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.local/horizon-client")
         .join(horizon_core::VANILLA_VERSION);
-    root.join("items.json").exists().then_some(root)
+    root.join("items.json").fs_exists().then_some(root)
 }
 
 /// A proto chunk that records the decorations that wrote to it.
@@ -259,8 +260,9 @@ fn saved_proto_chunks_restore_exactly() {
         "minecraft:the_nether",
     )
     .unwrap();
-    let dir = std::env::temp_dir().join(format!("horizon-proto-saves-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = horizon_os::env::temp_dir()
+        .join(format!("horizon-proto-saves-{}", horizon_os::process::id()));
+    let _ = horizon_os::fs::remove_dir_all(&dir);
     let save = Arc::new(SaveDir::new(dir.clone()));
     let generator = Persistent {
         inner: Arc::new(terrain),
@@ -313,7 +315,7 @@ fn saved_proto_chunks_restore_exactly() {
     }
     drop(generator);
     drop(save);
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = horizon_os::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -339,8 +341,9 @@ fn saved_proto_block_entities_keep_their_id() {
         "minecraft:overworld",
     )
     .unwrap();
-    let dir = std::env::temp_dir().join(format!("horizon-proto-ids-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = horizon_os::env::temp_dir()
+        .join(format!("horizon-proto-ids-{}", horizon_os::process::id()));
+    let _ = horizon_os::fs::remove_dir_all(&dir);
     let save = Arc::new(SaveDir::new(dir.clone()));
     let generator = Persistent {
         inner: Arc::new(terrain),
@@ -380,5 +383,5 @@ fn saved_proto_block_entities_keep_their_id() {
     assert!(suspicious > 0, "the ruin placed no suspicious blocks");
     drop(generator);
     drop(save);
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = horizon_os::fs::remove_dir_all(&dir);
 }

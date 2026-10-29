@@ -10,12 +10,12 @@ use crate::{
     session::{self, Secure},
     wire::{self, ErrorCode, FromRelay, ToRelay},
 };
+use horizon_os::thread::JoinHandle;
+use horizon_os::time::{Duration, Instant};
 use std::{
     fmt, io,
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::mpsc::channel,
-    thread::JoinHandle,
-    time::{Duration, Instant},
 };
 
 pub struct GuestConfig {
@@ -143,7 +143,7 @@ fn join_direct(invite: &Invite) -> Result<Option<Tunnel>, JoinError> {
     let session = u64::from_le_bytes(session);
     for &endpoint in &invite.endpoints {
         let tx = tx.clone();
-        let _ = std::thread::Builder::new()
+        let _ = horizon_os::thread::Builder::new()
             .name("horizon-friends-dial".into())
             .spawn(move || {
                 if let Ok(mut s) = TcpStream::connect_timeout(&endpoint, Duration::from_secs(4))
@@ -266,23 +266,25 @@ impl Tunnel {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let port = listener.local_addr()?.port();
         listener.set_nonblocking(true)?;
-        let thread = std::thread::Builder::new()
+        let thread = horizon_os::thread::Builder::new()
             .name("horizon-friends-guest".into())
             .spawn(move || {
-                let deadline = std::time::Instant::now() + Duration::from_secs(30);
+                let deadline = horizon_os::time::Instant::now() + Duration::from_secs(30);
                 let plain = loop {
                     match listener.accept() {
                         Ok((s, from)) if from.ip().is_loopback() => break Some(s),
                         Ok(_) => {}
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            if std::time::Instant::now() > deadline {
+                            if horizon_os::time::Instant::now() > deadline {
                                 break None;
                             }
-                            std::thread::sleep(Duration::from_millis(10));
+                            horizon_os::thread::sleep(Duration::from_millis(10));
                         }
                         Err(_) => break None,
                     }
                 };
+                // The web's std sockets are stand-ins with nothing to close.
+                #[cfg_attr(target_arch = "wasm32", allow(clippy::drop_non_drop))]
                 drop(listener);
                 let (reader, writer) = self.secure;
                 let Some(plain) = plain else {

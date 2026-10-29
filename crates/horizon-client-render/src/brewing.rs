@@ -7,8 +7,9 @@ use crate::{
     items::{ItemStack, Items},
     providers::Providers,
 };
+use horizon_os::fs;
 use serde_json::Value;
-use std::{collections::HashSet, fs, path::Path};
+use std::{collections::HashSet, path::Path};
 
 pub use horizon_client_core::potions::{
     BASE_POTION_COLOR, Category, EFFECTS, EffectDef, POTIONS, PotionDef, effect, namespaced,

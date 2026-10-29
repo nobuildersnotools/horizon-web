@@ -10,6 +10,7 @@ use super::{
     Joined, NetEvent, Out, Shared,
     data::{CORE_PACK, SyncData},
 };
+use horizon_os::time::{Duration, Instant};
 use horizon_protocol::{
     PROTOCOL_VERSION,
     connection::{ConnReader, ConnWriter, Connection},
@@ -29,7 +30,6 @@ use std::{
         atomic::{AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel},
     },
-    time::{Duration, Instant},
 };
 
 /// ServerCommonPacketListenerImpl.keepConnectionAlive: a keep-alive every 15 s,
@@ -339,7 +339,7 @@ fn post(batch: Vec<Posted>) {
     static POST: std::sync::OnceLock<Option<Sender<Vec<Posted>>>> = std::sync::OnceLock::new();
     let post = POST.get_or_init(|| {
         let (tx, rx) = channel::<Vec<Posted>>();
-        std::thread::Builder::new()
+        horizon_os::thread::Builder::new()
             .name("horizon-lan-post".to_owned())
             .spawn(move || {
                 for batch in rx {
@@ -941,7 +941,7 @@ fn offer_pack(
     };
     c.send(&cfg::Clientbound::ResourcePackPush(push).encode())
         .map_err(e)?;
-    std::thread::scope(|scope| {
+    horizon_os::thread::scope(|scope| {
         let (stop, stopped) = channel::<()>();
         let writer = &mut c.writer;
         scope.spawn(move || {
@@ -986,7 +986,7 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
     let sender = PlayerSender::new(tx.clone(), pending.clone());
     let writer_thread = {
         let (alive, latency, pending) = (alive.clone(), latency.clone(), pending.clone());
-        std::thread::Builder::new()
+        horizon_os::thread::Builder::new()
             .name(format!("horizon-lan-out-{conn_id}"))
             .spawn(move || {
                 // Ticks and frames come first (horizon_threads).
@@ -1247,7 +1247,7 @@ fn write_loop(
             Ok(Out::Disconnect(reason)) => {
                 let _ = writer
                     .send(&play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
-                std::thread::sleep(Duration::from_millis(50));
+                horizon_os::thread::sleep(Duration::from_millis(50));
                 break;
             }
             Ok(Out::Close) | Err(RecvTimeoutError::Disconnected) => break,
@@ -1354,7 +1354,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while sender.posted.load(Ordering::Acquire) != 0 {
             assert!(Instant::now() < deadline);
-            std::thread::yield_now();
+            horizon_os::thread::yield_now();
         }
     }
 

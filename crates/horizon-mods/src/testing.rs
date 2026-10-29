@@ -10,6 +10,7 @@
 use crate::{
     BlockPos, Clock, Corner, GameMode, Mods, Output, Panel, Player, ServerPlayer, Snapshot, Status,
 };
+use horizon_os::fs::PathExt;
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
@@ -99,13 +100,13 @@ impl TestGame {
     /// when it doesn't start, with the game's reason.
     pub fn load(hmod: &Path) -> Result<TestGame, String> {
         static RUN: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
+        let dir = horizon_os::env::temp_dir().join(format!(
             "horizon-mod-test-{}-{}",
-            std::process::id(),
+            horizon_os::process::id(),
             RUN.fetch_add(1, Ordering::Relaxed)
         ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let _ = horizon_os::fs::remove_dir_all(&dir);
+        horizon_os::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let copy = dir.join(hmod.file_name().unwrap_or("mod.hmod".as_ref()));
         let mut game = TestGame {
             mods: Mods::default(),
@@ -274,21 +275,21 @@ impl TestGame {
 
 impl Drop for TestGame {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = horizon_os::fs::remove_dir_all(&self.dir);
     }
 }
 
 /// A `.hmod` file, or a mod folder (`horizon-mod.toml` + `mod.wasm`).
 fn copy_mod(from: &Path, to: &Path) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", from.display());
-    if !from.is_dir() {
-        return std::fs::copy(from, to).map(drop).map_err(err);
+    if !from.fs_is_dir() {
+        return horizon_os::fs::copy(from, to).map(drop).map_err(err);
     }
-    std::fs::create_dir_all(to).map_err(err)?;
-    for entry in std::fs::read_dir(from).map_err(err)? {
+    horizon_os::fs::create_dir_all(to).map_err(err)?;
+    for entry in horizon_os::fs::read_dir(from).map_err(err)? {
         let entry = entry.map_err(err)?;
         if entry.file_type().map_err(err)?.is_file() {
-            std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(err)?;
+            horizon_os::fs::copy(entry.path(), to.join(entry.file_name())).map_err(err)?;
         }
     }
     Ok(())

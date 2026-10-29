@@ -6,8 +6,8 @@ use super::{
     Pads,
 };
 use horizon_client::gamepad::{self, Button, GlyphStyle, PadState, Rumble, TriggerFeel};
+use horizon_os::time::{Duration, Instant};
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
 
 /// The controllers gilrs sees and the DualSense's output.
 #[derive(Default)]

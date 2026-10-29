@@ -7,11 +7,12 @@ use horizon_mods::{
     manifest::componentize,
     testing::{Script, TestGame},
 };
+use horizon_os::fs::PathExt;
+use horizon_os::time::Instant;
 use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::OnceLock,
-    time::Instant,
 };
 
 const GUEST_MANIFEST: &str = r#"
@@ -63,10 +64,10 @@ fn mods_dir() -> &'static Path {
         );
         let built = target.join("wasm32-unknown-unknown/release");
         let dir = target.join("mods");
-        std::fs::create_dir_all(&dir).unwrap();
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let example = |name: &str| {
             let path = format!("crates/horizon-mod-sdk/examples/{name}/horizon-mod.toml");
-            std::fs::read_to_string(root.join(path)).unwrap()
+            horizon_os::fs::read_to_string(root.join(path)).unwrap()
         };
         let mods = [
             ("coords_hud", example("coords-hud")),
@@ -77,9 +78,9 @@ fn mods_dir() -> &'static Path {
             ("horizon_mods_test_ui_guest", UI_MANIFEST.to_string()),
         ];
         for (name, manifest) in mods {
-            let core = std::fs::read(built.join(format!("{name}.wasm"))).unwrap();
+            let core = horizon_os::fs::read(built.join(format!("{name}.wasm"))).unwrap();
             let hmod = Package::write(&manifest, &componentize(&core).unwrap()).unwrap();
-            std::fs::write(dir.join(format!("{name}.hmod")), hmod).unwrap();
+            horizon_os::fs::write(dir.join(format!("{name}.hmod")), hmod).unwrap();
         }
         dir
     })
@@ -187,14 +188,14 @@ fn off_mods_cost_nothing() {
 #[test]
 fn undeclared_capabilities_are_refused() {
     let dir = mods_dir().join("undeclared");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let wasm = Package::read(&mods_dir().join("horizon_mods_test_guest.hmod"))
         .unwrap()
         .wasm
         .expect("the guest has code");
     let manifest = GUEST_MANIFEST.replace("\"chat\", ", "");
-    std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
-    std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
+    horizon_os::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
+    horizon_os::fs::write(dir.join("mod.wasm"), wasm).unwrap();
     let mods = Mods::load(&[dir], |_| true, |_| false);
     let refused = Status::Failed("uses capability chat, missing from horizon-mod.toml".into());
     assert_eq!(mods.entries()[0].status, refused);
@@ -208,7 +209,7 @@ fn a_mod_for_a_newer_horizon_is_refused() {
     use horizon_mods::api_level::{LEVEL, imports, needed};
     use wit_parser::{ManglingAndAbi, Resolve};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let wit = std::fs::read_to_string(root.join("crates/horizon-mod-sdk/wit/horizon.wit"))
+    let wit = horizon_os::fs::read_to_string(root.join("crates/horizon-mod-sdk/wit/horizon.wit"))
         .unwrap()
         .replace(
             "    set-minimap: func(minimap: option<minimap>);",
@@ -235,7 +236,7 @@ fn a_mod_for_a_newer_horizon_is_refused() {
     let functions = imports(&wasm).unwrap();
     assert!(functions.iter().any(|f| f == "render.set-sky"));
     let dir = mods_dir().join("too_new");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let manifest = r#"
 id = "too_new"
 name = "Too New"
@@ -244,8 +245,8 @@ api = "0.1"
 capabilities = ["game-read", "chat", "hud", "storage", "command", "ui", "render", "input", "recipes"]
 experimental = ["ui", "render", "input", "recipes"]
 "#;
-    std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
-    std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
+    horizon_os::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
+    horizon_os::fs::write(dir.join("mod.wasm"), wasm).unwrap();
     let mods = Mods::load(&[dir], |_| true, |_| false);
     let refused = "made for a newer Horizon (it uses render.set-sky): update Horizon to run it";
     assert_eq!(mods.entries()[0].status, Status::Failed(refused.into()));
@@ -302,15 +303,15 @@ fn a_misbehaving_mod_is_stopped_alone() {
 #[test]
 fn hot_reload_restarts_a_changed_mod() {
     let dir = mods_dir().join("reload");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("guest.hmod");
-    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    horizon_os::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
     let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
     mods.tick(1);
     assert!(!mods.reload_changed(|_| false));
     // A rebuild: same bytes, newer file.
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
-    std::fs::File::options()
+    let later = horizon_os::time::SystemTime::now() + horizon_os::time::Duration::from_secs(5);
+    horizon_os::fs::File::options()
         .write(true)
         .open(&path)
         .unwrap()
@@ -328,9 +329,9 @@ fn hot_reload_restarts_a_changed_mod() {
 #[test]
 fn storage_persists_across_reload() {
     let dir = mods_dir().join("storage_reload");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("guest.hmod");
-    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    horizon_os::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
     let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
     assert!(mods.command("save remembered"));
     let saved = Output::Feedback {
@@ -341,8 +342,8 @@ fn storage_persists_across_reload() {
 
     // A rebuild (hot_reload_restarts_a_changed_mod's pattern): a fresh Store,
     // but the same on-disk data directory.
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
-    std::fs::File::options()
+    let later = horizon_os::time::SystemTime::now() + horizon_os::time::Duration::from_secs(5);
+    horizon_os::fs::File::options()
         .write(true)
         .open(&path)
         .unwrap()
@@ -361,9 +362,9 @@ fn storage_persists_across_reload() {
 #[test]
 fn storage_write_budget_limits_one_call() {
     let dir = mods_dir().join("storage_budget");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("guest.hmod");
-    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    horizon_os::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
     let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
     // Under the 4 MiB on-disk quota, but over the 1 MiB a single call may
     // write: a loop replacing one key can never bypass the quota by
@@ -380,9 +381,9 @@ fn storage_write_budget_limits_one_call() {
 #[test]
 fn storage_quota_is_enforced() {
     let dir = mods_dir().join("storage_quota");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("guest.hmod");
-    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    horizon_os::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
     let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
     // Each call is under the per-call write budget; distinct keys so the
     // quota (not the fixed "note" key being overwritten) is what's tested.
@@ -408,9 +409,9 @@ fn storage_quota_is_enforced() {
 #[test]
 fn storage_key_count_is_bounded() {
     let dir = mods_dir().join("storage_keys");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("guest.hmod");
-    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    horizon_os::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
     let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
     for i in 0..64 {
         assert!(mods.command(&format!("save_key k{i} x")));
@@ -434,11 +435,11 @@ fn storage_key_count_is_bounded() {
 #[test]
 fn duplicate_mod_ids_are_refused() {
     let dir = mods_dir().join("duplicate_ids");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let first = dir.join("first.hmod");
     let second = dir.join("second.hmod");
-    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &first).unwrap();
-    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &second).unwrap();
+    horizon_os::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &first).unwrap();
+    horizon_os::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &second).unwrap();
     // Both declare id "test_guest" (the guest's own manifest): sharing a
     // `data_dir` would let the second read, overwrite or delete the
     // first's storage, so only the first-loaded one may start.
@@ -860,14 +861,14 @@ capabilities = ["registries"]
 "#;
     let block: &[u8] = br#"{"template": "minecraft:iron_block"}"#;
     let dir = mods_dir().join("content");
-    std::fs::create_dir_all(&dir).unwrap();
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let ok = dir.join("ruby.hmod");
     let files: &[(&str, &[u8])] = &[("data/ruby/horizon/block/ruby_block.json", block)];
-    std::fs::write(&ok, Package::write_files(manifest, None, files).unwrap()).unwrap();
+    horizon_os::fs::write(&ok, Package::write_files(manifest, None, files).unwrap()).unwrap();
     let bad = dir.join("bad.hmod");
     let files: &[(&str, &[u8])] = &[("data/minecraft/recipe/stone.json", b"{}")];
     let bad_manifest = manifest.replace("\"ruby\"", "\"bad\"");
-    std::fs::write(
+    horizon_os::fs::write(
         &bad,
         Package::write_files(&bad_manifest, None, files).unwrap(),
     )
@@ -890,9 +891,9 @@ fn the_examples_test_scripts_pass() {
         ("beacons", "beacons"),
     ];
     for (example, hmod) in examples_and_files {
-        for entry in std::fs::read_dir(examples.join(example).join("tests")).unwrap() {
+        for entry in horizon_os::fs::read_dir(examples.join(example).join("tests")).unwrap() {
             let path = entry.unwrap().path();
-            let script = Script::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let script = Script::parse(&horizon_os::fs::read_to_string(&path).unwrap()).unwrap();
             let mut game = TestGame::load(&mods_dir().join(format!("{hmod}.hmod"))).unwrap();
             script
                 .run(&mut game)
@@ -981,7 +982,7 @@ fn a_test_script_reloads_and_expects_a_stop() {
     );
     drop(game);
     assert!(
-        !dir.exists(),
+        !dir.fs_exists(),
         "the scratch copy and its storage are removed"
     );
 }
@@ -1003,10 +1004,10 @@ fn alex() -> ServerPlayer {
 fn a_server_mod_runs_only_where_the_world_does() {
     // A fresh folder: what the mod stored in an earlier run is beside it.
     let dir = mods_dir().join("server");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let _ = horizon_os::fs::remove_dir_all(&dir);
+    horizon_os::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("welcome.hmod");
-    std::fs::copy(mods_dir().join("welcome.hmod"), &path).unwrap();
+    horizon_os::fs::copy(mods_dir().join("welcome.hmod"), &path).unwrap();
     let paths = std::slice::from_ref(&path);
     let window = Mods::load_for(Runs::Client, paths, |_| true, |_| false);
     assert_eq!(window.entries()[0].status, Status::Elsewhere);

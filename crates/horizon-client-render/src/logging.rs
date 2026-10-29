@@ -8,8 +8,10 @@
 //! Messages go through the `log` facade. Horizon's own still print their plain text on stderr,
 //! as they did before the log existed; other crates' errors only reach the file (their
 //! warnings are mostly the Vulkan loader's startup chatter).
+// The page logs to the browser's console: the file writer is native only.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+use horizon_os::fs::{self, File, OpenOptions};
 use std::collections::VecDeque;
-use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
@@ -42,7 +44,7 @@ pub fn data_dir() -> PathBuf {
     } else if let Some(h) = &home {
         return h.join(".local/share");
     }
-    std::env::temp_dir()
+    horizon_os::env::temp_dir()
 }
 
 /// Where the launcher runs the game and keeps its saves: `HORIZON_HOME`, else `horizon` in the
@@ -196,7 +198,7 @@ pub fn open_latest(dir: &Path) -> io::Result<Option<Latest>> {
         .truncate(false)
         .open(dir.join("latest.log"))?;
     let modified = file.metadata()?.modified()?;
-    let date = DateTime::<Local>::from(modified).date_naive();
+    let date = DateTime::<Local>::from(horizon_os::time::to_std(modified)).date_naive();
     roll(&mut file, dir, date)?;
     Ok(Some(Latest { file, _lock: lock }))
 }
@@ -291,7 +293,7 @@ impl log::Log for Logger {
             return;
         }
         let message = record.args().to_string();
-        let current = std::thread::current();
+        let current = horizon_os::thread::current();
         let thread = match current.name() {
             Some("main") => self.main_thread,
             Some(name) => name,
@@ -305,7 +307,7 @@ impl log::Log for Logger {
     fn flush(&self) {
         let (done, wait) = mpsc::sync_channel(1);
         if self.out.send(Out::Flush(done)).is_ok() {
-            let _ = wait.recv_timeout(std::time::Duration::from_secs(1));
+            let _ = wait.recv_timeout(horizon_os::time::Duration::from_secs(1));
         }
     }
 }
@@ -357,6 +359,20 @@ impl Logger {
 /// Starts the log in `home/logs`. The main thread shows as `main_thread` in it. Messages are
 /// still printed when the file cannot be opened.
 pub fn init(home: &Path, main_thread: &'static str) {
+    // A page has no terminal and no thread for the writer: the browser's console takes the log.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (home, main_thread);
+        if log::set_logger(&Console).is_ok() {
+            log::set_max_level(log::LevelFilter::Info);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    init_file(home, main_thread);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn init_file(home: &Path, main_thread: &'static str) {
     let dir = logs_dir(home);
     let file = match open_latest(&dir) {
         Ok(Some(latest)) => Some(latest),
@@ -382,7 +398,7 @@ pub fn init(home: &Path, main_thread: &'static str) {
             dir,
             date: Local::now().date_naive(),
         };
-        if let Err(e) = std::thread::Builder::new()
+        if let Err(e) = horizon_os::thread::Builder::new()
             .name("Log writer".into())
             .spawn(move || writer.run(receive))
         {
@@ -399,10 +415,33 @@ pub fn init(home: &Path, main_thread: &'static str) {
     }
 }
 
+/// The browser's console as the log.
+#[cfg(target_arch = "wasm32")]
+struct Console;
+
+#[cfg(target_arch = "wasm32")]
+impl log::Log for Console {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        horizon_os::web::console(
+            record.level() as u32,
+            &format!(
+                "[{}] {}: {}",
+                record.level(),
+                record.target(),
+                record.args()
+            ),
+        );
+    }
+    fn flush(&self) {}
+}
+
 /// A line in the log from code that prints it elsewhere itself (the dedicated server console).
 pub fn write_only(level: log::Level, message: &str) {
     if let Some(logger) = LOGGER.get() {
-        let current = std::thread::current();
+        let current = horizon_os::thread::current();
         let thread = match current.name() {
             Some("main") | None => logger.main_thread,
             Some(name) => name,
@@ -536,7 +575,8 @@ mod tests {
 
     #[test]
     fn startup_archives_the_last_runs_log() {
-        let dir = std::env::temp_dir().join(format!("horizon-logs-test-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("horizon-logs-test-{}", horizon_os::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         // Empty: nothing is archived (OnStartupTriggeringPolicy's minSize is 1 byte).
@@ -572,7 +612,8 @@ mod tests {
 
     #[test]
     fn the_newest_crash_report_is_found_by_name() {
-        let home = std::env::temp_dir().join(format!("horizon-crash-test-{}", std::process::id()));
+        let home = horizon_os::env::temp_dir()
+            .join(format!("horizon-crash-test-{}", horizon_os::process::id()));
         let _ = fs::remove_dir_all(&home);
         assert!(newest_crash_report(&home).is_none());
         let dir = crash_reports_dir(&home);

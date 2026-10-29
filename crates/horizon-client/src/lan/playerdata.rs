@@ -5,6 +5,7 @@ use crate::{
     items::ItemStack,
     save::{Level, read_dat, write_dat},
 };
+use horizon_os::fs::PathExt;
 use horizon_protocol::crypto::uuid_string;
 use std::{
     path::{Path, PathBuf},
@@ -35,7 +36,7 @@ pub fn ints_uuid(ints: [i32; 4]) -> u128 {
 
 /// Whether a saved file exists for this player.
 pub fn exists(world: &Path, uuid: u128) -> bool {
-    path(world, uuid).is_file()
+    path(world, uuid).fs_is_file()
 }
 
 /// Load a guest's saved state, if they have been here before.
@@ -137,7 +138,7 @@ pub fn save(guest: &Guest, world: &Path) {
     store(guest, &mut level);
     let file = path(world, guest.uuid);
     if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        let _ = horizon_os::fs::create_dir_all(dir);
     }
     let _ = write_dat(&file, level.player_tag());
 }

@@ -2,6 +2,7 @@
 //! progress (`PlayerAdvancements`) and the predicates criteria test
 //! (`EntityPredicate`, `ItemPredicate`, `LocationPredicate`, the loot
 //! conditions advancements use).
+use horizon_os::fs::PathExt;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -69,7 +70,7 @@ impl Tree {
     /// Loads `<data>/<namespace>/advancement/**/*.json`.
     pub fn load(data: &Path) -> Tree {
         let mut tree = Tree::default();
-        let Ok(namespaces) = std::fs::read_dir(data) else {
+        let Ok(namespaces) = horizon_os::fs::read_dir(data) else {
             return tree;
         };
         let mut files = Vec::new();
@@ -79,7 +80,7 @@ impl Tree {
         }
         files.sort();
         for (id, path) in files {
-            let Ok(text) = std::fs::read_to_string(&path) else {
+            let Ok(text) = horizon_os::fs::read_to_string(&path) else {
                 continue;
             };
             let Ok(v) = serde_json::from_str::<Value>(&text) else {
@@ -203,12 +204,12 @@ impl InventoryIndex {
     }
 }
 fn collect(root: &Path, dir: &Path, ns: &str, out: &mut Vec<(String, std::path::PathBuf)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = horizon_os::fs::read_dir(dir) else {
         return;
     };
     for e in entries.flatten() {
         let p = e.path();
-        if p.is_dir() {
+        if p.fs_is_dir() {
             collect(root, &p, ns, out);
         } else if p.extension().is_some_and(|x| x == "json") {
             let rel = p.strip_prefix(root).unwrap_or(&p).with_extension("");
@@ -1266,17 +1267,17 @@ mod tests {
             return;
         };
         let data = root.join("data");
-        let t = std::time::Instant::now();
+        let t = horizon_os::time::Instant::now();
         let tree = Tree::load(&data);
         let load = t.elapsed();
         let tags = data.join("minecraft/tags/item");
-        let tag_items: HashMap<String, Vec<String>> = std::fs::read_dir(&tags)
+        let tag_items: HashMap<String, Vec<String>> = horizon_os::fs::read_dir(&tags)
             .into_iter()
             .flatten()
             .flatten()
             .filter_map(|e| {
                 let v: Value =
-                    serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok()?;
+                    serde_json::from_str(&horizon_os::fs::read_to_string(e.path()).ok()?).ok()?;
                 let name = format!("minecraft:{}", e.path().file_stem()?.to_string_lossy());
                 let values = v["values"]
                     .as_array()?
@@ -1285,7 +1286,7 @@ mod tests {
                 Some((name, values.collect()))
             })
             .collect();
-        let t = std::time::Instant::now();
+        let t = horizon_os::time::Instant::now();
         let index = InventoryIndex::build(&tree, |tag| {
             tag_items
                 .get(tag)
@@ -1308,7 +1309,7 @@ mod tests {
             "minecraft:stick",
             "minecraft:coal",
         ];
-        let t = std::time::Instant::now();
+        let t = horizon_os::time::Instant::now();
         let mut candidates = 0;
         for _ in 0..1000 {
             candidates = index.candidates(held).len();
@@ -1401,10 +1402,10 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
             "../../.local/horizon-client/26.3/data/minecraft/advancement/husbandry/uh_oh.json",
         );
-        if !path.exists() {
+        if !path.fs_exists() {
             return;
         }
-        let json = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let json = serde_json::from_slice(&horizon_os::fs::read(path).unwrap()).unwrap();
         let advancement = parse("minecraft:husbandry/uh_oh", &json).unwrap();
         assert_eq!(advancement.criteria.len(), 2);
         let player = EntityView {

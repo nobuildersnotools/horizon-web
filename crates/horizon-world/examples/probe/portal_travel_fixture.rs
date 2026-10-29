@@ -255,8 +255,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry = load_registry(resources)?;
     let behaviours = Behaviours::load(&registry, resources)?;
     let air = registry.default_state("minecraft:air").unwrap();
-    let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
-    for (index, line) in std::io::BufReader::new(std::fs::File::open(cases)?)
+    let mut out = std::io::BufWriter::new(horizon_os::fs::File::create(output)?);
+    for (index, line) in std::io::BufReader::new(horizon_os::fs::File::open(cases)?)
         .lines()
         .enumerate()
     {

@@ -9,9 +9,10 @@ use horizon_client::{
     items::{ItemStack, Items},
     menu::{Env, Kind, Menu},
 };
+use horizon_os::fs;
 use horizon_world::chunk::BlockState;
 use serde_json::Value;
-use std::{fs, path::Path};
+use std::path::Path;
 
 struct Stand<'a> {
     menu: Menu,

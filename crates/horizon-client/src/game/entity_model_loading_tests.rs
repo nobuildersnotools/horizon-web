@@ -1,8 +1,9 @@
 //! Model-batch equivalence tests and an opt-in benchmark of the actual loaders.
 use super::{armor_stands::ArmorStandAssets, boats::BoatModels, minecarts::CartModels};
 use horizon_client::mobs::{EntityModelDocument, Part, load_model};
+use horizon_os::{fs, time::Instant};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fs, hint::black_box, path::Path, time::Instant};
+use std::{collections::BTreeMap, hint::black_box, path::Path};
 
 const WOODS: [&str; 11] = [
     "oak",
@@ -61,9 +62,9 @@ impl FixtureRoot {
     fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
+        let root = horizon_os::env::temp_dir().join(format!(
             "horizon-entity-models-{}-{next}",
-            std::process::id()
+            horizon_os::process::id()
         ));
         fs::create_dir(&root).unwrap();
         Self(root)

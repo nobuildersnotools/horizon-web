@@ -1,5 +1,6 @@
 //! Prepare local worlds without blocking the window's event loop.
 use super::*;
+use horizon_os::fs::PathExt;
 
 pub(super) struct WorldRequest {
     pub save_root: PathBuf,
@@ -30,7 +31,7 @@ impl WorldRequest {
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<Self> {
         Ok(Self {
-            save_root: std::env::current_dir()?.join("saves").join(folder),
+            save_root: horizon_os::env::current_dir()?.join("saves").join(folder),
             folder: folder.to_owned(),
             name: name.map(str::to_owned),
             seed,
@@ -75,8 +76,8 @@ impl WorldRequest {
             name: name.unwrap_or(&folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
             seed: seed.unwrap_or_else(|| {
-                let t = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let t = horizon_os::time::SystemTime::now()
+                    .duration_since(horizon_os::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_nanos() as u64);
                 (t ^ (t >> 29)).wrapping_mul(0x9E37_79B9_7F4A_7C15) as i64
             }),
@@ -137,7 +138,7 @@ impl WorldRequest {
         growth::install_live_features(res, pack, options);
 
         // Persist new metadata on the worker too, before publishing the world.
-        if !save_root.join("level.dat").exists() {
+        if !save_root.join("level.dat").fs_exists() {
             level.write(&save_root)?;
         }
         Ok(PreparedWorld {
@@ -166,7 +167,7 @@ impl WorldLoader {
         options: Options,
         settings: Settings,
     ) -> Result<Self> {
-        let handle = std::thread::Builder::new()
+        let handle = horizon_os::thread::Builder::new()
             .name("World initialization".into())
             .spawn(move || {
                 request
@@ -184,7 +185,7 @@ impl WorldLoader {
     pub fn cancel(self) -> Self {
         Self {
             cancelled: true,
-            handle: std::thread::spawn(move || {
+            handle: horizon_os::thread::spawn(move || {
                 drop(self.finish());
                 Err("world initialization cancelled".into())
             }),
@@ -206,15 +207,15 @@ impl WorldLoader {
 /// How long the preloaded world data outlives the world screens: a player
 /// who goes back to the title or to Multiplayer and opens no world for this
 /// long gets the memory back.
-const PRELOAD_KEPT: std::time::Duration = std::time::Duration::from_secs(60);
+const PRELOAD_KEPT: horizon_os::time::Duration = horizon_os::time::Duration::from_secs(60);
 
 enum Preload {
     Idle,
     /// Read, or being read, on the "World data preload" thread. `left`: when
     /// the player last left the world screens.
     Started {
-        thread: std::thread::JoinHandle<()>,
-        left: Option<std::time::Instant>,
+        thread: horizon_os::thread::JoinHandle<()>,
+        left: Option<horizon_os::time::Instant>,
     },
     /// A world opened: the data is the world's now, and stays.
     Used,
@@ -241,7 +242,7 @@ pub(super) fn preload_world_data(
         Preload::Used => {}
         Preload::Idle if on_world_screens => {
             let resources = resources.to_owned();
-            let spawned = std::thread::Builder::new()
+            let spawned = horizon_os::thread::Builder::new()
                 .name("World data preload".into())
                 .spawn(move || {
                     horizon_threads::behind_server();
@@ -265,7 +266,7 @@ pub(super) fn preload_world_data(
         Preload::Idle => {}
         Preload::Started { left, .. } if on_world_screens => *left = None,
         Preload::Started { thread, left } => {
-            let left = *left.get_or_insert_with(std::time::Instant::now);
+            let left = *left.get_or_insert_with(horizon_os::time::Instant::now);
             if left.elapsed() >= PRELOAD_KEPT && thread.is_finished() {
                 horizon_client::vanillagen::forget_shared_data();
                 horizon_client::structure_blocks::forget_loot_data();
@@ -293,7 +294,7 @@ pub(super) fn preload_server_loot(resources: &std::path::Path) {
         return;
     }
     let resources = resources.to_owned();
-    let spawned = std::thread::Builder::new()
+    let spawned = horizon_os::thread::Builder::new()
         .name("Loot preload".into())
         .spawn(move || {
             horizon_threads::behind_server();
@@ -422,7 +423,7 @@ mod tests {
         let (release, wait) = std::sync::mpsc::channel();
         let loader = WorldLoader {
             cancelled: false,
-            handle: std::thread::spawn(move || {
+            handle: horizon_os::thread::spawn(move || {
                 wait.recv().unwrap();
                 Err("test world failure".into())
             }),
@@ -440,7 +441,7 @@ mod tests {
         let (release, wait) = std::sync::mpsc::channel();
         let loader = WorldLoader {
             cancelled: false,
-            handle: std::thread::spawn(move || {
+            handle: horizon_os::thread::spawn(move || {
                 wait.recv().unwrap();
                 Err("cancelled test world".into())
             }),
@@ -459,7 +460,7 @@ mod tests {
     fn worker_panics_reach_the_client() {
         let loader = WorldLoader {
             cancelled: false,
-            handle: std::thread::spawn(|| panic!("broken world initialization")),
+            handle: horizon_os::thread::spawn(|| panic!("broken world initialization")),
         };
         assert_eq!(
             loader.finish().err().unwrap().to_string(),

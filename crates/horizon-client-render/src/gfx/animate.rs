@@ -383,8 +383,8 @@ fn pipeline(device: &wgpu::Device) -> Option<wgpu::ComputePipeline> {
         compilation_options: Default::default(),
         cache: None,
     });
-    let internal = pollster::block_on(internal.pop());
-    match internal.or(pollster::block_on(validation.pop())) {
+    let internal = horizon_os::block_on(internal.pop()).flatten();
+    match internal.or(horizon_os::block_on(validation.pop()).flatten()) {
         None => Some(pipeline),
         Some(e) => {
             log::warn!("Horizon renderer: animated sprites drawn on the CPU ({e})");

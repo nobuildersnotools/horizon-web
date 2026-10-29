@@ -144,9 +144,9 @@ impl Report {
     /// Writes the report in `home/crash-reports` and returns its path.
     pub fn save(&self, home: &Path) -> std::io::Result<PathBuf> {
         let dir = crate::logging::crash_reports_dir(home);
-        std::fs::create_dir_all(&dir)?;
+        horizon_os::fs::create_dir_all(&dir)?;
         let path = dir.join(file_name(&self.time, self.side));
-        std::fs::write(&path, self.text())?;
+        horizon_os::fs::write(&path, self.text())?;
         Ok(path)
     }
 }
@@ -176,7 +176,7 @@ pub fn release_tag() -> Option<String> {
     if let Some(version) = horizon_core::release::RELEASE {
         return Some(format!("v{version}"));
     }
-    let exe = std::env::current_exe().ok()?;
+    let exe = horizon_os::env::current_exe().ok()?;
     let folder = exe.parent()?.file_name()?.to_str()?;
     (folder.starts_with('v') && folder[1..].starts_with(|c: char| c.is_ascii_digit()))
         .then(|| folder.to_owned())
@@ -192,7 +192,7 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
 }
 
 fn read(path: &str) -> Option<String> {
-    std::fs::read_to_string(path).ok()
+    horizon_os::fs::read_to_string(path).ok()
 }
 
 /// `PRETTY_NAME` of /etc/os-release and the kernel, or the system's own version string.
@@ -225,7 +225,7 @@ fn operating_system() -> String {
 
 /// Logical processors and the CPU's name (`12x AMD Ryzen 5 5600X ...`).
 pub fn cpu() -> String {
-    let threads = std::thread::available_parallelism().map_or(0, |n| n.get());
+    let threads = horizon_os::thread::available_parallelism().map_or(0, |n| n.get());
     let name = if cfg!(target_os = "linux") {
         read("/proc/cpuinfo").and_then(|t| {
             t.lines()
@@ -313,7 +313,7 @@ pub fn system_details() -> Vec<(String, String)> {
 }
 
 fn thread_name() -> String {
-    let current = std::thread::current();
+    let current = horizon_os::thread::current();
     match current.name() {
         Some("main") | None => "Render thread".into(),
         Some(name) => name.into(),
@@ -493,7 +493,7 @@ pub fn install(home: PathBuf, side: &'static str) {
             return;
         }
         default(info);
-        let main = std::thread::current().name() == Some("main");
+        let main = horizon_os::thread::current().name() == Some("main");
         if main {
             deliver(&home, panic_report(info, side));
         } else {
@@ -578,10 +578,11 @@ pub fn report_error(
 
 /// Called every frame: panics once `HORIZON_DEBUG_CRASH` asks (development builds only).
 pub fn debug_crash_tick() {
-    static AT: std::sync::OnceLock<Option<(std::time::Instant, std::time::Duration)>> =
-        std::sync::OnceLock::new();
+    static AT: std::sync::OnceLock<
+        Option<(horizon_os::time::Instant, horizon_os::time::Duration)>,
+    > = std::sync::OnceLock::new();
     if let Some((first, after)) =
-        AT.get_or_init(|| debug_crash_after().map(|d| (std::time::Instant::now(), d)))
+        AT.get_or_init(|| debug_crash_after().map(|d| (horizon_os::time::Instant::now(), d)))
         && first.elapsed() >= *after
     {
         panic!("Manually triggered debug crash");
@@ -590,13 +591,13 @@ pub fn debug_crash_tick() {
 
 /// Development builds crash on purpose when `HORIZON_DEBUG_CRASH` is set (vanilla has F3+C held
 /// for ten seconds): the number is seconds after the first frame (default 5).
-pub fn debug_crash_after() -> Option<std::time::Duration> {
+pub fn debug_crash_after() -> Option<horizon_os::time::Duration> {
     if !cfg!(debug_assertions) {
         return None;
     }
     let value = std::env::var("HORIZON_DEBUG_CRASH").ok()?;
     let seconds = value.parse::<f64>().unwrap_or(5.0).max(0.0);
-    Some(std::time::Duration::from_secs_f64(seconds))
+    Some(horizon_os::time::Duration::from_secs_f64(seconds))
 }
 
 #[cfg(test)]
@@ -728,9 +729,10 @@ mod tests {
         )));
         assert!(text.contains("\tOperating System: "));
         assert!(text.contains("\tCPU: "));
-        let home = std::env::temp_dir().join(format!("horizon-crash-save-{}", std::process::id()));
+        let home = horizon_os::env::temp_dir()
+            .join(format!("horizon-crash-save-{}", horizon_os::process::id()));
         let path = report.save(&home).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert_eq!(horizon_os::fs::read_to_string(&path).unwrap(), text);
         assert!(
             path.file_name()
                 .unwrap()
@@ -738,6 +740,6 @@ mod tests {
                 .unwrap()
                 .ends_with("-client.txt")
         );
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = horizon_os::fs::remove_dir_all(&home);
     }
 }

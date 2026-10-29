@@ -98,9 +98,10 @@ use horizon_core::{
     geometry::{Aabb, Vec3},
     random::{LegacyRandom, RandomSource},
 };
+use horizon_os::fs;
 use horizon_world::block_collision::BlockCollisionRegistry;
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub struct Polygon {
@@ -2934,12 +2935,12 @@ mod teams_tests {
     fn teams_cost() {
         for mobs in [100u32, 250, 500] {
             let (board, uuids) = board(mobs);
-            let t = std::time::Instant::now();
+            let t = horizon_os::time::Instant::now();
             for _ in 0..mobs {
                 std::hint::black_box(owned(&board, &uuids));
             }
             let before = t.elapsed();
-            let t = std::time::Instant::now();
+            let t = horizon_os::time::Instant::now();
             let reps = 20;
             for _ in 0..reps {
                 std::hint::black_box(borrowed(&board, &uuids));
@@ -3066,14 +3067,14 @@ pub(crate) mod sensor_scan_tests {
                 .map(|(i, s)| (s.id, i as u32))
                 .collect();
             let wanted: Vec<u32> = (0..n).map(|i| (i * 7919) % n).collect();
-            let t = std::time::Instant::now();
+            let t = horizon_os::time::Instant::now();
             let a: usize = wanted
                 .iter()
                 .filter_map(|&id| seen.iter().find(|s| s.id == id))
                 .map(|s| s.id as usize)
                 .sum();
             let before = t.elapsed().as_secs_f64() * 1e3;
-            let t = std::time::Instant::now();
+            let t = horizon_os::time::Instant::now();
             let b: usize = wanted
                 .iter()
                 .filter_map(|&id| index.get(&id).map(|&i| &seen[i as usize]))
@@ -3111,7 +3112,7 @@ pub(crate) mod sensor_scan_tests {
                     Aabb::new(Vec3::new(x, 64.0, z), Vec3::new(x + 0.9, 65.4, z + 0.9))
                 })
                 .collect();
-            let t = std::time::Instant::now();
+            let t = horizon_os::time::Instant::now();
             let a: Vec<bool> = queries
                 .iter()
                 .map(|&q| {
@@ -3120,7 +3121,7 @@ pub(crate) mod sensor_scan_tests {
                 })
                 .collect();
             let before = t.elapsed().as_secs_f64() * 1e3;
-            let t = std::time::Instant::now();
+            let t = horizon_os::time::Instant::now();
             let boxes: Vec<Aabb> = mobs.iter().map(|m| m.bounds()).collect();
             let grid = seen_grid::SeenGrid::new(boxes.iter().copied());
             let build = t.elapsed().as_secs_f64() * 1e3;
@@ -3147,7 +3148,7 @@ pub(crate) mod sensor_scan_tests {
         for (n, side) in [(500u32, 256.0), (1000, 384.0), (2000, 512.0)] {
             let (seen, grid) = herd(n, side);
             let time = |f: &dyn Fn(&Seen, Aabb) -> usize| {
-                let t = std::time::Instant::now();
+                let t = horizon_os::time::Instant::now();
                 let mut found = 0;
                 for me in &seen {
                     found += f(me, me.bounds.inflate(Vec3::new(16.0, 16.0, 16.0)));
@@ -3293,7 +3294,7 @@ mod push_tests {
         for n in [10u32, 30, 100, 200] {
             let mut ms = mobs(n);
             let mut v = vec![Vec3::ZERO; n as usize];
-            let t = std::time::Instant::now();
+            let t = horizon_os::time::Instant::now();
             {
                 let pending = std::cell::RefCell::new(Vec::new());
                 let v = std::cell::RefCell::new(&mut v);
@@ -3311,7 +3312,7 @@ mod push_tests {
                 );
             }
             let before = t.elapsed().as_secs_f64() * 1e3;
-            let t = std::time::Instant::now();
+            let t = horizon_os::time::Instant::now();
             {
                 let pending = std::cell::RefCell::new(PendingPushes::default());
                 let ms = std::cell::RefCell::new(&mut ms);

@@ -1,0 +1,57 @@
+//! The page's side of the game: what the page calls before and to start the
+//! game, and where the log and panics go (the browser's console).
+
+use std::sync::Mutex;
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen(inline_js = r#"
+export function horizon_console(level, message) {
+    if (level <= 1) console.error(message);
+    else if (level === 2) console.warn(message);
+    else console.log(message);
+}
+"#)]
+extern "C" {
+    fn horizon_console(level: u32, message: &str);
+}
+
+static START: Mutex<Option<fn()>> = Mutex::new(None);
+
+/// Called from `main`, which wasm-bindgen runs as soon as the module loads:
+/// the game itself starts once the page has installed its files and calls
+/// `horizon_start`.
+pub fn on_start(start: fn()) {
+    *START.lock().unwrap_or_else(|e| e.into_inner()) = Some(start);
+}
+
+/// Adds the files of a tar archive under `root` in the virtual filesystem.
+#[wasm_bindgen]
+pub fn horizon_install_tar(root: &str, tar: &[u8]) -> Result<usize, JsValue> {
+    crate::fs::install_tar(root, tar).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Lists files under `root` to fetch from `base` when first read (one
+/// `path<TAB>length` per line).
+#[wasm_bindgen]
+pub fn horizon_install_manifest(root: &str, base: &str, manifest: &str) {
+    crate::fs::install_manifest(root, base, manifest);
+}
+
+/// Starts the game registered by [`on_start`].
+#[wasm_bindgen]
+pub fn horizon_start() {
+    std::panic::set_hook(Box::new(|info| {
+        horizon_console(1, &format!("Horizon panicked: {info}"));
+    }));
+    let start = START.lock().unwrap_or_else(|e| e.into_inner()).take();
+    match start {
+        Some(start) => start(),
+        None => horizon_console(1, "Horizon: no game registered to start"),
+    }
+}
+
+/// A line in the browser's console (`log::Level` as a number: 1 error, 2
+/// warning, more for the rest).
+pub fn console(level: u32, message: &str) {
+    horizon_console(level, message);
+}

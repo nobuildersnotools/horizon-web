@@ -1,3 +1,7 @@
+// The glint branch returns early, so the texture samples after it run in
+// non-uniform control flow; their derivatives are those of in.uv either way.
+diagnostic(off, derivative_uniformity);
+
 struct Hud {
     size: vec4<f32>,
     // Blend::EndPortal: atlas rects (u0, v0, width, height) of end_sky.png and

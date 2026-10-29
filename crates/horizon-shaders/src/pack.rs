@@ -2,9 +2,10 @@
 //! the root (licences, readmes, decoy folders) is ignored (spec 1.1). Every path a pack uses is
 //! relative to that `shaders` folder, written with `/`.
 
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs;
 use std::io::{self, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -60,9 +61,9 @@ impl Pack {
         let name = path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let files = if path.is_dir() {
+        let files = if path.fs_is_dir() {
             let root = path.join(ROOT);
-            if !root.is_dir() {
+            if !root.fs_is_dir() {
                 return Err(PackError::NoShadersFolder);
             }
             Files::Folder(root)
@@ -131,7 +132,7 @@ impl Pack {
             return false;
         };
         match &self.files {
-            Files::Folder(root) => root.join(path).is_file(),
+            Files::Folder(root) => root.join(path).fs_is_file(),
             Files::Zip { entries, .. } => entries.contains_key(&path),
         }
     }
@@ -236,8 +237,10 @@ pub(crate) mod tests {
 
     /// A fresh empty folder under the system's temp folder.
     pub(crate) fn temp_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("horizon-shaders-{name}-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir().join(format!(
+            "horizon-shaders-{name}-{}",
+            horizon_os::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

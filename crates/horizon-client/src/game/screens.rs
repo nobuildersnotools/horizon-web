@@ -433,7 +433,7 @@ impl Game<'_> {
             .map(|d| d.3);
         // handleExitToTitleScreen: outside hardcore, Title Screen asks first.
         if hit == Some(1) && !self.level.hardcore {
-            self.ui.death_confirm = Some(std::time::Instant::now());
+            self.ui.death_confirm = Some(horizon_os::time::Instant::now());
             self.audio.play_button_click();
             return Ok(());
         }

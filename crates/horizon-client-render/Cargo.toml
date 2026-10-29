@@ -7,6 +7,7 @@ rust-version = "1.90"
 description = "The client's world data, rendering and screens: chunks, meshing, light, streaming, the renderer, the HUD, menus and settings; no gameplay"
 
 [dependencies]
+horizon-os = { path = "../horizon-os" }
 horizon-assets = { path = "../horizon-assets" }
 horizon-bench = { path = "../horizon-bench" }
 horizon-client-core = { path = "../horizon-client-core" }
@@ -65,3 +66,9 @@ workspace = true
 [dev-dependencies]
 horizon-items = { path = "../horizon-items", features = ["test-support"] }
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "msl-out", "spv-out"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+rustls-pki-types = { version = "1", features = ["web"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["webgpu"] }

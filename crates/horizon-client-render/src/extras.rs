@@ -3,7 +3,9 @@
 //! stays exactly vanilla's, and the logic behind them. Every extra is off by
 //! default; see `docs/extras.md`. Horizon's own switches outside the Extras page
 //! (No AI, Agent Control, Discord Rich Presence) are kept here too.
-use std::{collections::VecDeque, fs, path::Path};
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
+use std::{collections::VecDeque, path::Path};
 
 pub const FILE: &str = "horizon-extras.txt";
 /// The name the options screen uses while the sort key waits for a key.
@@ -278,7 +280,7 @@ impl Extras {
     /// setup gains no file.
     pub fn save(&self, dir: &Path) {
         let path = dir.join(FILE);
-        if *self == Self::default() && !path.exists() {
+        if *self == Self::default() && !path.fs_exists() {
             return;
         }
         let _ = fs::write(path, self.serialize());

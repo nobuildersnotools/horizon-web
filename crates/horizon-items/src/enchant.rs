@@ -5,10 +5,11 @@
 //! and the loot-condition subset that enchantment requirements use).
 use crate::items::{ItemStack, Items};
 use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    fs,
     path::Path,
     sync::Arc,
 };
@@ -93,7 +94,7 @@ fn read_tag_dir(dir: &Path) -> HashMap<String, Vec<String>> {
         };
         for e in entries.flatten() {
             let p = e.path();
-            if p.is_dir() {
+            if p.fs_is_dir() {
                 walk(&p, base, out);
             } else if p.extension().is_some_and(|x| x == "json")
                 && let Ok(rel) = p.strip_prefix(base)

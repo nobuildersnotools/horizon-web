@@ -1,9 +1,9 @@
 //! Read-only ZIP archives held in memory (resource packs, data packs and the
 //! unifont glyph archive), on the `zip` crate. Like Java's `ZipFile` (what
 //! vanilla's `FilePackResources` reads with), entries aren't CRC-checked.
+use horizon_os::fs;
 use std::{
     collections::BTreeMap,
-    fs,
     io::{self, Cursor, Read},
     path::Path,
     sync::Arc,

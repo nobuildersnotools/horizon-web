@@ -8,6 +8,7 @@ use horizon_core::{
     position::BlockPos,
     random::RandomSource,
 };
+use horizon_os::fs;
 use horizon_world::{
     attribute_map::ValueKind,
     attributes::{Modifier, Operation, entity::Catalog, live::LiveAttributes},
@@ -38,7 +39,7 @@ use horizon_world::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs, io,
+    io,
     path::Path,
     sync::Arc,
 };

@@ -15,6 +15,8 @@ use crate::{
     resolve_relay, session,
     wire::{self, FromRelay, ToRelay},
 };
+use horizon_os::thread::JoinHandle;
+use horizon_os::time::{Duration, Instant};
 use std::{
     collections::HashMap,
     io::{self, BufReader},
@@ -24,8 +26,6 @@ use std::{
         atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
         mpsc::{Receiver, Sender, channel},
     },
-    thread::JoinHandle,
-    time::{Duration, Instant},
 };
 
 /// Wrong short codes tried at the relay before the host retires it.
@@ -170,13 +170,13 @@ impl Host {
         let mut threads = Vec::new();
         let s = shared.clone();
         threads.push(
-            std::thread::Builder::new()
+            horizon_os::thread::Builder::new()
                 .name("horizon-friends-listen".into())
                 .spawn(move || route_inbound(listeners, s))?,
         );
         let s = shared.clone();
         threads.push(
-            std::thread::Builder::new()
+            horizon_os::thread::Builder::new()
                 .name("horizon-friends-reach".into())
                 .spawn(move || share(s, port))?,
         );
@@ -258,7 +258,7 @@ fn share(shared: Arc<Shared>, port: u16) {
         Some(r) => {
             let s = shared.clone();
             let r = r.clone();
-            std::thread::Builder::new()
+            horizon_os::thread::Builder::new()
                 .name("horizon-friends-relay".into())
                 .spawn(move || run_relay(s, r))
                 .ok()
@@ -267,7 +267,7 @@ fn share(shared: Arc<Shared>, port: u16) {
     };
     // Renew the router mapping at half-lease until stopped.
     while !shared.stopped() {
-        std::thread::sleep(Duration::from_millis(100));
+        horizon_os::thread::sleep(Duration::from_millis(100));
         let mut reach = shared.reach.lock().unwrap();
         if let Some(m) = reach.as_mut().and_then(|r| r.mapping.as_mut())
             && m.due()
@@ -295,7 +295,7 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
             }
             shared.handshakes.fetch_add(1, Ordering::Relaxed);
             let shared = shared.clone();
-            let _ = std::thread::Builder::new()
+            let _ = horizon_os::thread::Builder::new()
                 .name("horizon-friends-inbound".into())
                 .spawn(move || {
                     let _ = s.set_nonblocking(false);
@@ -327,7 +327,7 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
                 });
         }
         if idle {
-            std::thread::sleep(Duration::from_millis(20));
+            horizon_os::thread::sleep(Duration::from_millis(20));
         }
     }
 }
@@ -415,7 +415,7 @@ fn run_relay(shared: Arc<Shared>, relay: String) {
                 shared.publish(None);
                 let until = Instant::now() + backoff;
                 while Instant::now() < until && !shared.stopped() {
-                    std::thread::sleep(Duration::from_millis(50));
+                    horizon_os::thread::sleep(Duration::from_millis(50));
                 }
                 backoff = (backoff * 2).min(Duration::from_secs(30));
             }
@@ -483,7 +483,7 @@ fn register(shared: &Arc<Shared>, relay_url: &str) -> io::Result<()> {
                     control.try_clone()?,
                     relay_url.to_owned(),
                 );
-                let _ = std::thread::Builder::new()
+                let _ = horizon_os::thread::Builder::new()
                     .name("horizon-friends-session".into())
                     .spawn(move || {
                         serve_relayed(
