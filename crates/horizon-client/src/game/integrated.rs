@@ -11,7 +11,7 @@
 //! is DEPRECATED: never use it, it gets no fixes and will be removed soon.
 //! LAN guests and dedicated servers use the same code either way.
 use super::{
-    Game, Options, PackResources, Resources, UiResources, WorldIcon,
+    Game, Options, PackResources, Resources, UiResources,
     execution_role::ExecutionRole,
     lan::{LanSettings, Owner},
     world_loading::WorldRequest,
@@ -102,7 +102,7 @@ impl Integrated {
                 let _ = tx.send(f(g));
             }))
             .ok()?;
-        rx.recv_timeout(Duration::from_secs(10)).ok()
+        horizon_os::sync::recv_reply(&rx, Duration::from_secs(10)).ok()
     }
     /// `IntegratedServer.halt(true)`: returns once the world is saved and let go.
     pub fn stop(mut self) -> Result<()> {
@@ -331,15 +331,21 @@ impl Game<'_> {
         };
         handle.world_name = world_name;
         self.connect_local(pipe, &player)?;
+        // The page can't read a frame back yet (`write_screenshot`).
+        #[cfg(target_arch = "wasm32")]
+        let _ = folder;
         // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
         // the Select World list shows, and needs the save folder for it.
-        self.world_icon = Some(WorldIcon {
-            path: horizon_os::env::current_dir()?
-                .join("saves")
-                .join(&folder)
-                .join("icon.png"),
-            last_attempt: None,
-        });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.world_icon = Some(super::WorldIcon {
+                path: horizon_os::env::current_dir()?
+                    .join("saves")
+                    .join(&folder)
+                    .join("icon.png"),
+                last_attempt: None,
+            });
+        }
         self.integrated = Some(handle);
         Ok(())
     }

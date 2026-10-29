@@ -47,8 +47,10 @@ async function main() {
     // Let the status paint before the game blocks the page while it loads.
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
     status.textContent = "";
+    // The game's command-line arguments, from the address: ?args=--world%20T
+    const args = (new URLSearchParams(location.search).get("args") ?? "").split(" ").filter(Boolean);
     try {
-        horizon_start();
+        horizon_start(args);
     } catch (e) {
         // winit leaves Rust's stack by throwing once its event loop is set up.
         if (!String(e).includes("Using exceptions for control flow")) throw e;

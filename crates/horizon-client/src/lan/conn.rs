@@ -946,7 +946,9 @@ fn offer_pack(
         let writer = &mut c.writer;
         scope.spawn(move || {
             let start = Instant::now();
-            while stopped.recv_timeout(KEEP_ALIVE_EVERY) == Err(RecvTimeoutError::Timeout) {
+            while horizon_os::sync::recv_timeout(&stopped, KEEP_ALIVE_EVERY)
+                == Err(RecvTimeoutError::Timeout)
+            {
                 let id = i64::try_from(start.elapsed().as_millis()).unwrap_or(0);
                 let keep_alive = cfg::Clientbound::KeepAlive(cfg::KeepAlive { id });
                 if writer.send(&keep_alive.encode()).is_err() {
@@ -1233,7 +1235,7 @@ fn write_loop(
             pending.fetch_sub(body.len(), Ordering::Relaxed);
             send_body(&mut writer, &body).is_ok() && pending.load(Ordering::Relaxed) <= MAX_PENDING
         };
-        match rx.recv_timeout(Duration::from_millis(200)) {
+        match horizon_os::sync::recv_timeout(&rx, Duration::from_millis(200)) {
             Ok(Out::Packet(body)) => {
                 if !write(body) {
                     break;

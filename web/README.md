@@ -1,8 +1,9 @@
 # Horizon in the browser
 
 An experimental build of the Horizon client for the web: the same game code
-compiled to WebAssembly, drawing through the browser's WebGPU. Today it boots to
-the title screen; worlds don't open yet (see [What's missing](#whats-missing)).
+compiled to WebAssembly, drawing through the browser's WebGPU. It creates and
+opens single-player worlds; they live in memory and are gone on reload (see
+[What's missing](#whats-missing)).
 
 ## Build and run
 
@@ -30,6 +31,10 @@ on: `brave --enable-unsafe-webgpu --enable-features=Vulkan http://localhost:8080
 `PROFILE=release web/build.sh` builds with LTO (slower to build, smaller and faster).
 `THREADS=0 web/build.sh` builds with stable Rust and no threads.
 
+The address passes the game its command-line arguments:
+<http://localhost:8080/?args=--world%20Test%20--creative> opens (or creates) the
+world `Test` in creative mode at start.
+
 ## How it fits together
 
 - **`horizon-os`** is what the game sees of the operating system: `fs`, `time`,
@@ -54,6 +59,19 @@ on: `brave --enable-unsafe-webgpu --enable-features=Vulkan http://localhost:8080
   `sleep` returns at once and `join` spins. std's `recv_timeout` and
   `wait_timeout_while` read a clock std doesn't have here: `horizon_os::sync`
   has versions that use the browser's.
+- **Locks the page shares with workers**: std's `Mutex` waits once it has spun
+  briefly, which traps on the page (`Atomics.wait cannot be called in this
+  context`; winit swallows it and the frame loop stops). Those locks go through
+  `horizon_os::sync::lock` and `write`, which spin on the page instead: the
+  chunk queue and the virtual filesystem so far.
+- **Single player** runs as on native: the server thread, its local connection
+  and the client's network thread are Web Workers. The window's calls into its
+  server (`Integrated::call`) spin on the page for the reply
+  (`horizon_os::sync::recv_reply`).
+- **Pointer lock**: browsers lock the pointer only during a click or a key
+  press, and winit's request throws through the frame when refused. The game
+  asks through `horizon_os::web::pointer_lock`, and the canvas takes the lock
+  on the player's next click.
 - **Chunk work** (`streaming.rs`): chunk workers are Web Workers. Without
   threads (`THREADS=0`), the frame runs queued generation, lighting and meshing
   jobs itself for up to 12 ms per update.
@@ -63,14 +81,13 @@ on: `brave --enable-unsafe-webgpu --enable-features=Vulkan http://localhost:8080
 
 ## What's missing
 
-- **Worlds.** Opening one starts the server thread, its local connection and
-  the client's network thread. They can start as workers now, but the window
-  still waits on them in places (`Integrated::call`'s `recv_timeout`, joins
-  on quit), and the network code still uses std's `recv_timeout`. The world
-  rest loader and the startup loader still run inline on the page.
-- **Locks the page shares with workers.** std's `Mutex` spins briefly, then
-  waits. A long hold by a worker (the filesystem, the chunk queue) would trap
-  the page.
+- **Untested in worlds**: mouse look under pointer lock (headless browsers
+  can't lock it), pausing, Save and Quit to Title, superflat.
+- **Other page-side locks.** Only the locks seen trapping use
+  `horizon_os::sync::lock`; any other lock the page shares with a worker can
+  still stop the game.
+- **Screenshots and world icons**: reading a frame back needs the page to wait
+  for the GPU. They report an error on the web; the world list shows no icon.
 - **Saving.** Files the game writes live in memory and are gone on reload
   (options, worlds). They belong in the browser's private file storage (OPFS).
 - **Network.** Browsers have no raw sockets: multiplayer needs a WebSocket

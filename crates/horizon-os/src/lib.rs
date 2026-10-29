@@ -170,9 +170,41 @@ pub mod thread {
 pub mod sync {
     use crate::time::Duration;
     use std::sync::{
-        Condvar, MutexGuard,
+        Condvar, LockResult, Mutex, MutexGuard, RwLock, RwLockWriteGuard,
         mpsc::{Receiver, RecvTimeoutError},
     };
+
+    /// `mutex.lock()`. The page's thread, which may not wait (the browser
+    /// traps it), spins until the lock is free instead: use it for locks the
+    /// page shares with workers, which hold them only briefly.
+    pub fn lock<T: ?Sized>(mutex: &Mutex<T>) -> LockResult<MutexGuard<'_, T>> {
+        #[cfg(target_arch = "wasm32")]
+        if !can_wait() {
+            loop {
+                match mutex.try_lock() {
+                    Ok(guard) => return Ok(guard),
+                    Err(std::sync::TryLockError::Poisoned(e)) => return Err(e),
+                    Err(std::sync::TryLockError::WouldBlock) => std::hint::spin_loop(),
+                }
+            }
+        }
+        mutex.lock()
+    }
+
+    /// `lock.write()`, spinning on the page's thread as [`lock`] does.
+    pub fn write<T: ?Sized>(lock: &RwLock<T>) -> LockResult<RwLockWriteGuard<'_, T>> {
+        #[cfg(target_arch = "wasm32")]
+        if !can_wait() {
+            loop {
+                match lock.try_write() {
+                    Ok(guard) => return Ok(guard),
+                    Err(std::sync::TryLockError::Poisoned(e)) => return Err(e),
+                    Err(std::sync::TryLockError::WouldBlock) => std::hint::spin_loop(),
+                }
+            }
+        }
+        lock.write()
+    }
 
     /// `rx.recv_timeout(timeout)`.
     pub fn recv_timeout<T>(rx: &Receiver<T>, timeout: Duration) -> Result<T, RecvTimeoutError> {
@@ -195,6 +227,34 @@ pub mod sync {
                 }
                 // A channel can't be waited on with a deadline here: look again shortly.
                 crate::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    /// `rx.recv_timeout(timeout)` for a reply that a thread already running
+    /// sends shortly. The page's thread, which may not wait, looks again
+    /// until the deadline instead of giving up at once.
+    pub fn recv_reply<T>(rx: &Receiver<T>, timeout: Duration) -> Result<T, RecvTimeoutError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            rx.recv_timeout(timeout)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            if can_wait() {
+                return recv_timeout(rx, timeout);
+            }
+            use std::sync::mpsc::TryRecvError;
+            let deadline = crate::time::Instant::now() + timeout;
+            loop {
+                match rx.try_recv() {
+                    Ok(v) => return Ok(v),
+                    Err(TryRecvError::Disconnected) => return Err(RecvTimeoutError::Disconnected),
+                    Err(TryRecvError::Empty) if crate::time::Instant::now() >= deadline => {
+                        return Err(RecvTimeoutError::Timeout);
+                    }
+                    Err(TryRecvError::Empty) => std::hint::spin_loop(),
+                }
             }
         }
     }

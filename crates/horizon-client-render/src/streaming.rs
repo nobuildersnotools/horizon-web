@@ -708,7 +708,7 @@ impl Streaming {
     /// models and sprites, and rebuild every loaded section. Meshes in flight
     /// were made with the old resources; their results are dropped.
     pub fn reload_resources(&mut self, world: &mut World, context: Arc<WorkerContext>) {
-        *self.shared.context.write().unwrap() = context;
+        *horizon_os::sync::write(&self.shared.context).unwrap() = context;
         self.meshing.clear();
         for &(x, z) in world.chunks.keys() {
             if self.lit.contains(&(x, z)) {
@@ -784,13 +784,15 @@ impl Streaming {
     fn submit(&mut self, at: Option<(i32, i32)>, bias: i64, job: Job) {
         self.order += 1;
         let priority = at.map_or(i64::MIN, |(x, z)| self.distance(x, z) * 4 + bias);
-        self.shared.queue.lock().unwrap().push(Queued {
-            priority,
-            at,
-            bias,
-            order: self.order,
-            job,
-        });
+        horizon_os::sync::lock(&self.shared.queue)
+            .unwrap()
+            .push(Queued {
+                priority,
+                at,
+                bias,
+                order: self.order,
+                job,
+            });
         self.shared.ready.notify_one();
     }
     /// Rank the queued jobs again when what their priorities were computed
@@ -808,7 +810,7 @@ impl Streaming {
             return;
         }
         self.queue_basis = (basis, self.extra.clone());
-        let mut queue = self.shared.queue.lock().unwrap();
+        let mut queue = horizon_os::sync::lock(&self.shared.queue).unwrap();
         rank_again(&mut queue, |x, z| self.distance(x, z));
     }
     fn receive_decorated(&mut self, x: i32, z: i32, region: [Proto; 9]) {
@@ -965,7 +967,7 @@ impl Streaming {
         self.meshing.contains_key(&section)
     }
     pub fn pending(&self) -> usize {
-        self.shared.queue.lock().unwrap().len()
+        horizon_os::sync::lock(&self.shared.queue).unwrap().len()
     }
     /// Whether any chunk is queued or on its way from generation to a mesh.
     pub fn busy(&self) -> bool {

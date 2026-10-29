@@ -10,12 +10,40 @@ export function horizon_console(level, message) {
     else if (level === 2) console.warn(message);
     else console.log(message);
 }
+
+let wantLock = false;
+let hooked = null;
+function lock(canvas) {
+    // Refused outside a click or key press: by a rejected promise, or a throw.
+    try {
+        const p = canvas.requestPointerLock();
+        if (p && p.catch) p.catch(() => {});
+    } catch (e) {}
+}
+export function horizon_pointer_lock(want) {
+    wantLock = want;
+    const canvas = document.querySelector("canvas");
+    if (!canvas) return;
+    if (hooked !== canvas) {
+        hooked = canvas;
+        canvas.addEventListener("mousedown", () => {
+            if (wantLock && document.pointerLockElement !== canvas) lock(canvas);
+        });
+    }
+    if (want) {
+        if (document.pointerLockElement !== canvas) lock(canvas);
+    } else if (document.pointerLockElement) {
+        document.exitPointerLock();
+    }
+}
 "#)]
 extern "C" {
     fn horizon_console(level: u32, message: &str);
+    fn horizon_pointer_lock(want: bool);
 }
 
 static START: Mutex<Option<fn()>> = Mutex::new(None);
+static ARGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Called from `main`, which wasm-bindgen runs as soon as the module loads:
 /// the game itself starts once the page has installed its files and calls
@@ -37,9 +65,11 @@ pub fn horizon_install_manifest(root: &str, base: &str, manifest: &str) {
     crate::fs::install_manifest(root, base, manifest);
 }
 
-/// Starts the game registered by [`on_start`].
+/// Starts the game registered by [`on_start`] with these arguments (what
+/// native takes on its command line).
 #[wasm_bindgen]
-pub fn horizon_start() {
+pub fn horizon_start(args: Vec<String>) {
+    *ARGS.lock().unwrap_or_else(|e| e.into_inner()) = args;
     std::panic::set_hook(Box::new(|info| {
         horizon_console(1, &format!("Horizon panicked: {info}"));
     }));
@@ -50,8 +80,20 @@ pub fn horizon_start() {
     }
 }
 
+/// The arguments the page passed to [`horizon_start`].
+pub(crate) fn args() -> Vec<String> {
+    ARGS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// A line in the browser's console (`log::Level` as a number: 1 error, 2
 /// warning, more for the rest).
 pub fn console(level: u32, message: &str) {
     horizon_console(level, message);
+}
+
+/// Locks the pointer to the game's canvas, or lets it go. Browsers lock it
+/// only during a click or a key press: refused now, the canvas takes it on
+/// the player's next click.
+pub fn pointer_lock(want: bool) {
+    horizon_pointer_lock(want);
 }

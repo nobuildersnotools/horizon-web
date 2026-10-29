@@ -453,6 +453,9 @@ pub fn write_only(level: log::Level, message: &str) {
 /// Writes `message` to the log file only, under the thread vanilla names for it (`Server thread` for
 /// a login refused on a connection's own thread), as the console line beside it shows.
 pub fn write_as(thread: &str, level: log::Level, message: &str) {
+    // The page has no log file: its console is the log.
+    #[cfg(target_arch = "wasm32")]
+    horizon_os::web::console(level as u32, &format!("[{level}] {thread}: {message}"));
     if let Some(logger) = LOGGER.get() {
         logger.write(thread, level, message);
     }

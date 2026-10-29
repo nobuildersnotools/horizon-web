@@ -116,7 +116,7 @@ export function horizon_fetch_sync(url) {
     });
 
     fn vfs() -> MutexGuard<'static, Vfs> {
-        VFS.lock().unwrap_or_else(|e| e.into_inner())
+        crate::sync::lock(&VFS).unwrap_or_else(|e| e.into_inner())
     }
 
     /// Fetches a manifest file before it is read, without holding the
@@ -144,7 +144,7 @@ export function horizon_fetch_sync(url) {
         if !matches!(vfs.nodes.get(key), Some(Node::Remote { .. })) {
             return None;
         }
-        let remote = REMOTE.lock().unwrap_or_else(|e| e.into_inner());
+        let remote = crate::sync::lock(&REMOTE).unwrap_or_else(|e| e.into_inner());
         let rel = key.strip_prefix(&remote.0).unwrap_or(key);
         Some(format!("{}{}", remote.1, rel.trim_start_matches('/')))
     }
@@ -309,7 +309,8 @@ export function horizon_fetch_sync(url) {
     /// Lists files under `root` to fetch from `base` when first read: one
     /// path per line, relative to `root`. Files already present are kept.
     pub fn install_manifest(root: &str, base: &str, manifest: &str) {
-        *REMOTE.lock().unwrap_or_else(|e| e.into_inner()) = (key(Path::new(root)), base.to_owned());
+        *crate::sync::lock(&REMOTE).unwrap_or_else(|e| e.into_inner()) =
+            (key(Path::new(root)), base.to_owned());
         let mut vfs = vfs();
         for line in manifest.lines().filter(|l| !l.is_empty()) {
             let (path, len) = line.split_once('\t').unwrap_or((line, "0"));

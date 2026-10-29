@@ -5543,6 +5543,11 @@ impl Renderer {
         request: &ScreenshotRequest,
         buffer: &wgpu::Buffer,
     ) -> Result<[u32; 2]> {
+        // The page can't wait for the GPU: the buffer maps only once it has
+        // returned to the browser.
+        if cfg!(target_arch = "wasm32") {
+            return Err("screenshots don't work in the browser yet".into());
+        }
         let (sender, receiver) = std::sync::mpsc::channel();
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = sender.send(r);

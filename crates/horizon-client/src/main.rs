@@ -20,7 +20,7 @@ fn main() {
 fn start() {
     std::hint::black_box(&MOD_API_LEVEL);
     horizon_client::telemetry::mark_start();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = horizon_os::env::args().skip(1).collect();
     let game_args = args.iter().take_while(|a| *a != "--dedicated");
     let help = game_args.clone().any(|a| a == "--help" || a == "-h");
     // The dedicated server logs in its own folder, as vanilla's does; the game in its home.

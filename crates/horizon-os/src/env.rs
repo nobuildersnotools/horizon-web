@@ -1,8 +1,18 @@
-//! The process's folders. The browser has neither a working directory nor an
-//! executable: the virtual filesystem's root stands in for both.
+//! The process's folders and arguments. The browser has neither a working
+//! directory nor an executable: the virtual filesystem's root stands in for
+//! both, and the page hands the arguments to `horizon_start`.
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use std::env::{current_dir, current_exe, temp_dir};
+pub use std::env::{args, current_dir, current_exe, temp_dir};
+
+/// The arguments the page started the game with, after a program name as
+/// std's `args` has.
+#[cfg(target_arch = "wasm32")]
+pub fn args() -> std::vec::IntoIter<String> {
+    let mut args = vec!["horizon-client".to_string()];
+    args.extend(crate::web::args());
+    args.into_iter()
+}
 
 /// The game's folder: the virtual filesystem's root.
 #[cfg(target_arch = "wasm32")]
