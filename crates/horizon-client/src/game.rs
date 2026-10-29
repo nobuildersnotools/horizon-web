@@ -14133,6 +14133,17 @@ impl ApplicationHandler for Game<'_> {
         }
         self.poll_pads(event_loop);
         self.pause_if_inactive();
+        // Escape releases the browser's pointer lock and never reaches the page.
+        #[cfg(target_arch = "wasm32")]
+        if horizon_os::web::pointer_lock_lost()
+            && self.screen == Screen::Playing
+            && self.player.is_some()
+            && let Err(error) = self.key_pressed(KeyCode::Escape)
+        {
+            self.error = Some(error);
+            event_loop.exit();
+            return;
+        }
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();

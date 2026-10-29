@@ -2,8 +2,8 @@
 
 An experimental build of the Horizon client for the web: the same game code
 compiled to WebAssembly, drawing through the browser's WebGPU. It creates and
-opens single-player worlds; they live in memory and are gone on reload (see
-[What's missing](#whats-missing)).
+opens single-player worlds, and keeps them and the options in the browser's
+storage (see [What's missing](#whats-missing)).
 
 ## Build and run
 
@@ -48,7 +48,7 @@ world `Test` in creative mode at start.
   `boot.tar.gz` (about 15 MB). The rest (other languages, the world generator's
   bundle) is listed in `manifest.txt` and fetched the first time it is read.
 - **Startup** (`web/main.js`): load the WebAssembly, download and install the
-  archive, then `horizon_start()`. The first renderer opens asynchronously
+  archive, load the player's saved files, then `horizon_start()`. The first renderer opens asynchronously
   (`Loading::resumed`), because the page can't wait for the GPU.
 - **Threads** (`horizon-os/src/workers.rs`, `web/worker.js`): the module is
   built with atomics on a shared memory (std rebuilt on nightly, the linker's
@@ -68,10 +68,22 @@ world `Test` in creative mode at start.
   and the client's network thread are Web Workers. The window's calls into its
   server (`Integrated::call`) spin on the page for the reply
   (`horizon_os::sync::recv_reply`).
+- **Saving**: what the game writes outside `/tmp` and `/.local` (options,
+  `saves/`, `servers.dat`) is also kept in the origin's private file system
+  (OPFS), in a `horizon` folder laid out as in the virtual filesystem. The
+  page loads that folder before the game starts; the virtual filesystem notes
+  each path the game changes, and every 2 s (and when the tab is hidden) the
+  page takes those paths with their state now (`horizon_take_changes`) and
+  writes them with OPFS's async API, which the page's thread may use. Each
+  file is swapped in whole, but a batch isn't: a tab closed mid-batch can keep
+  some files of a save and not others. What the game hasn't saved yet (between
+  autosaves) is lost with the tab, as with a crash on native.
 - **Pointer lock**: browsers lock the pointer only during a click or a key
   press, and winit's request throws through the frame when refused. The game
   asks through `horizon_os::web::pointer_lock`, and the canvas takes the lock
-  on the player's next click.
+  on the player's next click. Escape while the pointer is locked only releases
+  the lock and never reaches the page, so the game takes a lost lock during
+  play as that Escape and pauses (`horizon_os::web::pointer_lock_lost`).
 - **Chunk work** (`streaming.rs`): chunk workers are Web Workers. Without
   threads (`THREADS=0`), the frame runs queued generation, lighting and meshing
   jobs itself for up to 12 ms per update.
@@ -81,15 +93,13 @@ world `Test` in creative mode at start.
 
 ## What's missing
 
-- **Untested in worlds**: mouse look under pointer lock (headless browsers
-  can't lock it), pausing, Save and Quit to Title, superflat.
 - **Other page-side locks.** Only the locks seen trapping use
   `horizon_os::sync::lock`; any other lock the page shares with a worker can
   still stop the game.
 - **Screenshots and world icons**: reading a frame back needs the page to wait
   for the GPU. They report an error on the web; the world list shows no icon.
-- **Saving.** Files the game writes live in memory and are gone on reload
-  (options, worlds). They belong in the browser's private file storage (OPFS).
+- **Moving worlds in and out**: no export or import of a world folder (a
+  `.zip`) yet; a world stays in the browser that made it.
 - **Network.** Browsers have no raw sockets: multiplayer needs a WebSocket
   endpoint on the server or a proxy, and Microsoft sign-in needs a backend.
 - **Sound.** cpal's Web Audio backend is not enabled yet.

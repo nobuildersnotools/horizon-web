@@ -12,7 +12,13 @@ export function horizon_console(level, message) {
 }
 
 let wantLock = false;
+let lostLock = false;
 let hooked = null;
+export function horizon_pointer_lock_lost() {
+    const lost = lostLock;
+    lostLock = false;
+    return lost;
+}
 function lock(canvas) {
     // Refused outside a click or key press: by a rejected promise, or a throw.
     try {
@@ -24,6 +30,13 @@ export function horizon_pointer_lock(want) {
     wantLock = want;
     const canvas = document.querySelector("canvas");
     if (!canvas) return;
+    if (hooked === null) {
+        // Escape while the pointer is locked only releases the lock: the page
+        // never sees the key, so the game hears of it as a lost lock.
+        document.addEventListener("pointerlockchange", () => {
+            if (wantLock && !document.pointerLockElement) lostLock = true;
+        });
+    }
     if (hooked !== canvas) {
         hooked = canvas;
         canvas.addEventListener("mousedown", () => {
@@ -40,6 +53,7 @@ export function horizon_pointer_lock(want) {
 extern "C" {
     fn horizon_console(level: u32, message: &str);
     fn horizon_pointer_lock(want: bool);
+    fn horizon_pointer_lock_lost() -> bool;
 }
 
 static START: Mutex<Option<fn()>> = Mutex::new(None);
@@ -63,6 +77,45 @@ pub fn horizon_install_tar(root: &str, tar: &[u8]) -> Result<usize, JsValue> {
 #[wasm_bindgen]
 pub fn horizon_install_manifest(root: &str, base: &str, manifest: &str) {
     crate::fs::install_manifest(root, base, manifest);
+}
+
+/// A file the page kept in the browser's storage, back in the virtual
+/// filesystem before the game starts (`modified` in ms since 1970).
+#[wasm_bindgen]
+pub fn horizon_install_saved_file(path: &str, data: Vec<u8>, modified: f64) {
+    crate::fs::install_saved_file(path, data, modified);
+}
+
+/// A folder the page kept in the browser's storage.
+#[wasm_bindgen]
+pub fn horizon_install_saved_dir(path: &str) {
+    crate::fs::install_saved_dir(path);
+}
+
+/// The player's files changed since the last call, for the page to save:
+/// `[path, "file", bytes]`, `[path, "dir" | "cleardir"]` (emptied first) or
+/// `[path, "gone"]`, parents before children.
+#[wasm_bindgen]
+pub fn horizon_take_changes() -> js_sys::Array {
+    let changes = js_sys::Array::new();
+    for (path, change) in crate::fs::take_changes() {
+        let entry = js_sys::Array::new();
+        entry.push(&JsValue::from_str(&path));
+        match change {
+            crate::fs::Change::File(data) => {
+                entry.push(&JsValue::from_str("file"));
+                entry.push(&js_sys::Uint8Array::from(&data[..]));
+            }
+            crate::fs::Change::Dir { clear } => {
+                entry.push(&JsValue::from_str(if clear { "cleardir" } else { "dir" }));
+            }
+            crate::fs::Change::Gone => {
+                entry.push(&JsValue::from_str("gone"));
+            }
+        }
+        changes.push(&entry);
+    }
+    changes
 }
 
 /// Starts the game registered by [`on_start`] with these arguments (what
@@ -96,4 +149,10 @@ pub fn console(level: u32, message: &str) {
 /// the player's next click.
 pub fn pointer_lock(want: bool) {
     horizon_pointer_lock(want);
+}
+
+/// Whether the browser let the pointer go while the game held it (the
+/// player pressed Escape, which the page never sees then) since the last call.
+pub fn pointer_lock_lost() -> bool {
+    horizon_pointer_lock_lost()
 }

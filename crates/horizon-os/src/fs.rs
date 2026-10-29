@@ -2,7 +2,10 @@
 //! the page installs the prepared resources as a tar archive before the game
 //! starts ([`install_tar`]), files it lists in a manifest without their bytes
 //! ([`install_manifest`]) are fetched from the page's origin the first time
-//! they are read, and everything the game writes stays in memory.
+//! they are read. What the game writes outside `/tmp` and `/.local` (options,
+//! saves) is also kept in the browser's storage: the page loads it back before
+//! the game starts ([`install_saved_file`]) and saves the changes
+//! ([`take_changes`]).
 //!
 //! `Path::exists`, `is_dir` and `is_file` go to std's filesystem, which the
 //! browser lacks: call [`exists`], [`is_dir`] and [`is_file`] instead.
@@ -65,6 +68,7 @@ mod web {
         io::{self, Read, Seek, SeekFrom, Write},
         path::{Component, Path, PathBuf},
         sync::{LazyLock, Mutex, MutexGuard},
+        time::Duration,
     };
     use wasm_bindgen::prelude::*;
 
@@ -107,6 +111,24 @@ export function horizon_fetch_sync(url) {
     #[derive(Default)]
     struct Vfs {
         nodes: BTreeMap<String, Node>,
+        /// Paths changed since the page last saved them, and whether a folder
+        /// there is emptied first (it replaced another by a rename).
+        dirty: BTreeMap<String, bool>,
+    }
+
+    /// Scratch files and the prepared resources aren't the player's: they stay
+    /// out of the browser's storage.
+    fn persisted(key: &str) -> bool {
+        !["/tmp", "/.local"]
+            .iter()
+            .any(|root| key == *root || key.starts_with(&format!("{root}/")))
+    }
+
+    /// A path's state for the page to save, from [`take_changes`].
+    pub enum Change {
+        File(Vec<u8>),
+        Dir { clear: bool },
+        Gone,
     }
 
     static VFS: LazyLock<Mutex<Vfs>> = LazyLock::new(|| {
@@ -181,6 +203,17 @@ export function horizon_fetch_sync(url) {
     }
 
     impl Vfs {
+        fn touch(&mut self, key: &str, clear: bool) {
+            if !persisted(key) {
+                return;
+            }
+            match self.dirty.get_mut(key) {
+                Some(c) => *c |= clear,
+                None => {
+                    self.dirty.insert(key.to_owned(), clear);
+                }
+            }
+        }
         fn mkdirs(&mut self, key: &str) {
             let mut at = key;
             let mut missing = Vec::new();
@@ -326,6 +359,35 @@ export function horizon_fetch_sync(url) {
         }
     }
 
+    /// A file the page saved in the browser's storage, back in place.
+    pub fn install_saved_file(path: &str, data: Vec<u8>, modified_ms: f64) {
+        let modified = SystemTime::UNIX_EPOCH + Duration::from_millis(modified_ms.max(0.0) as u64);
+        vfs().put(key(Path::new(path)), Node::File { data, modified });
+    }
+
+    /// A folder the page saved in the browser's storage, back in place.
+    pub fn install_saved_dir(path: &str) {
+        vfs().mkdirs(&key(Path::new(path)));
+    }
+
+    /// What changed since the last call, parents before children: each path
+    /// with its state now.
+    pub fn take_changes() -> Vec<(String, Change)> {
+        let mut vfs = vfs();
+        let dirty = std::mem::take(&mut vfs.dirty);
+        dirty
+            .into_iter()
+            .map(|(key, clear)| {
+                let change = match vfs.nodes.get(&key) {
+                    Some(Node::File { data, .. }) => Change::File(data.clone()),
+                    Some(Node::Dir) => Change::Dir { clear },
+                    Some(Node::Remote { .. }) | None => Change::Gone,
+                };
+                (key, change)
+            })
+            .collect()
+    }
+
     pub fn exists(path: impl AsRef<Path>) -> bool {
         vfs().nodes.contains_key(&key(path.as_ref()))
     }
@@ -366,6 +428,7 @@ export function horizon_fetch_sync(url) {
                 "is a directory",
             ));
         }
+        vfs.touch(&k, false);
         vfs.nodes.insert(
             k,
             Node::File {
@@ -389,6 +452,7 @@ export function horizon_fetch_sync(url) {
             ));
         }
         vfs.mkdirs(&k);
+        vfs.touch(&k, false);
         Ok(())
     }
 
@@ -404,6 +468,7 @@ export function horizon_fetch_sync(url) {
         }
         match parent_key(&k).and_then(|p| vfs.nodes.get(p)) {
             Some(Node::Dir) => {
+                vfs.touch(&k, false);
                 vfs.nodes.insert(k, Node::Dir);
                 Ok(())
             }
@@ -418,6 +483,7 @@ export function horizon_fetch_sync(url) {
         match vfs.nodes.get(&k) {
             Some(Node::File { .. } | Node::Remote { .. }) => {
                 vfs.nodes.remove(&k);
+                vfs.touch(&k, false);
                 Ok(())
             }
             Some(Node::Dir) => Err(io::Error::new(
@@ -442,6 +508,7 @@ export function horizon_fetch_sync(url) {
             ));
         }
         vfs.nodes.remove(&k);
+        vfs.touch(&k, false);
         Ok(())
     }
 
@@ -454,6 +521,7 @@ export function horizon_fetch_sync(url) {
         }
         let prefix = format!("{k}/");
         vfs.nodes.retain(|n, _| n != &k && !n.starts_with(&prefix));
+        vfs.touch(&k, false);
         Ok(())
     }
 
@@ -482,7 +550,10 @@ export function horizon_fetch_sync(url) {
         let tprefix = format!("{tk}/");
         vfs.nodes
             .retain(|k, _| *k != tk && !k.starts_with(&tprefix));
+        vfs.touch(&fk, false);
+        vfs.touch(&tk, true);
         for (k, n) in moved {
+            vfs.touch(&k, false);
             vfs.put(k, n);
         }
         Ok(())
@@ -751,6 +822,9 @@ export function horizon_fetch_sync(url) {
                     },
                 );
             }
+            if !present || (self.truncate && (self.write || self.append)) {
+                vfs.touch(&k, false);
+            }
             let data = vfs.data(&k, path)?;
             if self.truncate && (self.write || self.append) {
                 data.clear();
@@ -798,6 +872,7 @@ export function horizon_fetch_sync(url) {
         }
         pub fn set_len(&self, len: u64) -> io::Result<()> {
             let mut vfs = vfs();
+            vfs.touch(&self.key, false);
             vfs.data(&self.key, &self.path)?.resize(len as usize, 0);
             Ok(())
         }
@@ -878,6 +953,7 @@ export function horizon_fetch_sync(url) {
                 ));
             }
             let mut vfs = vfs();
+            vfs.touch(&self.key, false);
             let data = vfs.data(&self.key, &self.path)?;
             if self.append {
                 self.pos = data.len() as u64;
