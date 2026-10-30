@@ -42,7 +42,7 @@ target_dir="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import j
 mkdir -p "$dist/pkg"
 wasm-bindgen --target web --no-typescript --out-dir "$dist/pkg" \
     "$target_dir/wasm32-unknown-unknown/$profile/horizon-client.wasm"
-cp web/index.html web/main.js web/worker.js "$dist/"
+cp web/index.html web/main.js web/audio.js web/worker.js "$dist/"
 
 if [ ! -f "$dist/fs/boot.tar.gz" ] || [ "$resources/horizon-resources.json" -nt "$dist/fs/boot.tar.gz" ]; then
     python3 web/bundle.py "$resources" "$dist/fs"

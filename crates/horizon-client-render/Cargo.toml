@@ -72,3 +72,5 @@ getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
 rustls-pki-types = { version = "1", features = ["web"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["webgpu"] }
+# Sound through the browser's Web Audio.
+cpal = { version = "0.16", optional = true, features = ["wasm-bindgen"] }

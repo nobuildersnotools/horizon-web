@@ -2,8 +2,8 @@
 """Packs prepared resources for the browser build.
 
 boot.tar.gz holds what the game reads before the title screen and for a
-world (everything but other languages, the world generator's bundle and
-caches the game rebuilds); manifest.txt lists the rest, which the game fetches
+world (everything but other languages, sounds, the world generator's bundle
+and caches the game rebuilds); manifest.txt lists the rest, which the game fetches
 from res/ the first time it reads a file.
 
 Usage: bundle.py RESOURCES OUT
@@ -23,6 +23,8 @@ KEPT_LANGUAGES = ("en_us.json",)
 def lazy(rel: str) -> bool:
     parts = rel.split("/")
     if parts[0] in LAZY_DIRS or rel in LAZY_FILES:
+        return True
+    if parts[:3] == ["assets", "minecraft", "sounds"]:
         return True
     if parts[:3] == ["assets", "minecraft", "lang"] and len(parts) == 4:
         return parts[3] not in KEPT_LANGUAGES

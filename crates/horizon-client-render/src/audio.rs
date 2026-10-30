@@ -12,7 +12,7 @@ use crate::sound_events::{Sound, SoundRegistry};
 #[cfg(feature = "audio")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use horizon_core::random::{LegacyRandom, RandomSource};
-use horizon_os::fs;
+use horizon_os::{fs, sync::lock};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -126,7 +126,7 @@ struct Decode {
 /// released meanwhile stays so.
 fn attach(mixer: &Mutex<Mixer>, channel: ChannelId, samples: Samples, looping: bool) {
     if let Some(samples) = samples
-        && let Ok(mut m) = mixer.lock()
+        && let Ok(mut m) = lock(mixer)
         && let Some(c) = m.channels.get_mut(&channel)
         && c.state == State::Initial
     {
@@ -214,7 +214,7 @@ fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
 }
 impl MixerBackend {
     fn with(&self, channel: ChannelId, f: impl FnOnce(&mut Channel)) {
-        if let Ok(mut m) = self.mixer.lock()
+        if let Ok(mut m) = lock(&self.mixer)
             && let Some(c) = m.channels.get_mut(&channel)
         {
             f(c);
@@ -225,7 +225,7 @@ impl Backend for MixerBackend {
     fn create(&mut self, _streaming: bool) -> Option<ChannelId> {
         self.next += 1;
         let id = self.next;
-        self.mixer.lock().ok()?.channels.insert(
+        lock(&self.mixer).ok()?.channels.insert(
             id,
             Channel {
                 samples: None,
@@ -242,7 +242,7 @@ impl Backend for MixerBackend {
         Some(id)
     }
     fn destroy(&mut self, channel: ChannelId) {
-        if let Ok(mut m) = self.mixer.lock() {
+        if let Ok(mut m) = lock(&self.mixer) {
             m.channels.remove(&channel);
         }
     }
@@ -274,6 +274,22 @@ impl Backend for MixerBackend {
         }
         let (namespace, path) = sound.path();
         let file = self.root.join("assets").join(namespace).join(&path);
+        if cfg!(all(target_arch = "wasm32", not(target_feature = "atomics"))) {
+            // The web build without threads has none to decode on: decode now.
+            let key = format!("{namespace}:{path}");
+            let cached = lock(&self.cache).ok().and_then(|mut c| c.get(&key));
+            let samples = cached.unwrap_or_else(|| {
+                let samples = decode(&file).map(|(s, r)| (Arc::new(s), r));
+                if !sound.stream
+                    && let Ok(mut c) = lock(&self.cache)
+                {
+                    c.insert(key, samples.clone());
+                }
+                samples
+            });
+            attach(&self.mixer, channel, samples, sound.stream && looping);
+            return;
+        }
         if sound.stream {
             // A streamed sound loops by restarting its stream.
             let mixer = self.mixer.clone();
@@ -284,7 +300,7 @@ impl Backend for MixerBackend {
             return;
         }
         let key = format!("{namespace}:{path}");
-        let cached = self.cache.lock().ok().and_then(|mut c| c.get(&key));
+        let cached = lock(&self.cache).ok().and_then(|mut c| c.get(&key));
         if let Some(samples) = cached {
             attach(&self.mixer, channel, samples, false);
             return;
@@ -297,10 +313,10 @@ impl Backend for MixerBackend {
                 .spawn(move || {
                     for job in receive {
                         // Queued twice before the first decode finished.
-                        let cached = cache.lock().ok().and_then(|mut c| c.get(&job.key));
+                        let cached = lock(&cache).ok().and_then(|mut c| c.get(&job.key));
                         let samples = cached.unwrap_or_else(|| {
                             let samples = decode(&job.file).map(|(s, r)| (Arc::new(s), r));
-                            if let Ok(mut c) = cache.lock() {
+                            if let Ok(mut c) = lock(&cache) {
                                 c.insert(job.key, samples.clone());
                             }
                             samples
@@ -333,8 +349,7 @@ impl Backend for MixerBackend {
         });
     }
     fn stopped(&mut self, channel: ChannelId) -> bool {
-        self.mixer
-            .lock()
+        lock(&self.mixer)
             .map(|m| {
                 m.channels
                     .get(&channel)
@@ -534,7 +549,7 @@ fn build_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
         &config.config(),
         move |data: &mut [T], _| {
             scratch.resize(data.len(), 0.0f32);
-            if let Ok(mut m) = mixer.lock() {
+            if let Ok(mut m) = lock(&mixer) {
                 mix(&mut m, &mut scratch, channels, rate);
             } else {
                 scratch.fill(0.0);
@@ -743,7 +758,7 @@ impl Audio {
     pub fn set_listener(&mut self, position: [f64; 3], yaw: f32, pitch: f32) {
         self.listener = position;
         self.listener_yaw = yaw;
-        if let Ok(mut m) = self.backend.mixer.lock() {
+        if let Ok(mut m) = lock(&self.backend.mixer) {
             m.listener = position;
             m.listener_yaw = yaw;
             m.listener_pitch = pitch;
@@ -791,7 +806,7 @@ impl Audio {
         self.stop_all();
         self.engine.registry = SoundRegistry::load(root);
         self.backend.root = root.to_owned();
-        let mut cache = self.backend.cache.lock().unwrap();
+        let mut cache = lock(&self.backend.cache).unwrap();
         cache.entries.clear();
         cache.bytes = 0;
     }
@@ -893,13 +908,10 @@ impl Audio {
     /// The engine's table sizes and the mixer's channels (`status`).
     pub fn census(&self) -> serde_json::Value {
         let mut census = self.engine.census();
-        census["channels"] = self
-            .backend
-            .mixer
-            .lock()
+        census["channels"] = lock(&self.backend.mixer)
             .map_or(0, |m| m.channels.len())
             .into();
-        if let Ok(cache) = self.backend.cache.lock() {
+        if let Ok(cache) = lock(&self.backend.cache) {
             census["decoded"] = cache.entries.len().into();
             census["decoded_mib"] = (cache.bytes >> 20).into();
         }

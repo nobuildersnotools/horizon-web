@@ -1,6 +1,7 @@
 // Loads the game, installs the prepared resources and the player's saved
 // files in its virtual filesystem, then starts it and keeps saving the
 // player's files in the browser's storage (OPFS).
+import "./audio.js"; // before the game's glue, which keeps the AudioContext it finds
 import init, {
     horizon_install_manifest,
     horizon_install_saved_dir,
