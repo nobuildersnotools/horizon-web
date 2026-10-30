@@ -25,7 +25,7 @@ struct Channel {
 }
 impl Channel {
     fn close(&self) {
-        self.state.lock().unwrap().1 = true;
+        horizon_os::sync::lock(&self.state).unwrap().1 = true;
         self.ready.notify_all();
     }
 }
@@ -60,7 +60,7 @@ impl Pipe {
     fn try_clone(&self) -> Self {
         Self {
             end: self.end.clone(),
-            timeout: Mutex::new(*self.timeout.lock().unwrap()),
+            timeout: Mutex::new(*horizon_os::sync::lock(&self.timeout).unwrap()),
         }
     }
     /// Close both directions: reads at either end then see the end of the stream.
@@ -94,7 +94,8 @@ impl Read for Pipe {
 }
 impl Write for Pipe {
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        let mut state = self.end.outgoing.state.lock().unwrap();
+        // The page writes here while the other end's worker reads.
+        let mut state = horizon_os::sync::lock(&self.end.outgoing.state).unwrap();
         if state.1 {
             return Err(std::io::ErrorKind::BrokenPipe.into());
         }
@@ -134,7 +135,7 @@ impl Stream {
         match self {
             Self::Tcp(s) => s.set_read_timeout(timeout),
             Self::Memory(p) => {
-                *p.timeout.lock().unwrap() = timeout;
+                *horizon_os::sync::lock(&p.timeout).unwrap() = timeout;
                 Ok(())
             }
             Self::WebSocket(s) => s.stream().set_read_timeout(timeout),

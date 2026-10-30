@@ -276,6 +276,26 @@ impl FramerateLimiter {
     pub fn last_frame_time(&self) -> i64 {
         self.last_frame_time
     }
+    /// The browser page's limiter, in place of [`Self::limit_display_fps`],
+    /// which would spin there (the browser traps a wait on the page's
+    /// thread). Animation frames pace the page; this says whether the one
+    /// at `now_ns` is drawn, skipping those that come before the limit's slot.
+    /// `last_frame_time` holds the next slot's start. Frames come at the
+    /// display's steady rate, a little early or late, so one up to a quarter
+    /// of a slot (2 ms at most) early takes the slot. The slots keep their
+    /// pace; after a frame more than half a slot late they restart from it,
+    /// so no frames bunch up to catch up.
+    pub fn frame_due(&mut self, framerate_limit: i32, now_ns: i64) -> bool {
+        if framerate_limit >= 260 {
+            return true;
+        }
+        let slot = 1_000_000_000 / i64::from(framerate_limit.max(1));
+        if now_ns < self.last_frame_time - (slot / 4).min(2_000_000) {
+            return false;
+        }
+        self.last_frame_time = (self.last_frame_time + slot).max(now_ns + slot / 2);
+        true
+    }
 }
 
 /// blaze3d `Window`'s `fullscreenRequested` / `fullscreen` pair. The window
@@ -411,6 +431,29 @@ mod tests {
         limiter.limit_display_fps(100, &mut clock);
         assert!(clock.now >= 10_000_000);
         assert!(clock.now < 10_000_000 + 1_000_000);
+    }
+    /// How many of `seconds` of a display's frames at `hz` a page draws under `limit`.
+    fn page_frames(limit: i32, hz: i64, seconds: i64) -> i64 {
+        let mut limiter = FramerateLimiter::new(0);
+        let interval = 1_000_000_000 / hz;
+        (0..hz * seconds)
+            .filter(|i| limiter.frame_due(limit, i * interval))
+            .count() as i64
+    }
+    #[test]
+    fn page_limiter_skips_animation_frames_to_the_limit() {
+        // A 60 cap on a 144 Hz display: some 60 of every 144 frames.
+        assert!((page_frames(60, 144, 10) - 600).abs() <= 10);
+        assert!((page_frames(30, 60, 10) - 300).abs() <= 2);
+        // A limit at or above the display's rate draws every frame.
+        assert_eq!(page_frames(60, 60, 10), 600);
+        assert_eq!(page_frames(120, 60, 10), 600);
+        assert_eq!(page_frames(260, 144, 1), 144);
+        // A frame late by more than a slot starts the next slot: no burst after it.
+        let mut limiter = FramerateLimiter::new(0);
+        assert!(limiter.frame_due(60, 0));
+        assert!(limiter.frame_due(60, 100_000_000));
+        assert!(!limiter.frame_due(60, 105_000_000));
     }
     #[test]
     fn vsync_only_uses_fifo() {

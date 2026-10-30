@@ -17,6 +17,8 @@ wasm-bindgen = "0.2.129"
 js-sys = "0.3.106"
 # chrono's clock reads the browser's Date (std's clock panics on the web).
 chrono = { version = "0.4", default-features = false, features = ["clock", "wasmbind"] }
+# Unpacks the resource packs fetched when one of their files is first read.
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 
 [lints]
 workspace = true

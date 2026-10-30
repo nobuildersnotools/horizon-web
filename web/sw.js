@@ -1,7 +1,7 @@
-// Keeps the game's files for later visits. The two large ones, the
-// WebAssembly and the boot archive, are asked for with their content hash
-// (`?v=…`, from build.json) and come from the cache once stored, until a build
-// changes them; the rest goes to the network first and falls back to the cache
+// Keeps the game's files for later visits. The large ones, the WebAssembly,
+// the boot archive (their hashes from build.json) and the world generator's
+// packs (from manifest.txt), are asked for with their content hash (`?v=…`)
+// and come from the cache once stored, until a build changes them; the rest goes to the network first and falls back to the cache
 // offline. Files the game fetches when it reads them (fs/res/) aren't kept.
 const CACHE = "horizon";
 

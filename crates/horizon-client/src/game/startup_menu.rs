@@ -264,14 +264,16 @@ pub(super) fn spawn_loader(
         .map_err(|error| error.to_string());
         let _ = sender.send(LoaderMsg::Done(result));
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    // On the page, a worker: the renderer opens and the loading screen draws
+    // while it loads.
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let handle = Some(
         horizon_os::thread::Builder::new()
             .name("resource-loader".into())
             .spawn(work)?,
     );
-    // No threads on the page yet: load now, before the window opens.
-    #[cfg(target_arch = "wasm32")]
+    // No threads on the page: load now, before the window opens.
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     let handle = {
         work();
         None

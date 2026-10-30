@@ -81,10 +81,25 @@ world `Test` in creative mode at start.
   everything the game reads to reach the title screen and open a world into
   `boot.tar.gz` (about 15 MB). The rest (other languages, the world generator's
   bundle) is listed in `manifest.txt` and fetched the first time it is read.
+  The world generator's folders are read together, some 500 files when a
+  world starts, so `bundle.py` also packs each whole (`worldgen.tar.gz`, 4 MB
+  for 34 MB of files): the manifest names the pack for each of its files, and
+  the first read fetches and unpacks all of them in one request (each file
+  alone if that fails). With 40 ms of latency a new world's player spawned
+  12 s after the title's first frame with a request per file, 4 s with the pack.
 - **Startup** (`web/main.js`): check for WebGPU, start the service worker, load
   the WebAssembly, download and install the archive, load the player's saved
-  files, then `horizon_start()`. The first renderer opens asynchronously
-  (`Loading::resumed`), because the page can't wait for the GPU.
+  files, then `horizon_start()`. The resources load on a worker, as on native,
+  while the first renderer opens asynchronously (`Loading::resumed`, because
+  the page can't wait for the GPU) and the loading screen draws: it shows
+  0.4 s after start instead of after the 1.5 s load.
+- **Frame pacing**: the page never polls winit's loop (`ControlFlow::Poll`
+  turned it some 100,000 times a second between animation frames, a whole
+  core): after each frame it asks for the next and waits for it
+  (`web_wait`). The frame limiter can't wait on the page either, so instead
+  of `limit_display_fps` the redraw skips the animation frames that come
+  before the limit's slot (`FramerateLimiter::frame_due`). In a world at
+  60 fps the page's thread is busy about 60–100 ms a second.
 - **Threads** (`horizon-os/src/workers.rs`, `web/worker.js`): the module is
   built with atomics on a shared memory (std rebuilt on nightly, the linker's
   `--shared-memory`). Each spawned thread is a module worker that instantiates
@@ -98,7 +113,9 @@ world `Test` in creative mode at start.
   briefly, which traps on the page (`Atomics.wait cannot be called in this
   context`; winit swallows it and the frame loop stops). Those locks go through
   `horizon_os::sync::lock` and `write`, which spin on the page instead: the
-  chunk queue and the virtual filesystem so far.
+  chunk queue, the virtual filesystem, and the single-player connection's
+  in-memory pipe and writer (the page's packets and the network thread's
+  keep-alives).
 - **Single player** runs as on native: the server thread, its local connection
   and the client's network thread are Web Workers. The window's calls into its
   server (`Integrated::call`) spin on the page for the reply

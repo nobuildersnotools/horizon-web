@@ -67,7 +67,7 @@ mod web {
         ffi::OsString,
         io::{self, Read, Seek, SeekFrom, Write},
         path::{Component, Path, PathBuf},
-        sync::{LazyLock, Mutex, MutexGuard},
+        sync::{Arc, LazyLock, Mutex, MutexGuard},
         time::Duration,
     };
     use wasm_bindgen::prelude::*;
@@ -102,9 +102,11 @@ export function horizon_fetch_sync(url) {
             data: Vec<u8>,
             modified: SystemTime,
         },
-        /// Listed by the manifest, fetched on first read.
+        /// Listed by the manifest, fetched on first read: alone, or with the
+        /// rest of its pack (a `.tar.gz` of many files, one request).
         Remote {
             len: u64,
+            pack: Option<Arc<str>>,
         },
     }
 
@@ -141,9 +143,23 @@ export function horizon_fetch_sync(url) {
         crate::sync::lock(&VFS).unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The packs asked for: a second reader of one waits for the first fetch
+    /// instead of fetching it again; `true` once that fetch failed.
+    static PACKS: Mutex<BTreeMap<String, Arc<Mutex<bool>>>> = Mutex::new(BTreeMap::new());
+
     /// Fetches a manifest file before it is read, without holding the
     /// filesystem's lock: another thread's reads go on during the request.
     fn prefetch(key: &str) {
+        let pack = match vfs().nodes.get(key) {
+            Some(Node::Remote {
+                pack: Some(pack), ..
+            }) => Some(pack.clone()),
+            _ => None,
+        };
+        if let Some(pack) = pack {
+            fetch_pack(&pack);
+            return;
+        }
         let Some(url) = remote_url(&vfs(), key) else {
             return;
         };
@@ -158,6 +174,44 @@ export function horizon_fetch_sync(url) {
                     },
                 );
             }
+        }
+    }
+
+    /// Fetches the pack `rel` (a `.tar.gz`, from the manifest's base) once and
+    /// installs its files that are still waiting to be fetched. After a
+    /// failed fetch each of them is fetched alone when read.
+    fn fetch_pack(rel: &str) {
+        let gate = crate::sync::lock(&PACKS)
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(rel.to_owned())
+            .or_default()
+            .clone();
+        let mut failed = crate::sync::lock(&gate).unwrap_or_else(|e| e.into_inner());
+        if *failed
+            || !vfs()
+                .nodes
+                .values()
+                .any(|n| matches!(n, Node::Remote { pack: Some(p), .. } if &**p == rel))
+        {
+            // Installed while this thread waited, or each file is fetched alone.
+            return;
+        }
+        *failed = true;
+        let (root, base) = crate::sync::lock(&REMOTE)
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let url = format!("{base}{rel}");
+        let Some(gz) = horizon_fetch_sync(&url) else {
+            return;
+        };
+        let mut tar = Vec::new();
+        if let Err(e) = flate2::read::GzDecoder::new(&gz[..]).read_to_end(&mut tar) {
+            crate::web::console(2, &format!("Horizon: {url}: {e}"));
+            return;
+        }
+        match install_tar_files(&root, &tar, true) {
+            Ok(_) => *failed = false,
+            Err(e) => crate::web::console(2, &format!("Horizon: {url}: {e}")),
         }
     }
 
@@ -282,6 +336,12 @@ export function horizon_fetch_sync(url) {
     /// Adds every file of a tar archive (ustar, as `tar -c` writes it) under
     /// `root`.
     pub fn install_tar(root: &str, tar: &[u8]) -> io::Result<usize> {
+        install_tar_files(root, tar, false)
+    }
+
+    /// [`install_tar`]; with `only_remote`, only the files still waiting to be
+    /// fetched, so none the game wrote or already has is replaced.
+    fn install_tar_files(root: &str, tar: &[u8], only_remote: bool) -> io::Result<usize> {
         let invalid = |what: &str| io::Error::new(io::ErrorKind::InvalidData, what.to_owned());
         let field = |b: &[u8]| {
             let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
@@ -322,14 +382,17 @@ export function horizon_fetch_sync(url) {
             match kind {
                 b'L' => long_name = Some(field(content)),
                 b'0' | 0 => {
-                    vfs.put(
-                        key(&Path::new(root).join(&name)),
-                        Node::File {
-                            data: content.to_vec(),
-                            modified: SystemTime::now(),
-                        },
-                    );
-                    count += 1;
+                    let k = key(&Path::new(root).join(&name));
+                    if !only_remote || matches!(vfs.nodes.get(&k), Some(Node::Remote { .. })) {
+                        vfs.put(
+                            k,
+                            Node::File {
+                                data: content.to_vec(),
+                                modified: SystemTime::now(),
+                            },
+                        );
+                        count += 1;
+                    }
                 }
                 b'5' => vfs.mkdirs(&key(&Path::new(root).join(&name))),
                 _ => {}
@@ -340,21 +403,31 @@ export function horizon_fetch_sync(url) {
     }
 
     /// Lists files under `root` to fetch from `base` when first read: one
-    /// path per line, relative to `root`. Files already present are kept.
+    /// path per line, relative to `root`, then a tab and its size, and
+    /// optionally a tab and the pack that holds it (relative to `base`).
+    /// Files already present are kept.
     pub fn install_manifest(root: &str, base: &str, manifest: &str) {
         *crate::sync::lock(&REMOTE).unwrap_or_else(|e| e.into_inner()) =
             (key(Path::new(root)), base.to_owned());
         let mut vfs = vfs();
+        let mut packs: Vec<Arc<str>> = Vec::new();
         for line in manifest.lines().filter(|l| !l.is_empty()) {
-            let (path, len) = line.split_once('\t').unwrap_or((line, "0"));
+            let mut fields = line.split('\t');
+            let path = fields.next().unwrap_or(line);
+            let len = fields.next().and_then(|l| l.parse().ok()).unwrap_or(0);
+            // One shared name per pack.
+            let pack = fields
+                .next()
+                .map(|p| match packs.iter().find(|q| &***q == p) {
+                    Some(q) => q.clone(),
+                    None => {
+                        packs.push(p.into());
+                        packs[packs.len() - 1].clone()
+                    }
+                });
             let k = key(&Path::new(root).join(path));
             if !vfs.nodes.contains_key(&k) {
-                vfs.put(
-                    k,
-                    Node::Remote {
-                        len: len.parse().unwrap_or(0),
-                    },
-                );
+                vfs.put(k, Node::Remote { len, pack });
             }
         }
     }
@@ -595,7 +668,7 @@ export function horizon_fetch_sync(url) {
                 len: data.len() as u64,
                 modified: *modified,
             }),
-            Some(Node::Remote { len }) => Ok(Metadata {
+            Some(Node::Remote { len, .. }) => Ok(Metadata {
                 dir: false,
                 len: *len,
                 modified: SystemTime::UNIX_EPOCH,

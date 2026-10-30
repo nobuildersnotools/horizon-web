@@ -247,7 +247,7 @@ impl Session {
         {
             eprintln!("[net] -> {packet:?}");
         }
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = horizon_os::sync::lock(&self.writer).unwrap();
         if self.configuring.load(Ordering::Relaxed) {
             return;
         }
@@ -260,7 +260,7 @@ impl Session {
     /// ServerboundResourcePackPacket, in whichever phase the connection is.
     pub fn send_pack_status(&self, id: u128, action: i32) {
         let status = cfg::ResourcePackResponse { id, action };
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = horizon_os::sync::lock(&self.writer).unwrap();
         let body = if self.configuring.load(Ordering::Relaxed) {
             cfg::Serverbound::ResourcePack(status).encode()
         } else {
@@ -279,7 +279,7 @@ impl Session {
             id: id.to_owned(),
             payload,
         };
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = horizon_os::sync::lock(&self.writer).unwrap();
         let body = if self.configuring.load(Ordering::Relaxed) {
             cfg::Serverbound::CustomClickAction(click).encode()
         } else {
@@ -293,7 +293,7 @@ impl Session {
     }
     /// ServerboundAcceptCodeOfConductPacket, sent in configuration.
     pub fn accept_code_of_conduct(&self) {
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = horizon_os::sync::lock(&self.writer).unwrap();
         if let Some(w) = writer.as_mut()
             && w.send(&cfg::Serverbound::AcceptCodeOfConduct(Empty).encode())
                 .is_err()
@@ -306,7 +306,7 @@ impl Session {
     /// doesn't wake a read already waiting, so joining it held the window until
     /// the server dropped the connection, many seconds later.
     pub fn disconnect(&mut self) {
-        if let Some(w) = self.writer.lock().unwrap().take() {
+        if let Some(w) = horizon_os::sync::lock(&self.writer).unwrap().take() {
             w.shutdown();
         }
         drop(self.thread.take());

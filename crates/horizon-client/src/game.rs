@@ -14479,6 +14479,17 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::RedrawRequested => {
+                    // The page's frame limiter: an animation frame before the
+                    // limit's slot is skipped (`about_to_wait` asks the next).
+                    #[cfg(target_arch = "wasm32")]
+                    if self.options.frames.is_none() {
+                        let now_ns =
+                            horizon_client::window::LimiterClock::nanos(&mut self.frame_clock);
+                        let limit = self.framerate_limit();
+                        if !self.limiter.frame_due(limit, now_ns) {
+                            return Ok(());
+                        }
+                    }
                     self.observe_fullscreen();
                     let now = Instant::now();
                     let frame_cpu = self
@@ -14716,8 +14727,8 @@ impl ApplicationHandler for Game<'_> {
                     if let Some(window) = &self.window {
                         window.request_redraw();
                     }
-                    // Yield between polls even when disk I/O is slow.
-                    #[cfg(not(target_arch = "wasm32"))]
+                    // Yield between polls even when disk I/O is slow (on the
+                    // web, also while a hidden tab gets no frames).
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
                         Instant::now() + Duration::from_millis(4),
                     ));
@@ -14775,7 +14786,13 @@ impl ApplicationHandler for Game<'_> {
                 w.request_redraw();
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
         event_loop.set_control_flow(ControlFlow::Poll);
+        // Polling the browser's loop spins the page's thread (some 100,000
+        // turns a second, a whole core) between animation frames: the redraw
+        // asked above is the next turn, and its frame calls this again.
+        #[cfg(target_arch = "wasm32")]
+        event_loop.set_control_flow(web_wait(self.window.is_some() && !self.options.offscreen));
     }
     /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
     /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
@@ -14787,6 +14804,15 @@ impl ApplicationHandler for Game<'_> {
         }
         self.finish_perf();
     }
+}
+/// How long the page's loop sleeps after `about_to_wait`. With a redraw
+/// asked, its animation frame wakes the loop; the deadline only keeps the
+/// loop turning while the tab is hidden and gets no frames. Without one,
+/// nothing may wake the loop, so it looks again in 4 ms.
+#[cfg(target_arch = "wasm32")]
+fn web_wait(redraw_asked: bool) -> ControlFlow {
+    let after = if redraw_asked { 100 } else { 4 };
+    ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(after))
 }
 /// clouds.png as filled cells (`CloudRenderer.prepare`: alpha 10 or more).
 fn load_clouds(root: &std::path::Path) -> (u32, u32, Vec<bool>) {
@@ -16488,7 +16514,8 @@ impl Loading {
         #[cfg(target_arch = "wasm32")]
         if let Some(slot) = &self.opening {
             let Some(opened) = slot.borrow_mut().take() else {
-                event_loop.set_control_flow(ControlFlow::Poll);
+                // Nothing wakes the loop when the GPU answers: look again shortly.
+                event_loop.set_control_flow(web_wait(false));
                 return;
             };
             self.opening = None;
@@ -16517,7 +16544,12 @@ impl Loading {
                 w.request_redraw();
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
         event_loop.set_control_flow(ControlFlow::Poll);
+        #[cfg(target_arch = "wasm32")]
+        event_loop.set_control_flow(web_wait(
+            self.window.is_some() && !self.options.as_ref().is_some_and(|o| o.offscreen),
+        ));
     }
     fn draw(&mut self) {
         let Some(size) = self

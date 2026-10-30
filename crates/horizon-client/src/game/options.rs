@@ -394,7 +394,9 @@ impl Game<'_> {
     /// below 260 frames per second, sleeping then spin-waiting until the
     /// frame's slot ends (not in scripted frame-count runs).
     pub(super) fn limit_frame(&mut self) {
-        if self.options.frames.is_some() {
+        // The page may not wait: its redraws skip the frames before the
+        // limit's slot instead (`FramerateLimiter::frame_due`).
+        if self.options.frames.is_some() || cfg!(target_arch = "wasm32") {
             return;
         }
         let limit = self.framerate_limit();
