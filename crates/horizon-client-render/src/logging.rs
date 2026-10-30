@@ -11,7 +11,8 @@
 // The page logs to the browser's console: the file writer is native only.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 use horizon_os::fs::{self, File, OpenOptions};
-use std::collections::VecDeque;
+use horizon_os::time::{Duration, Instant};
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
@@ -22,6 +23,11 @@ use chrono::{DateTime, Local, NaiveDate};
 pub const MAX_ARCHIVES_PER_DAY: u32 = 7;
 /// Formatted lines kept in memory for crash reports.
 const RECENT: usize = 50;
+/// Warnings and errors one line of code may log in a [`FLOOD_WINDOW`]; past that they are counted,
+/// not written, so a warning repeated every packet can't fill the disk. Vanilla has no such limit:
+/// below it the log is vanilla's, line for line.
+const FLOOD_LINES: u32 = 100;
+const FLOOD_WINDOW: Duration = Duration::from_secs(60);
 
 /// The platform data folder (what the `dirs` crate's data_dir gives).
 pub fn data_dir() -> PathBuf {
@@ -285,6 +291,59 @@ struct Logger {
     /// What the main thread is called in the log: "Render thread", or "Server thread" for the
     /// dedicated server, as in vanilla.
     main_thread: &'static str,
+    floods: Mutex<Floods>,
+}
+
+/// What the flood limit does with one warning or error.
+#[derive(Debug, PartialEq, Eq)]
+enum Gate {
+    /// Write it, after saying how many lines like it were left out in the window before.
+    Write {
+        left_out: u32,
+    },
+    /// Write it, then say the next ones from this line of code wait for the next window.
+    Last,
+    Skip,
+}
+
+/// Warnings and errors per line of code, in windows of [`FLOOD_WINDOW`].
+#[derive(Default)]
+struct Floods {
+    sites: HashMap<(String, u32), Flood>,
+}
+
+struct Flood {
+    since: Instant,
+    written: u32,
+    left_out: u32,
+}
+
+impl Floods {
+    fn gate(&mut self, file: &str, line: u32, now: Instant) -> Gate {
+        let flood = self.sites.entry((file.to_owned(), line)).or_insert(Flood {
+            since: now,
+            written: 0,
+            left_out: 0,
+        });
+        let mut left_out = 0;
+        if now.duration_since(flood.since) >= FLOOD_WINDOW {
+            left_out = flood.left_out;
+            *flood = Flood {
+                since: now,
+                written: 0,
+                left_out: 0,
+            };
+        }
+        flood.written += 1;
+        match flood.written.cmp(&FLOOD_LINES) {
+            std::cmp::Ordering::Less => Gate::Write { left_out },
+            std::cmp::Ordering::Equal => Gate::Last,
+            std::cmp::Ordering::Greater => {
+                flood.left_out += 1;
+                Gate::Skip
+            }
+        }
+    }
 }
 
 static LOGGER: std::sync::OnceLock<Logger> = std::sync::OnceLock::new();
@@ -310,8 +369,37 @@ impl log::Log for Logger {
             Some(name) => name,
             None => "unnamed",
         };
+        let gate = if record.level() <= log::Level::Warn {
+            let mut floods = self.floods.lock().unwrap_or_else(|e| e.into_inner());
+            floods.gate(
+                record.file().unwrap_or(record.target()),
+                record.line().unwrap_or(0),
+                Instant::now(),
+            )
+        } else {
+            Gate::Write { left_out: 0 }
+        };
+        let level = record.level();
+        match gate {
+            Gate::Skip => return,
+            Gate::Write { left_out } if left_out > 0 => self.write(
+                thread,
+                level,
+                &format!(
+                    "{left_out} more lines like the next one were not logged in the last minute"
+                ),
+            ),
+            _ => {}
+        }
         let stderr = ours(record.target()).then(|| message.clone());
-        self.send(thread, record.level(), &message, stderr);
+        self.send(thread, level, &message, stderr);
+        if gate == Gate::Last {
+            self.write(
+                thread,
+                level,
+                &format!("{FLOOD_LINES} lines like this one in a minute: the next ones are counted, not logged"),
+            );
+        }
     }
 
     /// Waits (a second at most) until every line logged before is in the file.
@@ -419,6 +507,7 @@ fn init_file(home: &Path, main_thread: &'static str) {
             out,
             recent: Mutex::new(VecDeque::new()),
             main_thread,
+            floods: Mutex::new(Floods::default()),
         }
     });
     if log::set_logger(logger).is_ok() {
@@ -519,6 +608,35 @@ pub fn newest_crash_report(home: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_warning_repeated_every_packet_is_counted_past_a_hundred_a_minute() {
+        let (mut floods, start) = (Floods::default(), Instant::now());
+        let gates: Vec<Gate> = (0..140)
+            .map(|i| floods.gate("lan_vehicles.rs", 345, start + Duration::from_millis(i * 7)))
+            .collect();
+        assert!(
+            gates[..99]
+                .iter()
+                .all(|g| *g == Gate::Write { left_out: 0 })
+        );
+        assert_eq!(gates[99], Gate::Last);
+        assert!(gates[100..].iter().all(|g| *g == Gate::Skip));
+        // Another line of code has its own count.
+        assert_eq!(
+            floods.gate("lan_vehicles.rs", 330, start),
+            Gate::Write { left_out: 0 }
+        );
+        // The next minute writes again, and says how many were left out.
+        assert_eq!(
+            floods.gate("lan_vehicles.rs", 345, start + FLOOD_WINDOW),
+            Gate::Write { left_out: 40 }
+        );
+        assert_eq!(
+            floods.gate("lan_vehicles.rs", 345, start + FLOOD_WINDOW),
+            Gate::Write { left_out: 0 }
+        );
+    }
 
     fn day(d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, d).unwrap()

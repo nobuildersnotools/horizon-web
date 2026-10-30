@@ -106,6 +106,7 @@ pub(super) fn buttons(state: &State, w: f32, h: f32) -> Vec<Button> {
         enabled,
         id,
         icon: None,
+        trailing: None,
     };
     let arms = if state.profile.slim {
         "Arms: Slim"
@@ -271,6 +272,12 @@ fn pick(kind: &str, state: &mut State) {
         let _ = kind;
         state.message = Some("Pictures are imported in the browser build.".into());
     }
+}
+
+/// No profile is saved yet: Edit Profile makes the first.
+#[cfg(target_arch = "wasm32")]
+pub(super) fn first_launch() -> bool {
+    profile::load(&dir()).is_none()
 }
 
 impl Title {

@@ -422,6 +422,7 @@ impl Game<'_> {
             Screen::ConfirmLink => "confirm-link",
             Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
+            Screen::BlockEditor => "block-editor",
             Screen::Win => "win",
         }
     }
@@ -626,6 +627,7 @@ impl Game<'_> {
                 json!({ "mode": "multiplayer-warning", "check": check })
             }
             Mode::Profile(state) => json!({ "mode": "edit-profile", "name": state.profile.name }),
+            Mode::Onboarding(_) => json!({ "mode": "accessibility-onboarding" }),
         }
     }
 
