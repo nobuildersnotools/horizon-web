@@ -334,13 +334,20 @@ impl Settings {
                 mods,
                 ..Self::parse(&String::from_utf8_lossy(&bytes))
             },
-            Err(_) => Self {
-                horizon,
-                controller,
-                extras,
-                mods,
-                ..Self::default()
-            },
+            Err(_) => {
+                #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+                let mut settings = Self {
+                    horizon,
+                    controller,
+                    extras,
+                    mods,
+                    ..Self::default()
+                };
+                // The browser's first start picks the Performance preset.
+                #[cfg(target_arch = "wasm32")]
+                crate::graphics::apply_preset(crate::graphics::Preset::Performance, &mut settings);
+                settings
+            }
         };
         settings.describe_for_crashes();
         settings

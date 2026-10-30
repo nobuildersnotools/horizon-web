@@ -736,7 +736,9 @@ impl Game<'_> {
             board,
             objective,
             screen_width: batch.width as i32,
-            online_mode,
+            // The browser joins only offline-mode servers, where vanilla hides
+            // the heads: the web shows them anyway.
+            online_mode: online_mode || cfg!(target_arch = "wasm32"),
             gui_ticks: self.ticks as i64,
             // Horizon has no "chat background only" option: vanilla's default (on).
             background: tab_list::row_background(

@@ -26,6 +26,10 @@ function lock(canvas) {
         if (p && p.catch) p.catch(() => {});
     } catch (e) {}
 }
+export function horizon_pointer_locked() {
+    const canvas = document.querySelector("canvas");
+    return !!canvas && document.pointerLockElement === canvas;
+}
 export function horizon_pointer_lock(want) {
     wantLock = want;
     const canvas = document.querySelector("canvas");
@@ -39,9 +43,27 @@ export function horizon_pointer_lock(want) {
     }
     if (hooked !== canvas) {
         hooked = canvas;
-        canvas.addEventListener("mousedown", () => {
-            if (wantLock && document.pointerLockElement !== canvas) lock(canvas);
-        });
+        // Browsers refuse the lock asked with Escape (no user gesture), and for
+        // a moment after Escape let it go: the game then waits for the next
+        // click or key. The click that takes the lock only takes the lock, so
+        // it doesn't swing a sword.
+        let swallowUp = false;
+        window.addEventListener("pointerdown", (e) => {
+            if (wantLock && e.target === canvas && document.pointerLockElement !== canvas) {
+                lock(canvas);
+                swallowUp = true;
+                e.stopImmediatePropagation();
+            }
+        }, true);
+        window.addEventListener("pointerup", (e) => {
+            if (swallowUp) {
+                swallowUp = false;
+                e.stopImmediatePropagation();
+            }
+        }, true);
+        window.addEventListener("keydown", (e) => {
+            if (wantLock && e.key !== "Escape" && document.pointerLockElement !== canvas) lock(canvas);
+        }, true);
     }
     if (want) {
         if (document.pointerLockElement !== canvas) lock(canvas);
@@ -73,6 +95,7 @@ extern "C" {
     fn horizon_console(level: u32, message: &str);
     fn horizon_pointer_lock(want: bool);
     fn horizon_pointer_lock_lost() -> bool;
+    fn horizon_pointer_locked() -> bool;
 }
 
 static START: Mutex<Option<fn()>> = Mutex::new(None);
@@ -170,6 +193,12 @@ pub fn console(level: u32, message: &str) {
 /// the player's next click.
 pub fn pointer_lock(want: bool) {
     horizon_pointer_lock(want);
+}
+
+/// Whether the browser holds the pointer for the game's canvas now. Until it
+/// does, the pointer moves freely and its motion must not turn the view.
+pub fn pointer_locked() -> bool {
+    horizon_pointer_locked()
 }
 
 /// Whether the browser let the pointer go while the game held it (the

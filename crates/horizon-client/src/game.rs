@@ -14724,8 +14724,15 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        // A lock the browser refused (resuming with Escape) leaves the pointer
+        // free: its motion stops at the screen's edge, so it doesn't turn.
+        #[cfg(target_arch = "wasm32")]
+        let locked = horizon_os::web::pointer_locked();
+        #[cfg(not(target_arch = "wasm32"))]
+        let locked = true;
         if self.pending_save.is_none()
             && self.captured
+            && locked
             && self.focused
             && self.screen == Screen::Playing
             && let DeviceEvent::MouseMotion { delta: (x, y) } = event
