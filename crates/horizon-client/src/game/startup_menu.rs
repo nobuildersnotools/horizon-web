@@ -296,11 +296,12 @@ impl Loading {
                     Err(TryRecvError::Disconnected) => {
                         // The loader sends `Done` before it returns: it panicked.
                         let reason = match self.handle.take().map(JoinHandle::join) {
-                            Some(Err(payload)) => format!(": {}", panic_text(payload.as_ref())),
-                            _ => String::new(),
+                            Some(Err(payload)) => panic_text(payload.as_ref()).to_owned(),
+                            Some(Ok(())) => "it returned without a result".into(),
+                            None => "no loader thread was running".into(),
                         };
                         return Err(
-                            format!("resource loader stopped before finishing{reason}").into()
+                            format!("resource loader stopped before finishing: {reason}").into(),
                         );
                     }
                 }
@@ -446,8 +447,9 @@ impl Loading {
                 }
                 // Mods' settings pages open only in a running game.
                 Event::NativeSettings(_) | Event::NativeButton(..) => {}
-                // The startup menu runs before the game opens a control socket.
-                Event::ButtonClick | Event::CopyAgentDetails => {}
+                // The startup menu runs before the game opens a control socket,
+                // and before its sound engine (no clicks, no volume previews).
+                Event::ButtonClick | Event::CopyAgentDetails | Event::Volume(..) => {}
             }
         }
     }
@@ -898,7 +900,7 @@ mod tests {
         let mut loading = loading(receiver);
         assert_eq!(
             loading.poll_menu_resources().unwrap_err().to_string(),
-            "resource loader stopped before finishing"
+            "resource loader stopped before finishing: no loader thread was running"
         );
     }
 }
