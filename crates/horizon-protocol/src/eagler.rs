@@ -311,8 +311,20 @@ impl EaglerSocket {
                 None => return Err(io::ErrorKind::UnexpectedEof.into()),
             }
         };
+        // A server with an icon sends it next, as a message of its own.
+        let mut icon = None;
+        if serde_json::from_str::<serde_json::Value>(&reply)
+            .is_ok_and(|r| r["data"]["icon"] == true)
+        {
+            while let Ok(Some(message)) = self.socket.recv() {
+                if let Message::Binary(pixels) = message {
+                    icon = Some(pixels);
+                    break;
+                }
+            }
+        }
         let protocol = self.shared().protocol;
-        Ok(status_json(&reply, protocol).to_string())
+        Ok(status_json(&reply, protocol, icon.as_deref()).to_string())
     }
 }
 
@@ -384,8 +396,8 @@ fn refusal(reply: &[u8]) -> Result<(), String> {
 }
 
 /// `{"type":"motd","data":{"motd":[..],"online":n,"max":n,"players":[..]}}`
-/// as a vanilla status.
-fn status_json(reply: &str, protocol: i32) -> serde_json::Value {
+/// as a vanilla status, with the icon's pixels (64×64, RGBA) as its favicon.
+fn status_json(reply: &str, protocol: i32, icon: Option<&[u8]>) -> serde_json::Value {
     let reply: serde_json::Value = serde_json::from_str(reply).unwrap_or_default();
     let data = &reply["data"];
     let motd = data["motd"]
@@ -405,7 +417,7 @@ fn status_json(reply: &str, protocol: i32) -> serde_json::Value {
         .filter_map(|p| p.as_str())
         .map(|name| serde_json::json!({ "name": name, "id": "00000000-0000-0000-0000-000000000000" }))
         .collect();
-    serde_json::json!({
+    let mut status = serde_json::json!({
         "version": { "name": reply["name"].as_str().unwrap_or("Eaglercraft"), "protocol": protocol },
         "players": {
             "online": data["online"].as_i64().unwrap_or(0),
@@ -413,7 +425,47 @@ fn status_json(reply: &str, protocol: i32) -> serde_json::Value {
             "sample": sample,
         },
         "description": { "text": motd },
-    })
+    });
+    if let Some(pixels) = icon.filter(|p| p.len() == ICON_BYTES) {
+        let png = crate::websocket::base64(&png(64, 64, pixels));
+        status["favicon"] = format!("data:image/png;base64,{png}").into();
+    }
+    status
+}
+
+/// The MOTD's icon: 64×64 pixels, four bytes each (red, green, blue, alpha).
+const ICON_BYTES: usize = 64 * 64 * 4;
+
+/// `rgba` pixels as a PNG, the form a vanilla status carries its favicon in.
+fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+    // Each row starts with its filter type: none.
+    let mut rows = Vec::with_capacity(rgba.len() + height as usize);
+    for row in rgba.chunks_exact(width as usize * 4) {
+        rows.push(0);
+        rows.extend_from_slice(row);
+    }
+    let mut zlib = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let _ = zlib.write_all(&rows);
+    let data = zlib.finish().unwrap_or_default();
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8; 4], body: &[u8]| {
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(body);
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        out.extend_from_slice(&crc.sum().to_be_bytes());
+    };
+    let mut header = [0; 13];
+    header[..4].copy_from_slice(&width.to_be_bytes());
+    header[4..8].copy_from_slice(&height.to_be_bytes());
+    // 8-bit RGBA, deflate, adaptive filtering, no interlace.
+    header[8..].copy_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(b"IHDR", &header);
+    chunk(b"IDAT", &data);
+    chunk(b"IEND", &[]);
+    out
 }
 
 /// A skin as the plugin carries it (`skin_v2`'s pixels): 64×64, three bytes
@@ -851,6 +903,45 @@ mod tests {
             server.sent.lock().unwrap()[..],
             [Message::Text("Accept: motd".into())]
         );
+    }
+
+    #[test]
+    fn the_motd_icon_becomes_the_favicon() {
+        let pixels: Vec<u8> = (0..ICON_BYTES).map(|i| i as u8).collect();
+        let (mut c, _server) = connection(vec![
+            Message::Text(r#"{"type":"motd","data":{"motd":["A"],"icon":true}}"#.into()),
+            Message::Binary(pixels.clone()),
+        ]);
+        c.send(&intention(handshake::STATUS)).unwrap();
+        c.send(&status::Serverbound::StatusRequest(crate::packets::Empty).encode())
+            .unwrap();
+        let (id, payload) = c.recv().unwrap();
+        let status::Clientbound::StatusResponse(s) =
+            status::Clientbound::decode(id, &payload).unwrap()
+        else {
+            panic!()
+        };
+        let json: serde_json::Value = serde_json::from_str(&s.json).unwrap();
+        let favicon = json["favicon"].as_str().unwrap();
+        let encoded = favicon.strip_prefix("data:image/png;base64,").unwrap();
+        assert_eq!(encoded, crate::websocket::base64(&png(64, 64, &pixels)));
+
+        // The PNG: its signature, a 64×64 RGBA header, and the rows behind filter bytes.
+        let png = png(64, 64, &pixels);
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&png[12..16], b"IHDR");
+        assert_eq!(&png[16..29], &[0, 0, 0, 64, 0, 0, 0, 64, 8, 6, 0, 0, 0]);
+        let idat = u32::from_be_bytes(png[33..37].try_into().unwrap()) as usize;
+        assert_eq!(&png[37..41], b"IDAT");
+        let mut rows = Vec::new();
+        flate2::read::ZlibDecoder::new(&png[41..41 + idat])
+            .read_to_end(&mut rows)
+            .unwrap();
+        assert_eq!(rows.len(), 64 * (1 + 64 * 4));
+        for (row, expected) in rows.chunks(1 + 64 * 4).zip(pixels.chunks(64 * 4)) {
+            assert_eq!((row[0], &row[1..]), (0, expected));
+        }
+        assert!(png.ends_with(b"IEND\xae\x42\x60\x82"));
     }
 
     #[test]
