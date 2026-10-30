@@ -169,6 +169,8 @@ mod server_links;
 mod server_packs;
 mod server_travel;
 mod shader_packs;
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+mod shared_world;
 mod shelf;
 mod shield;
 mod shoulders;
@@ -5275,6 +5277,8 @@ impl Game<'_> {
         if self.agent.hold_server {
             return Ok(());
         }
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        self.poll_shared_world();
         self.tick_debug_keys()?;
         self.tick_debug_charts();
         self.tick_tutorial();

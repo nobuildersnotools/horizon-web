@@ -36,7 +36,7 @@ use horizon_protocol::{
 use std::{
     collections::HashSet,
     io,
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering},
@@ -46,6 +46,42 @@ use std::{
 
 /// IntegratedServer.MAX_PLAYERS.
 pub const MAX_PLAYERS: usize = 8;
+
+/// What a world open to the network accepts players on: a TCP socket, or in
+/// the browser (no TCP) a shared world's relay, Eaglercraft's way.
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+pub type Listener = TcpListener;
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub type Listener = horizon_os::net::SharedWorld;
+
+/// The port a shared world counts as published on (it has none).
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub const SHARED_PORT: u16 = 25565;
+
+/// The relays a browser shares worlds on and looks for their codes on:
+/// `sharedWorldRelays` in horizon.txt (comma-separated), else the public
+/// EaglerSPRelays Eaglercraft lists.
+pub fn shared_world_relays() -> Vec<String> {
+    let set = horizon_os::env::current_dir()
+        .ok()
+        .and_then(|dir| crate::ui_theme::preference(&dir, "sharedWorldRelays"))
+        .unwrap_or_default();
+    let set: Vec<String> = set
+        .split(',')
+        .map(|r| r.trim().to_owned())
+        .filter(|r| !r.is_empty())
+        .collect();
+    if !set.is_empty() {
+        return set;
+    }
+    [
+        "wss://relay.lax1dude.net/",
+        "wss://relay.shhnowisnottheti.me/",
+        "wss://relay.deev.is/",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
 
 /// Messages from the connection threads to the game thread.
 pub enum NetEvent {
@@ -452,7 +488,13 @@ impl Lan {
                 "already listening",
             ));
         }
+        #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
         let listener = Self::bind(self.shared.config.bind, port)?;
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        let listener = {
+            let _ = port;
+            Self::share(&self.shared.motd())
+        };
         self.listen_on(listener, announce)
     }
     /// The socket [`Lan::listen`] accepts on, bound ahead so that a failure
@@ -463,15 +505,24 @@ impl Lan {
         listener.set_nonblocking(true)?;
         Ok(listener)
     }
+    /// The browser's [`Lan::bind`]: the world shared on the first relay of
+    /// [`shared_world_relays`] that answers, as `name`.
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    pub fn share(name: &str) -> Listener {
+        horizon_os::net::SharedWorld::open(name, &shared_world_relays())
+    }
     /// [`Lan::listen`] on a socket already bound.
-    pub fn listen_on(&mut self, listener: TcpListener, announce: bool) -> io::Result<u16> {
+    pub fn listen_on(&mut self, listener: Listener, announce: bool) -> io::Result<u16> {
         if self.listener.is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "already listening",
             ));
         }
+        #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
         let port = listener.local_addr()?.port();
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        let port = SHARED_PORT;
         let stop = Arc::new(AtomicBool::new(false));
         let (accept_shared, accept_stop) = (self.shared.clone(), stop.clone());
         let thread = horizon_os::thread::Builder::new()
@@ -536,7 +587,7 @@ impl Drop for Lan {
     }
 }
 
-fn accept_loop(listener: TcpListener, shared: Arc<Shared>, stop: &AtomicBool) {
+fn accept_loop(listener: Listener, shared: Arc<Shared>, stop: &AtomicBool) {
     while !shared.stop.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, addr)) => {
@@ -552,7 +603,15 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, stop: &AtomicBool) {
         }
     }
 }
-fn handle(stream: TcpStream, addr: SocketAddr, shared: Arc<Shared>) {
+/// A player who joined the shared world, over their data channel.
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+fn handle(stream: horizon_os::net::WebSocket, addr: SocketAddr, shared: Arc<Shared>) {
+    if let Err(e) = conn::serve_web(stream, addr, shared) {
+        log::warn!("[lan] shared world player: {e}");
+    }
+}
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+fn handle(stream: std::net::TcpStream, addr: SocketAddr, shared: Arc<Shared>) {
     let _ = stream.set_nonblocking(false);
     if let Err(e) = conn::serve(stream, addr, shared)
         && std::env::var_os("HORIZON_NET_DEBUG").is_some()

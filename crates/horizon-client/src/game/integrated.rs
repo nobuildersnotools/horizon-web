@@ -28,13 +28,10 @@ use horizon_os::thread::JoinHandle;
 use horizon_os::time::{Duration, Instant};
 use horizon_protocol::connection::Pipe;
 use horizon_protocol::{crypto::offline_uuid, text::translatable};
-use std::{
-    net::TcpListener,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
-        mpsc::{Receiver, Sender, channel, sync_channel},
-    },
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
+    mpsc::{Receiver, Sender, channel, sync_channel},
 };
 
 /// What the window tells its server thread.
@@ -161,7 +158,7 @@ impl Serving {
     }
 }
 enum Publish {
-    Open(TcpListener, LanSettings),
+    Open(horizon_client::lan::Listener, LanSettings),
     Close,
 }
 
@@ -642,9 +639,20 @@ impl Game<'_> {
         if s.flags.published.load(Ordering::Relaxed) != 0 {
             return Err("already published".into());
         }
-        let listener = Lan::bind(None, settings.port).map_err(|e| e.to_string())?;
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        log::info!("Published LAN server on port {port}");
+        #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+        let (listener, port) = {
+            let listener = Lan::bind(None, settings.port).map_err(|e| e.to_string())?;
+            let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+            log::info!("Published LAN server on port {port}");
+            (listener, port)
+        };
+        // The browser shares the world through a relay; its code comes later
+        // (shared_world.rs tells the player).
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        let (listener, port) = (
+            Lan::share(&self.level.name),
+            horizon_client::lan::SHARED_PORT,
+        );
         s.flags.published.store(port, Ordering::Relaxed);
         s.pending = Some(Publish::Open(listener, LanSettings { port, ..settings }));
         self.apply_publish();

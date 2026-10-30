@@ -327,6 +327,28 @@ impl Connection {
             )))
         }
     }
+    /// A shared world's host, through a relay that knows its join code
+    /// (horizon-os net.rs); only the browser build has WebRTC.
+    pub fn connect_shared(code: &str, relays: &[String], timeout: Duration) -> Result<Self> {
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        {
+            let socket = horizon_os::net::WebSocket::connect_shared(code, relays, timeout)
+                .map_err(|e| Error::new(e.to_string()))?;
+            Self::over(Stream::Web(socket))
+        }
+        #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+        {
+            let _ = (code, relays, timeout);
+            Err(Error::new(
+                "Shared worlds are joined from the browser build",
+            ))
+        }
+    }
+    /// A player who joined a world this page shares, over their data channel.
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    pub fn from_web(socket: horizon_os::net::WebSocket) -> Result<Self> {
+        Self::over(Stream::Web(socket))
+    }
     /// A connection through the Eaglercraft plugin over a message socket.
     pub fn eagler(socket: Box<dyn crate::eagler::Messages>) -> Result<Self> {
         Self::over(Stream::Eagler(crate::eagler::EaglerSocket::new(socket)))

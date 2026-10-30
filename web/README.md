@@ -3,9 +3,17 @@
 An experimental build of the Horizon client for the web: the same game code
 compiled to WebAssembly, drawing through the browser's WebGPU. It creates and
 opens single-player worlds, joins offline-mode Horizon and Eaglercraft
-servers, plays sound,
-reads controllers, and keeps the worlds and
-the options in the browser's storage (see [What's missing](#whats-missing)).
+servers, shares worlds with other browsers through Eaglercraft's relays,
+plays sound, reads controllers, and keeps the worlds, the player's profile
+and the options in the browser's storage (see [What's missing](#whats-missing)).
+
+As in Eaglercraft, the first screen is **Edit Profile**: the player's name,
+a skin (one of the game's nine default skins with classic or slim arms, or a
+64×64 picture imported from a file) and an imported cape, with the player
+drawn in them. The title screen's Edit Profile button (where Realms is on
+native) opens it again. **Open to LAN** shares the world: the chat gives a
+join code, which other players type in **Join Shared World** (the title
+screen's Friends button).
 
 ## Build and run
 
@@ -157,6 +165,37 @@ world `Test` in creative mode at start.
   query, turned into a vanilla status. Checked against
   `wss://eagler.carrot-craft.org` (EaglercraftXServer 1.1.1 on Velocity):
   login, configuration, play and keep-alives.
+- **Profile** (`horizon-client/src/profile.rs`, `title/profile_screen.rs`):
+  the name is the offline name's line in `horizon-player.txt`, so every join
+  uses it; the skin and cape are more lines there (`skin:steve`,
+  `slim:true`, `cape:true`), with imported pictures in `horizon-skin.png` and
+  `horizon-cape.png`. Importing goes through a file chooser
+  (`horizon_os::web::pick_file`): browsers open one only during a click, so
+  the button asks and the title takes the file a frame later. The skin is
+  worn where the server gives none (`skins::set_own_look`, read by
+  `update_remote_skins`), which is single player's offline server, shared
+  worlds and offline servers. Native never sets it.
+- **Eaglercraft skins**: the login sends the skin and cape as profile data
+  (`skin_v2`: 2, the model, 64×64 pixels packed in 3 bytes; `cape_v1`: 2, the
+  23×17 pixels of the cape that show), so other Eaglercraft players see them.
+  Players the server sends no textures for are asked of the plugin
+  (`0xEE`, CPacketGetOtherTexturesV5EAG); its answers (SPacketOtherTexturesV5EAG)
+  give custom skins and capes, which go to the atlas's skin slots, and preset
+  ids, worn as Steve or Alex (the presets' own pictures aren't here).
+- **Shared worlds** (`horizon_os::net::SharedWorld`, `WebSocket::connect_shared`):
+  Eaglercraft's LAN worlds. The host's page keeps a WebSocket to an
+  EaglerSPRelay (the public `wss://relay.lax1dude.net/`,
+  `wss://relay.shhnowisnottheti.me/` and `wss://relay.deev.is/`, or
+  `sharedWorldRelays` in horizon.txt, which Join Shared World's Relay field
+  sets), which gives the world a join code. A player joining sends the code
+  to each relay in turn until one knows it; the relay passes one offer and
+  one answer (with every ICE candidate in it) between the two pages, and a
+  WebRTC data channel opens between them. The host's LAN server accepts the
+  channel as it accepts a WebSocket (`lan::Listener`, `conn::serve_web`), and
+  both ends carry the game's bytes in pieces of at most 16 KiB. The relay
+  protocol is EaglerSPRelay's version 1; what goes over the channel is
+  Horizon's own, so shared worlds are between Horizon pages, not Eaglercraft
+  1.8 clients.
 - **Chunk work** (`streaming.rs`): chunk workers are Web Workers. Without
   threads (`THREADS=0`), the frame runs queued generation, lighting and meshing
   jobs itself for up to 12 ms per update.
@@ -177,11 +216,16 @@ world `Test` in creative mode at start.
   joins offline-mode servers only. Java servers with neither Horizon nor the
   Eaglercraft plugin take no WebSockets: they need a proxy in front (none
   written yet).
-- **Eaglercraft extras**: no skin or cape is sent (the plugin gives the
-  default ones), the server list shows no icon (the plugin's 64×64 RGBA icon
-  isn't read), Eagler passwords (`authEnabled`) and its cookies aren't
-  offered, and the plugin's messages (skins, voice, its pause menu) are
-  dropped. Servers whose plugin only offers Eagler 3/4, or caps
+- **Eaglercraft extras**: the server list shows no icon (the plugin's 64×64
+  RGBA icon isn't read), Eagler passwords (`authEnabled`) and its cookies
+  aren't offered, and the plugin's messages other than skins (voice,
+  notifications, its pause menu) are dropped. Preset skins show as Steve or
+  Alex, and preset capes not at all.
+- **Skins in shared worlds**: a shared world's players see each other's
+  default skins; only the host's own window shows the host's profile skin
+  (the server sends offline profiles without textures).
+- **Edit Profile's preview** is the player's front, not Eaglercraft's
+  turning model. Servers whose plugin only offers Eagler 3/4, or caps
   `max_minecraft_protocol_v5` under 777, refuse the version. The native
   client can't join a `ws:` address.
 - **Secure pages and plain servers**: an `https:` page may only open `wss:`,

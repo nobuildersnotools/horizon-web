@@ -17,6 +17,7 @@ use std::{
 
 mod create_world;
 mod flat;
+mod profile_screen;
 #[cfg(test)]
 mod tests;
 pub mod world_management;
@@ -142,6 +143,8 @@ pub enum Mode {
         options: WorldOptions,
         flat: flat::State,
     },
+    /// Edit Profile, the browser build's name and skin (profile_screen.rs).
+    Profile(Box<profile_screen::State>),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -313,7 +316,8 @@ impl Title {
         let today = chrono::Local::now();
         let mode = Mode::Main;
         let now = horizon_os::time::Instant::now();
-        Self {
+        #[allow(unused_mut)]
+        let mut title = Self {
             mode,
             last_server: String::new(),
             skip_multiplayer_warning: false,
@@ -346,7 +350,11 @@ impl Title {
             ),
             recent: std::cell::RefCell::new(None),
             rules: RefCell::new(None),
-        }
+        };
+        // Eaglercraft's first screen: the player's name and skin.
+        #[cfg(target_arch = "wasm32")]
+        title.start_profile();
+        title
     }
     /// Vanilla bypasses the selector when there are no saves.
     pub fn enter_singleplayer(&mut self) {
@@ -596,6 +604,8 @@ impl Title {
     }
     /// Polling is done once per rendered frame so filesystem work never blocks drawing.
     pub fn poll_backup(&mut self) {
+        // Edit Profile's imported pictures come in on the same frames.
+        self.poll_profile_file();
         if !self.backup_shown.get() {
             return;
         }
@@ -823,14 +833,20 @@ impl Title {
                         true,
                         4,
                     ),
-                    b(
-                        cx - 100.0,
-                        y + 48.0,
-                        200.0,
-                        &lang::get_or("menu.online", "Minecraft Realms"),
-                        false,
-                        0,
-                    ),
+                    // The browser build has no Realms: Eaglercraft's Edit
+                    // Profile is there instead.
+                    if cfg!(target_arch = "wasm32") {
+                        b(cx - 100.0, y + 48.0, 200.0, "Edit Profile", true, 8)
+                    } else {
+                        b(
+                            cx - 100.0,
+                            y + 48.0,
+                            200.0,
+                            &lang::get_or("menu.online", "Minecraft Realms"),
+                            false,
+                            0,
+                        )
+                    },
                     b(
                         cx - 100.0,
                         y + 96.0,
@@ -863,11 +879,17 @@ impl Title {
                 .into_iter()
                 .enumerate()
                 {
+                    // The browser's Friends button joins a shared world.
+                    let label = if id == 5 && cfg!(target_arch = "wasm32") {
+                        "Join Shared World".to_owned()
+                    } else {
+                        lang::get_or(key, plain)
+                    };
                     let mut button = b(
                         cx - 34.0 + i as f32 * 24.0,
                         y + 72.0,
                         20.0,
-                        &lang::get_or(key, plain),
+                        &label,
                         true,
                         id,
                     );
@@ -930,6 +952,7 @@ impl Title {
                 creative, options, ..
             } => create_world::buttons(w, h, *creative, options),
             Mode::CreateFlat { flat, .. } => flat::buttons(w, h, flat),
+            Mode::Profile(state) => profile_screen::buttons(state, w, h),
             Mode::Edit { world, name, .. } => {
                 let x = (w / 2.0).floor() - 100.0;
                 let top = edit_top(h);
@@ -1300,6 +1323,7 @@ impl Title {
                 ..
             } => self.draw_create(atlas, batch, cursor, name, seed, *focus, options),
             Mode::CreateFlat { flat, .. } => flat::draw(self, atlas, batch, cursor, flat),
+            Mode::Profile(state) => profile_screen::draw(self, state, atlas, batch, cursor),
             Mode::Edit { name, focused, .. } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(
@@ -1609,6 +1633,10 @@ impl Title {
         (action, sound)
     }
     fn click_action(&mut self, x: f32, y: f32, (w, h): (f32, f32), hit: Option<u8>) -> Action {
+        if matches!(self.mode, Mode::Profile(_)) {
+            profile_screen::click(self, hit, (x, y), w);
+            return Action::None;
+        }
         match (&mut self.mode, hit) {
             (Mode::Main, Some(1)) => {
                 self.enter_singleplayer();
@@ -1646,6 +1674,10 @@ impl Title {
             },
             (Mode::Main, Some(5)) => {
                 self.mode = Mode::Multiplayer(crate::multiplayer::Screen::friend());
+                Action::None
+            }
+            (Mode::Main, Some(8)) => {
+                self.edit_profile(false);
                 Action::None
             }
             (Mode::Main, Some(3)) => Action::Options,
@@ -1926,6 +1958,7 @@ impl Title {
                 .filter(|(id, _)| id == focus)
                 .map(|(_, rect)| rect),
             Mode::Multiplayer(screen) => screen.focused_box((w, h)),
+            Mode::Profile(state) if state.focused => Some(profile_screen::name_rect(w)),
             _ => None,
         }
     }
@@ -1975,6 +2008,9 @@ impl Title {
         }
     }
     pub fn confirm_edit(&mut self) {
+        if matches!(self.mode, Mode::Profile(_)) {
+            return self.finish_profile();
+        }
         let Mode::Edit {
             world,
             name,
@@ -1998,6 +2034,9 @@ impl Title {
         }
         if let Mode::Edit { focused, .. } = &mut self.mode {
             *focused = !*focused;
+        }
+        if let Mode::Profile(state) = &mut self.mode {
+            state.focused = !state.focused;
         }
         if matches!(self.mode, Mode::Select { .. }) {
             self.search_focused = !self.search_focused;
@@ -2102,6 +2141,8 @@ impl Title {
                 }
             }
             Mode::Create { .. } => self.cancel_create(),
+            // The first profile needs its Done.
+            Mode::Profile(state) if state.is_first() => {}
             _ => self.mode = Mode::Main,
         }
     }
@@ -2161,6 +2202,9 @@ fn caret_field<'a>(
             _ => None,
         },
         Mode::Multiplayer(screen) => screen.focused_text(),
+        Mode::Profile(state) if state.focused => {
+            Some((profile_screen::NAME, &mut state.profile.name, 16))
+        }
         Mode::CreateFlat { flat, .. } if flat.page == flat::Page::Presets && flat.share_focused => {
             Some((FLAT_SHARE, &mut flat.share, 1230))
         }

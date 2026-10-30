@@ -1067,10 +1067,7 @@ impl Game<'_> {
             server.call(move |g| g.apply_world_options(&b, &w));
             if w.lan != b.lan || (w.lan && w.port != b.port) {
                 match (w.lan, self.lan_port()) {
-                    (true, Some(port)) => self.system_message(Text::translate(
-                        "menu.multiplayerOptions.publish.started.lan",
-                        &[Text::literal(port.to_string())],
-                    )),
+                    (true, Some(port)) => self.lan_started_message(port),
                     (true, None) => {
                         self.system_message(Text::translate("commands.publish.failed", &[]));
                     }

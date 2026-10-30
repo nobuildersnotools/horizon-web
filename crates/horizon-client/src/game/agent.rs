@@ -613,6 +613,7 @@ impl Game<'_> {
             Mode::MultiplayerWarning { check } => {
                 json!({ "mode": "multiplayer-warning", "check": check })
             }
+            Mode::Profile(state) => json!({ "mode": "edit-profile", "name": state.profile.name }),
         }
     }
 

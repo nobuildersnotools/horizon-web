@@ -8,6 +8,11 @@
 //! with no length prefix, never compressed or encrypted (so online-mode
 //! backends are out). A server's status is a text query, `Accept: motd`.
 //!
+//! The client wears the skin and cape set with [`set_look`]: the login sends
+//! them (`skin_v2`, `cape_v1` profile data), and the plugin shows them to
+//! the other players. Theirs come from the plugin's messages
+//! ([`other_look`]), which start with `0xEE` in the play phase.
+//!
 //! [`EaglerSocket`] hides all of that behind the byte stream a
 //! [`Connection`](crate::connection::Connection) reads and writes: it reads
 //! the client's handshake and login packets, answers them with what the
@@ -21,6 +26,7 @@ use crate::{
 };
 use horizon_os::time::Duration;
 use std::{
+    collections::HashMap,
     io::{self, Read, Write},
     sync::{Arc, Mutex},
 };
@@ -272,12 +278,22 @@ impl EaglerSocket {
             Ok((name, uuid))
         })()
         .map_err(|_| text("Unexpected reply from the Eaglercraft server"))?;
-        // No skin or cape: the plugin then gives the default ones.
+        // PROFILE_DATA with the skin and cape, if set (without, the plugin
+        // gives the default ones), then FINISH_LOGIN.
+        if let Some(data) = profile_data() {
+            self.send(data)?;
+        }
         self.send(vec![0x08])?;
         loop {
             let reply = self.next()?;
             refusal(&reply)?;
             if reply[0] == 0x09 {
+                // The other players' skins are asked for on this socket.
+                if let Ok(socket) = self.socket.try_clone() {
+                    let mut skins = skins();
+                    *skins = Skins::default();
+                    skins.socket = Some(socket);
+                }
                 return Ok(allowed);
             }
         }
@@ -400,6 +416,234 @@ fn status_json(reply: &str, protocol: i32) -> serde_json::Value {
     })
 }
 
+/// A skin as the plugin carries it (`skin_v2`'s pixels): 64×64, three bytes
+/// a pixel, blue, green, then red's top seven bits under alpha's top bit.
+const SKIN_BYTES: usize = 64 * 64 * 3;
+/// A cape as the plugin carries it: the 23×17 pixels of the 64×32 cape that
+/// show, blue, green and red.
+const CAPE_BYTES: usize = 23 * 17 * 3;
+
+/// A 64×64 RGBA skin in the plugin's packing.
+pub fn pack_skin(rgba: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(SKIN_BYTES);
+    for p in rgba.chunks_exact(4).take(64 * 64) {
+        out.extend_from_slice(&[p[2], p[1], (p[0] >> 1) | (p[3] & 0x80)]);
+    }
+    out.resize(SKIN_BYTES, 0);
+    out
+}
+
+/// The plugin's packing back as a 64×64 RGBA skin (one bit of alpha).
+pub fn unpack_skin(packed: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64 * 64 * 4);
+    for p in packed.chunks_exact(3).take(64 * 64) {
+        let alpha = if p[2] & 0x80 != 0 { 255 } else { 0 };
+        out.extend_from_slice(&[(p[2] & 0x7F) << 1, p[1], p[0], alpha]);
+    }
+    out.resize(64 * 64 * 4, 0);
+    out
+}
+
+/// Where each of the cape's 23×17 pixels is in the 64×32 cape
+/// (SkinConverter.convertCape64x32RGBAto23x17RGB): the first 22 columns of
+/// the top 17 rows, and column 22 of rows 11 to 21 in that column's rows 6
+/// to 16.
+fn cape_pixels() -> impl Iterator<Item = (usize, usize)> {
+    let main = (0..17).flat_map(|y| (0..22).map(move |x| (y * 64 + x, y * 23 + x)));
+    let edge = (0..11).map(|y| ((y + 11) * 64 + 22, (y + 6) * 23 + 22));
+    main.chain(edge)
+}
+
+/// A 64×32 RGBA cape in the plugin's packing.
+pub fn pack_cape(rgba: &[u8]) -> Vec<u8> {
+    let mut out = vec![0; CAPE_BYTES];
+    for (from, to) in cape_pixels() {
+        if let Some(p) = rgba.get(from * 4..from * 4 + 4) {
+            out[to * 3..to * 3 + 3].copy_from_slice(&[p[2], p[1], p[0]]);
+        }
+    }
+    out
+}
+
+/// The plugin's packing back as a 64×32 RGBA cape.
+pub fn unpack_cape(packed: &[u8]) -> Vec<u8> {
+    let mut out = vec![0; 64 * 32 * 4];
+    for (to, from) in cape_pixels() {
+        if let Some(p) = packed.get(from * 3..from * 3 + 3) {
+            out[to * 4..to * 4 + 4].copy_from_slice(&[p[2], p[1], p[0], 255]);
+        }
+    }
+    out
+}
+
+/// The profile data the login sends: `skin_v2` (custom: 2, the model, the
+/// pixels) and `cape_v1` (custom: 2, the pixels).
+static LOOK: Mutex<Option<Vec<(&'static str, Vec<u8>)>>> = Mutex::new(None);
+
+/// What this client wears on Eaglercraft servers from its next login: a
+/// 64×64 RGBA skin with slim (three-pixel) arms or not, and a 64×32 cape.
+/// `None` leaves the plugin's default skin.
+pub fn set_look(skin: Option<(&[u8], bool)>, cape: Option<&[u8]>) {
+    let entries = look_entries(skin, cape);
+    *horizon_os::sync::lock(&LOOK).unwrap_or_else(|e| e.into_inner()) =
+        (!entries.is_empty()).then_some(entries);
+}
+
+fn look_entries(skin: Option<(&[u8], bool)>, cape: Option<&[u8]>) -> Vec<(&'static str, Vec<u8>)> {
+    let mut entries = Vec::new();
+    if let Some((rgba, slim)) = skin {
+        let mut data = vec![2, u8::from(slim)];
+        data.extend_from_slice(&pack_skin(rgba));
+        entries.push(("skin_v2", data));
+    }
+    if let Some(rgba) = cape {
+        let mut data = vec![2];
+        data.extend_from_slice(&pack_cape(rgba));
+        entries.push(("cape_v1", data));
+    }
+    entries
+}
+
+/// PROFILE_DATA: a count, then each entry's type (u8-long) and data
+/// (u16-long).
+fn profile_data() -> Option<Vec<u8>> {
+    let look = horizon_os::sync::lock(&LOOK).unwrap_or_else(|e| e.into_inner());
+    look.as_deref().map(encode_profile)
+}
+
+fn encode_profile(entries: &[(&'static str, Vec<u8>)]) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u8(0x07);
+    w.u8(entries.len() as u8);
+    for (kind, data) in entries {
+        str8(&mut w, kind);
+        w.u16(data.len() as u16);
+        w.data.extend_from_slice(data);
+    }
+    w.data
+}
+
+/// Another player's skin, as the plugin gave it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Skin {
+    /// One of Eaglercraft's preset skins (EnumPresetSkins: 0 Default Steve,
+    /// 1 Default Alex...).
+    Preset(u32),
+    /// 64×64 RGBA.
+    Custom { rgba: Vec<u8>, slim: bool },
+}
+
+/// Another player's skin and cape (64×32 RGBA, `None` for the preset ones,
+/// which have no picture here).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OtherLook {
+    pub skin: Skin,
+    pub cape: Option<Vec<u8>>,
+}
+
+/// The skins asked of the plugin and those it sent.
+#[derive(Default)]
+struct Skins {
+    socket: Option<Box<dyn Messages>>,
+    next_request: i32,
+    /// Request id → the player it asked for.
+    pending: HashMap<i32, u128>,
+    /// `None` while asked.
+    looks: HashMap<u128, Option<Arc<OtherLook>>>,
+}
+
+fn skins() -> std::sync::MutexGuard<'static, Skins> {
+    static SKINS: std::sync::OnceLock<Mutex<Skins>> = std::sync::OnceLock::new();
+    horizon_os::sync::lock(SKINS.get_or_init(Mutex::default)).unwrap_or_else(|e| e.into_inner())
+}
+
+/// What a player of the Eaglercraft server the client is on wears: asked of
+/// the plugin the first time (CPacketGetOtherTexturesV5EAG), `None` until it
+/// answers, and always on other servers.
+pub fn other_look(uuid: u128) -> Option<Arc<OtherLook>> {
+    let mut skins = skins();
+    if let Some(look) = skins.looks.get(&uuid) {
+        return look.clone();
+    }
+    let socket = skins.socket.as_ref()?;
+    let request = skins.next_request;
+    let mut w = Writer::new();
+    w.u8(0xEE);
+    w.u8(0x03);
+    w.varint(request);
+    w.i64((uuid >> 64) as i64);
+    w.i64(uuid as i64);
+    if socket.send(Message::Binary(w.data)).is_err() {
+        return None;
+    }
+    skins.next_request = request.wrapping_add(1);
+    skins.pending.insert(request, uuid);
+    skins.looks.insert(uuid, None);
+    None
+}
+
+/// The plugin's messages after their `0xEE`: one packet, or `0xFF`, a count
+/// and that many packets, each after its length.
+fn plugin_messages(data: &[u8]) {
+    for_each_message(data, plugin_message);
+}
+
+fn for_each_message(data: &[u8], mut each: impl FnMut(&[u8])) {
+    let mut r = Reader::new(data);
+    if data.first() == Some(&0xFF) {
+        let _ = (|| -> crate::Result<()> {
+            r.u8()?;
+            for _ in 0..r.varint()? {
+                let n = usize::try_from(r.varint()?).unwrap_or(0);
+                each(r.bytes(n)?);
+            }
+            Ok(())
+        })();
+    } else {
+        each(data);
+    }
+}
+
+/// One plugin message: SPacketOtherTexturesV5EAG (the request id, the skin
+/// id and the cape id, a negative one followed by its pixels) is the one
+/// read; the rest (voice, notifications, its pause menu...) are dropped.
+fn plugin_message(data: &[u8]) {
+    if let Some((request, look)) = textures(data) {
+        let mut skins = skins();
+        if let Some(uuid) = skins.pending.remove(&request) {
+            skins.looks.insert(uuid, Some(Arc::new(look)));
+        }
+    }
+}
+
+fn textures(data: &[u8]) -> Option<(i32, OtherLook)> {
+    let mut r = Reader::new(data);
+    (|| -> crate::Result<Option<(i32, OtherLook)>> {
+        if r.u8()? != 0x05 {
+            return Ok(None);
+        }
+        let request = r.varint()?;
+        let skin = r.varint()?;
+        let cape = r.varint()?;
+        let skin = if skin < 0 {
+            // -(model id) - 1, the model's top bit set: 1 is Alex's arms.
+            let model = (-(skin + 1)) & 0x7F;
+            Skin::Custom {
+                rgba: unpack_skin(r.bytes(SKIN_BYTES)?),
+                slim: model == 1,
+            }
+        } else {
+            Skin::Preset(skin as u32)
+        };
+        let cape = (cape < 0)
+            .then(|| r.bytes(CAPE_BYTES).map(unpack_cape))
+            .transpose()?;
+        Ok(Some((request, OtherLook { skin, cape })))
+    })()
+    .ok()
+    .flatten()
+}
+
 impl Read for EaglerSocket {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         loop {
@@ -421,7 +665,10 @@ impl Read for EaglerSocket {
                 None => return Ok(0),
                 // The plugin's own messages (skins, voice, its pause menu)
                 // start with 0xEE, which no game packet id does.
-                Some(Message::Binary(data)) if data.first() != Some(&0xEE) && !data.is_empty() => {
+                Some(Message::Binary(data)) if data.first() == Some(&0xEE) => {
+                    plugin_messages(&data[1..]);
+                }
+                Some(Message::Binary(data)) if !data.is_empty() => {
                     let framed = frame::prefixed(&data);
                     self.shared().incoming.extend_from_slice(&framed);
                 }
@@ -604,5 +851,71 @@ mod tests {
             server.sent.lock().unwrap()[..],
             [Message::Text("Accept: motd".into())]
         );
+    }
+
+    #[test]
+    fn skins_and_capes_pack_as_the_plugin_does() {
+        let mut skin = vec![0u8; 64 * 64 * 4];
+        skin[..8].copy_from_slice(&[200, 100, 50, 255, 9, 8, 7, 0]);
+        let packed = pack_skin(&skin);
+        assert_eq!(packed.len(), 12288);
+        // Blue, green, red's top seven bits under alpha's top bit.
+        assert_eq!(&packed[..6], &[50, 100, 100 | 0x80, 7, 8, 4]);
+        let back = unpack_skin(&packed);
+        assert_eq!(&back[..8], &[200, 100, 50, 255, 8, 8, 7, 0]);
+
+        let mut cape = vec![0u8; 64 * 32 * 4];
+        // (22, 11) lands at (22, 6) of the 23×17 picture.
+        let at = (11 * 64 + 22) * 4;
+        cape[at..at + 4].copy_from_slice(&[1, 2, 3, 255]);
+        let packed = pack_cape(&cape);
+        assert_eq!(packed.len(), 1173);
+        let to = (6 * 23 + 22) * 3;
+        assert_eq!(&packed[to..to + 3], &[3, 2, 1]);
+        assert_eq!(&unpack_cape(&packed)[at..at + 4], &[1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn other_players_textures_are_read() {
+        let mut w = Writer::new();
+        w.u8(0x05);
+        w.varint(4);
+        // A custom skin with Alex's arms (model 1, its top bit set), a
+        // preset cape.
+        w.varint(-(0x81) - 1);
+        w.varint(3);
+        w.data.extend_from_slice(&pack_skin(&[255; 64 * 64 * 4]));
+        // As a multi-packet: 0xFF, one packet after its length.
+        let mut multi = vec![0xFF, 1];
+        let mut len = Writer::new();
+        len.varint(w.data.len() as i32);
+        multi.extend_from_slice(&len.data);
+        multi.extend_from_slice(&w.data);
+        let mut read = Vec::new();
+        for_each_message(&multi, |m| read.push(textures(m)));
+        let [Some((4, look))] = &read[..] else {
+            panic!("{read:?}")
+        };
+        assert_eq!(look.cape, None);
+        let Skin::Custom { rgba, slim } = &look.skin else {
+            panic!()
+        };
+        assert!(*slim);
+        assert_eq!(&rgba[..4], &[254, 255, 255, 255]);
+    }
+
+    #[test]
+    fn profile_data_carries_the_skin_and_cape() {
+        let data = encode_profile(&look_entries(
+            Some((&[0; 64 * 64 * 4], true)),
+            Some(&[0; 64 * 32 * 4]),
+        ));
+        assert_eq!(&data[..3], &[0x07, 2, 7]);
+        assert_eq!(&data[3..10], b"skin_v2");
+        assert_eq!(&data[10..14], &[0x30, 0x02, 2, 1]);
+        let cape = 10 + 2 + 12290;
+        assert_eq!(&data[cape..cape + 8], b"\x07cape_v1");
+        assert_eq!(&data[cape + 8..cape + 11], &[0x04, 0x96, 2]);
+        assert_eq!(data.len(), cape + 10 + 1174);
     }
 }

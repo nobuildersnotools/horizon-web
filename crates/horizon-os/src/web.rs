@@ -49,8 +49,27 @@ export function horizon_pointer_lock(want) {
         document.exitPointerLock();
     }
 }
+
+let picked = null;
+export function horizon_pick_file(kind, accept) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.onchange = async () => {
+        const file = input.files && input.files[0];
+        if (file) picked = [kind, new Uint8Array(await file.arrayBuffer())];
+    };
+    input.click();
+}
+export function horizon_take_picked() {
+    const p = picked;
+    picked = null;
+    return p;
+}
 "#)]
 extern "C" {
+    fn horizon_pick_file(kind: &str, accept: &str);
+    fn horizon_take_picked() -> JsValue;
     fn horizon_console(level: u32, message: &str);
     fn horizon_pointer_lock(want: bool);
     fn horizon_pointer_lock_lost() -> bool;
@@ -157,4 +176,22 @@ pub fn pointer_lock(want: bool) {
 /// player pressed Escape, which the page never sees then) since the last call.
 pub fn pointer_lock_lost() -> bool {
     horizon_pointer_lock_lost()
+}
+
+/// Asks the player for a file (`accept`: the file chooser's types). Browsers
+/// open the chooser only during a click or a key press; the file comes later
+/// from [`take_picked_file`], with `kind` to tell requests apart.
+pub fn pick_file(kind: &str, accept: &str) {
+    horizon_pick_file(kind, accept);
+}
+
+/// The file the player picked since the last call: its `kind` and bytes.
+pub fn take_picked_file() -> Option<(String, Vec<u8>)> {
+    let picked = horizon_take_picked();
+    if picked.is_null() {
+        return None;
+    }
+    let picked = js_sys::Array::from(&picked);
+    let kind = picked.get(0).as_string()?;
+    Some((kind, js_sys::Uint8Array::new(&picked.get(1)).to_vec()))
 }

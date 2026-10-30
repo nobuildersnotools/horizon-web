@@ -3357,6 +3357,9 @@ impl Game<'_> {
             }
         }
         resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
+        // The browser build's own profile, where the server gives no skin
+        // (offline mode), and what Eaglercraft players wear.
+        self.own_and_eagler_skins(local, &mut resolved, &mut slim, &mut capes);
         // An offline name's cape from the launcher, where the profile has none.
         if !capes.contains_key(&local)
             && let Some(rgba) = horizon_client::skins::offline_cape()
@@ -3480,6 +3483,89 @@ impl Game<'_> {
             {
                 mob.slim = slim && skin.is_some();
                 mob.skin = skin;
+            }
+        }
+    }
+    /// The profile's look ([`horizon_client::skins::own_look`]) for the
+    /// local player, and Eaglercraft players' skins from the plugin
+    /// ([`horizon_protocol::eagler::other_look`]), for the players the server
+    /// gave none. Both are empty on native.
+    fn own_and_eagler_skins(
+        &mut self,
+        local: u128,
+        resolved: &mut Vec<(u128, String)>,
+        slim: &mut std::collections::HashSet<u128>,
+        capes: &mut HashMap<u128, String>,
+    ) {
+        use horizon_client::skins::OwnSkin;
+        use horizon_protocol::eagler::Skin;
+        if let Some(look) = horizon_client::skins::own_look() {
+            if !resolved.iter().any(|(u, _)| *u == local) {
+                let skin = match &look.skin {
+                    OwnSkin::Default(texture) => texture.clone(),
+                    OwnSkin::Custom(rgba) => {
+                        let at = format!("own/skin{}", look.generation);
+                        if !self.show_skin(&at) {
+                            self.store_skin(at.clone(), rgba.clone());
+                        }
+                        at
+                    }
+                };
+                if look.slim {
+                    slim.insert(local);
+                }
+                resolved.push((local, skin));
+            }
+            if let Some(cape) = &look.cape
+                && !capes.contains_key(&local)
+            {
+                let at = format!("capes/own{}", look.generation);
+                if !self.show_skin(&at) {
+                    self.store_skin(at.clone(), cape.clone());
+                }
+                capes.insert(local, at);
+            }
+        }
+        let others: Vec<u128> = self.remote.as_ref().map_or_else(Vec::new, |r| {
+            r.level_players
+                .values()
+                .copied()
+                .filter(|u| *u != local && !resolved.iter().any(|(r, _)| r == u))
+                .collect()
+        });
+        for uuid in others {
+            let Some(look) = horizon_protocol::eagler::other_look(uuid) else {
+                continue;
+            };
+            let skin = match &look.skin {
+                // EnumPresetSkins: Steve and Alex take turns up to 17; the
+                // presets' own pictures aren't here, so they wear Steve's or
+                // Alex's.
+                Skin::Preset(id) if *id < 18 && id % 2 == 1 => {
+                    slim.insert(uuid);
+                    "entity/player/slim/alex".to_owned()
+                }
+                Skin::Preset(_) => "entity/player/wide/steve".to_owned(),
+                Skin::Custom { rgba, slim: s } => {
+                    let at = format!("eagler/{uuid:032x}");
+                    if !self.show_skin(&at) {
+                        self.store_skin(at.clone(), rgba.clone());
+                    }
+                    if *s {
+                        slim.insert(uuid);
+                    }
+                    at
+                }
+            };
+            resolved.push((uuid, skin));
+            if let Some(cape) = &look.cape {
+                let at = format!("capes/eagler/{uuid:032x}");
+                if !self.show_skin(&at) {
+                    let mut slot = cape.clone();
+                    slot.resize(64 * 64 * 4, 0);
+                    self.store_skin(at.clone(), slot);
+                }
+                capes.insert(uuid, at);
             }
         }
     }

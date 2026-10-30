@@ -457,6 +457,18 @@ pub fn serve(
     serve_connection(Connection::from_stream(stream).map_err(e)?, address, shared)
 }
 
+/// A player of a world shared through a relay (the browser build), over
+/// the data channel the relay set up.
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub fn serve_web(
+    socket: horizon_os::net::WebSocket,
+    address: std::net::SocketAddr,
+    shared: Arc<Shared>,
+) -> Result<(), String> {
+    let c = Connection::from_web(socket).map_err(|e| e.to_string())?;
+    serve_connection(c, address, shared)
+}
+
 /// `ServerConnectionListener.startMemoryChannel`: an integrated server's
 /// own player, over one end of an in-memory pipe.
 pub fn serve_local(

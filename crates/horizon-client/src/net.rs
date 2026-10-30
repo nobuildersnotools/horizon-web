@@ -298,9 +298,16 @@ impl Drop for Session {
 /// client reaches on a loopback port, so everything after is a plain join.
 pub const FRIEND: &str = horizon_friends::ADDRESS_PREFIX;
 
+/// An address of the form `shared:abcde` joins a world shared through a relay
+/// with that join code (the browser build, Eaglercraft's shared worlds).
+pub const SHARED: &str = "shared:";
+
 /// An address as players and logs see it: a friend's invite code stays
 /// out of it (its secret is in there).
 pub fn shown_address(address: &str) -> String {
+    if let Some(code) = address.strip_prefix(SHARED) {
+        return format!("Shared world {code}");
+    }
     match address.strip_prefix(FRIEND) {
         Some(code) => match horizon_friends::invite::parse(code) {
             Some(horizon_friends::invite::Parsed::Short(c)) => {
@@ -385,6 +392,12 @@ fn run(
 ) -> Result<String, String> {
     let (host, port, mut c) = if let Some(pipe) = local {
         (address.to_owned(), 0, Connection::local(pipe))
+    } else if let Some(code) = address.strip_prefix(SHARED) {
+        status(send, "Connecting to the shared world...");
+        let relays = crate::lan::shared_world_relays();
+        let c = Connection::connect_shared(code, &relays, Duration::from_secs(30))
+            .map_err(|e| e.to_string())?;
+        ("localhost".to_owned(), 25565, c)
     } else {
         let (host, port) = match address.strip_prefix(FRIEND) {
             Some(code) => join_friend(code, send)?,

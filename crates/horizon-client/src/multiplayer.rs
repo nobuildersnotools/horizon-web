@@ -662,7 +662,11 @@ impl Screen {
                     quarter(h) + 96.0 + 18.0,
                     200.0,
                     "Join",
-                    horizon_friends::invite::parse(code).is_some(),
+                    if cfg!(target_arch = "wasm32") {
+                        shared_code(code).is_some()
+                    } else {
+                        horizon_friends::invite::parse(code).is_some()
+                    },
                     56,
                 ),
                 b(
@@ -1056,13 +1060,20 @@ impl Screen {
                 }
             }
             Self::Friend { code, relay, focus } => {
-                centered(batch, "Join a Friend", 20.0, u32::MAX);
+                // The browser joins Eaglercraft's way: a shared world's code
+                // on a relay.
+                let (heading, label) = if cfg!(target_arch = "wasm32") {
+                    ("Join Shared World", "Join Code")
+                } else {
+                    ("Join a Friend", "Invite Code")
+                };
+                centered(batch, heading, 20.0, u32::MAX);
                 Self::field(
                     atlas,
                     batch,
                     caret,
                     focused_at,
-                    "Invite Code",
+                    label,
                     code,
                     FRIEND_CODE,
                     max,
@@ -1308,6 +1319,19 @@ impl Screen {
             (Self::Direct { address }, Some(52)) => {
                 return Outcome::Connect(direct_address(address));
             }
+            (Self::Friend { code, relay, .. }, Some(56)) if cfg!(target_arch = "wasm32") => {
+                if let Some(code) = shared_code(code) {
+                    if let Ok(dir) = horizon_os::env::current_dir() {
+                        let relay = relay.trim();
+                        crate::ui_theme::set_preference(
+                            &dir,
+                            "sharedWorldRelays",
+                            (!relay.is_empty()).then_some(relay),
+                        );
+                    }
+                    return Outcome::Connect(format!("{}{code}", crate::net::SHARED));
+                }
+            }
             (Self::Friend { code, relay, .. }, Some(56)) => {
                 if horizon_friends::invite::parse(code).is_some() {
                     crate::net::save_friends_relay(relay.trim());
@@ -1403,9 +1427,17 @@ impl Screen {
     }
     /// Join a friend, with the relay the player set before.
     pub fn friend() -> Self {
+        // The browser's relays are the shared worlds' ones.
+        let relay = if cfg!(target_arch = "wasm32") {
+            horizon_os::env::current_dir()
+                .ok()
+                .and_then(|dir| crate::ui_theme::preference(&dir, "sharedWorldRelays"))
+        } else {
+            crate::net::friends_relay_setting()
+        };
         Self::Friend {
             code: String::new(),
-            relay: crate::net::friends_relay_setting().unwrap_or_default(),
+            relay: relay.unwrap_or_default(),
             focus: 0,
         }
     }
@@ -1466,6 +1498,13 @@ impl Screen {
             }
         }
     }
+}
+
+/// A shared world's join code as typed: letters and digits.
+fn shared_code(code: &str) -> Option<String> {
+    let code = code.trim();
+    (!code.is_empty() && code.len() < 32 && code.chars().all(|c| c.is_ascii_alphanumeric()))
+        .then(|| code.to_owned())
 }
 
 /// Direct Connection's address; a full invite code pasted there joins the

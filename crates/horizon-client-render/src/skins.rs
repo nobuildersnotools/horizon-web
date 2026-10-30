@@ -554,6 +554,45 @@ pub fn offline_cape() -> Option<&'static [u8]> {
     .as_deref()
 }
 
+/// The player's own skin where no server or account gives one: the browser
+/// build's profile (horizon-client's `profile.rs`). Native never sets it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OwnSkin {
+    /// A texture of the atlas (one of the default skins).
+    Default(String),
+    /// 64×64 RGBA.
+    Custom(Vec<u8>),
+}
+
+/// [`OwnSkin`], its arms, the cape as [`process_cape`] lays it out, and a
+/// number that changes with each look (the pictures' atlas names).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnLook {
+    pub skin: OwnSkin,
+    pub slim: bool,
+    pub cape: Option<Vec<u8>>,
+    pub generation: u32,
+}
+
+static OWN_LOOK: std::sync::Mutex<Option<std::sync::Arc<OwnLook>>> = std::sync::Mutex::new(None);
+
+/// Sets the player's own look ([`own_look`]).
+pub fn set_own_look(skin: OwnSkin, slim: bool, cape: Option<Vec<u8>>) {
+    let mut own = OWN_LOOK.lock().unwrap_or_else(|e| e.into_inner());
+    let generation = own.as_ref().map_or(0, |l| l.generation + 1);
+    *own = Some(std::sync::Arc::new(OwnLook {
+        skin,
+        slim,
+        cape,
+        generation,
+    }));
+}
+
+/// The look [`set_own_look`] set, if any.
+pub fn own_look() -> Option<std::sync::Arc<OwnLook>> {
+    OWN_LOOK.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// Where a texture download stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Download {
@@ -805,6 +844,7 @@ impl Downloader {
 
 /// A GET over HTTP or HTTPS (textures.minecraft.net serves both; vanilla
 /// uses https): the body of a 2xx answer, 16 MiB at most, after redirects.
+#[cfg(not(target_arch = "wasm32"))]
 fn http_get(url: &str) -> Option<Vec<u8>> {
     use std::io::Read;
     let response = ureq::AgentBuilder::new()
@@ -821,6 +861,19 @@ fn http_get(url: &str) -> Option<Vec<u8>> {
         .read_to_end(&mut body)
         .ok()?;
     Some(body)
+}
+
+/// The browser's [`http_get`]: ureq has no sockets there (and reads std's
+/// clock, which panics), so the browser fetches it, on the download's worker.
+#[cfg(target_arch = "wasm32")]
+fn http_get(url: &str) -> Option<Vec<u8>> {
+    #[cfg(target_feature = "atomics")]
+    return horizon_os::net::http_get(url).filter(|b| b.len() <= 16 << 20);
+    #[cfg(not(target_feature = "atomics"))]
+    {
+        let _ = url;
+        None
+    }
 }
 
 /// SHA-1 (FIPS 180-4).
