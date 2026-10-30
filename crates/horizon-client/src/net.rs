@@ -396,7 +396,9 @@ fn run(
                 target
             }
         };
-        let c = if address.starts_with(FRIEND) {
+        let c = if let Some(url) = horizon_protocol::servers::websocket_url(address) {
+            Connection::connect_eagler(url, Duration::from_secs(10))
+        } else if address.starts_with(FRIEND) {
             // The friends relay supplies a concrete endpoint, not a Minecraft hostname.
             Connection::connect(&host, port, Duration::from_secs(10))
         } else {
@@ -765,7 +767,11 @@ pub fn load_language(resources: &std::path::Path) -> Language {
 pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128), String> {
     use horizon_protocol::packets::status;
     let (host, port) = parse_address(address).ok_or("Invalid address")?;
-    let mut c = Connection::connect_server(&host, port, timeout).map_err(|e| e.to_string())?;
+    let mut c = match horizon_protocol::servers::websocket_url(address) {
+        Some(url) => Connection::connect_eagler(url, timeout),
+        None => Connection::connect_server(&host, port, timeout),
+    }
+    .map_err(|e| e.to_string())?;
     c.reader
         .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;

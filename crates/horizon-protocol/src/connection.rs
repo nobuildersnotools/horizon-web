@@ -116,6 +116,8 @@ enum Stream {
     /// This page's connection to a server.
     #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
     Web(horizon_os::net::WebSocket),
+    /// This page's connection to an Eaglercraft server.
+    Eagler(crate::eagler::EaglerSocket),
 }
 impl Stream {
     fn try_clone(&self) -> std::io::Result<Self> {
@@ -125,6 +127,7 @@ impl Stream {
             Self::WebSocket(s) => Self::WebSocket(s.try_clone()?),
             #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
             Self::Web(s) => Self::Web(s.try_clone()),
+            Self::Eagler(s) => Self::Eagler(s.try_clone()?),
         })
     }
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
@@ -140,6 +143,10 @@ impl Stream {
                 s.set_read_timeout(timeout);
                 Ok(())
             }
+            Self::Eagler(s) => {
+                s.set_read_timeout(timeout);
+                Ok(())
+            }
         }
     }
     fn shutdown(&self) {
@@ -151,6 +158,7 @@ impl Stream {
             Self::WebSocket(s) => s.shutdown(),
             #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
             Self::Web(s) => s.shutdown(),
+            Self::Eagler(s) => s.shutdown(),
         }
     }
 }
@@ -162,6 +170,7 @@ impl Read for Stream {
             Self::WebSocket(s) => s.read(out),
             #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
             Self::Web(s) => s.read(out),
+            Self::Eagler(s) => s.read(out),
         }
     }
 }
@@ -173,6 +182,7 @@ impl Write for Stream {
             Self::WebSocket(s) => s.write(data),
             #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
             Self::Web(s) => s.write(data),
+            Self::Eagler(s) => s.write(data),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -182,6 +192,7 @@ impl Write for Stream {
             Self::WebSocket(s) => s.flush(),
             #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
             Self::Web(s) => s.flush(),
+            Self::Eagler(s) => s.flush(),
         }
     }
 }
@@ -298,6 +309,27 @@ impl Connection {
         let socket = horizon_os::net::WebSocket::connect(host, port, timeout)
             .map_err(|e| Error::new(format!("Connection refused: {e}")))?;
         Self::over(Stream::Web(socket))
+    }
+    /// An Eaglercraft server at a `ws:`/`wss:` URL ([`crate::eagler`]); only
+    /// the browser build has the WebSocket for it.
+    pub fn connect_eagler(url: &str, timeout: Duration) -> Result<Self> {
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        {
+            let socket = horizon_os::net::WebSocket::connect_url(url, timeout)
+                .map_err(|e| Error::new(format!("Connection refused: {e}")))?;
+            Self::eagler(Box::new(socket))
+        }
+        #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+        {
+            let _ = timeout;
+            Err(Error::new(format!(
+                "{url} is an Eaglercraft server: join it from the browser build"
+            )))
+        }
+    }
+    /// A connection through the Eaglercraft plugin over a message socket.
+    pub fn eagler(socket: Box<dyn crate::eagler::Messages>) -> Result<Self> {
+        Self::over(Stream::Eagler(crate::eagler::EaglerSocket::new(socket)))
     }
     /// A browser's connection, whose HTTP upgrade request is still to read
     /// ([`crate::websocket::is_http`] told it apart).
@@ -651,5 +683,36 @@ mod tests {
         let (id, payload) = c.recv().unwrap();
         assert_eq!((id, payload.as_slice()), (3, &b"after"[..]));
         server.join().unwrap();
+    }
+}
+
+/// The browser's socket as the Eaglercraft plugin's message socket.
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+impl crate::eagler::Messages for horizon_os::net::WebSocket {
+    fn send(&self, message: crate::eagler::Message) -> std::io::Result<()> {
+        use horizon_os::net::Message;
+        horizon_os::net::WebSocket::send(
+            self,
+            match message {
+                crate::eagler::Message::Binary(b) => Message::Binary(b),
+                crate::eagler::Message::Text(t) => Message::Text(t),
+            },
+        )
+    }
+    fn recv(&self) -> std::io::Result<Option<crate::eagler::Message>> {
+        use horizon_os::net::Message;
+        Ok(horizon_os::net::WebSocket::recv(self)?.map(|m| match m {
+            Message::Binary(b) => crate::eagler::Message::Binary(b),
+            Message::Text(t) => crate::eagler::Message::Text(t),
+        }))
+    }
+    fn set_read_timeout(&self, timeout: Option<Duration>) {
+        horizon_os::net::WebSocket::set_read_timeout(self, timeout);
+    }
+    fn shutdown(&self) {
+        horizon_os::net::WebSocket::shutdown(self);
+    }
+    fn try_clone(&self) -> std::io::Result<Box<dyn crate::eagler::Messages>> {
+        Ok(Box::new(horizon_os::net::WebSocket::try_clone(self)))
     }
 }

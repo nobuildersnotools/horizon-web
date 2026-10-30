@@ -6,6 +6,7 @@ pub mod buf;
 pub mod chunk;
 pub mod connection;
 pub mod crypto;
+pub mod eagler;
 pub mod entity_data;
 pub mod frame;
 pub mod ids;

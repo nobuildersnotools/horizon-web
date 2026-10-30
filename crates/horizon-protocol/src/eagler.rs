@@ -1,0 +1,608 @@
+//! A client's end of an Eaglercraft server: the EaglerXServer plugin in front
+//! of a Minecraft proxy, reached from the browser by a `ws:`/`wss:` URL.
+//!
+//! The plugin logs in to the backend for its player: the client offers Eagler
+//! protocol 5 with this game's protocol number, then sends its name, and the
+//! proxy makes the handshake, login start and login acknowledgement itself.
+//! What follows is the plain game protocol, one packet per binary message
+//! with no length prefix, never compressed or encrypted (so online-mode
+//! backends are out). A server's status is a text query, `Accept: motd`.
+//!
+//! [`EaglerSocket`] hides all of that behind the byte stream a
+//! [`Connection`](crate::connection::Connection) reads and writes: it reads
+//! the client's handshake and login packets, answers them with what the
+//! plugin said (as a vanilla server would), and from then on turns frames
+//! into messages and back.
+use crate::{
+    buf::{Reader, Writer},
+    frame,
+    ids::login::serverbound::LOGIN_ACKNOWLEDGED,
+    packets::{handshake, login, status},
+};
+use horizon_os::time::Duration;
+use std::{
+    io::{self, Read, Write},
+    sync::{Arc, Mutex},
+};
+
+/// One WebSocket message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Message {
+    Binary(Vec<u8>),
+    Text(String),
+}
+
+/// A message socket: the browser's WebSocket on the web, a fake in tests.
+pub trait Messages: Send {
+    fn send(&self, message: Message) -> io::Result<()>;
+    /// The next message, waiting up to the read timeout; `None` once closed.
+    fn recv(&self) -> io::Result<Option<Message>>;
+    fn set_read_timeout(&self, timeout: Option<Duration>);
+    fn shutdown(&self);
+    /// Another handle on the same socket, with its own read timeout.
+    fn try_clone(&self) -> io::Result<Box<dyn Messages>>;
+}
+
+/// How long each step of the plugin's login may take: it gives a client
+/// 10 s for the whole handshake, and the backend's login comes on top.
+const STEP: Duration = Duration::from_secs(30);
+
+/// The Eagler protocol offered: 5 is the one whose Minecraft protocol list
+/// isn't capped at 1.12's (340) by default.
+const EAGLER_PROTOCOL: u16 = 5;
+
+/// What the client has said so far.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    /// Waiting for the handshake's intention.
+    Intention,
+    Status,
+    /// Waiting for the login start, which runs the plugin's login.
+    Login,
+    /// The plugin acknowledged the login itself: the client's own
+    /// acknowledgement is dropped.
+    Acknowledge,
+    /// Frames are messages.
+    Play,
+    /// The login failed; the reason is the last thing to read.
+    Closed,
+}
+
+struct Shared {
+    phase: Phase,
+    /// The game protocol from the client's intention.
+    protocol: i32,
+    /// Frames to read, answers made here and messages turned back into frames.
+    incoming: Vec<u8>,
+}
+
+pub struct EaglerSocket {
+    socket: Box<dyn Messages>,
+    shared: Arc<Mutex<Shared>>,
+    /// Bytes written short of a whole frame.
+    outgoing: Vec<u8>,
+}
+
+impl EaglerSocket {
+    pub fn new(socket: Box<dyn Messages>) -> Self {
+        Self {
+            socket,
+            shared: Arc::new(Mutex::new(Shared {
+                phase: Phase::Intention,
+                protocol: crate::PROTOCOL_VERSION,
+                incoming: Vec::new(),
+            })),
+            outgoing: Vec::new(),
+        }
+    }
+
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            socket: self.socket.try_clone()?,
+            shared: self.shared.clone(),
+            outgoing: Vec::new(),
+        })
+    }
+
+    pub fn set_read_timeout(&self, timeout: Option<Duration>) {
+        self.socket.set_read_timeout(timeout);
+    }
+
+    pub fn shutdown(&self) {
+        self.socket.shutdown();
+    }
+
+    fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.shared.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Queues a packet body for the client to read, as a frame.
+    fn answer(&self, body: &[u8]) {
+        let framed = frame::prefixed(body);
+        self.shared().incoming.extend_from_slice(&framed);
+    }
+
+    /// One frame the client wrote (never compressed: the plugin keeps
+    /// compression off).
+    fn handle(&mut self, body: Vec<u8>) -> io::Result<()> {
+        let phase = self.shared().phase;
+        if phase == Phase::Play {
+            return self.socket.send(Message::Binary(body));
+        }
+        let mut r = Reader::new(&body);
+        let id = r.varint().map_err(io::Error::other)?;
+        let payload = r.rest();
+        match phase {
+            Phase::Intention => {
+                if let Ok(handshake::Serverbound::Intention(i)) =
+                    handshake::Serverbound::decode(id, payload)
+                {
+                    let mut shared = self.shared();
+                    shared.protocol = i.protocol;
+                    shared.phase = if i.intent == handshake::STATUS {
+                        Phase::Status
+                    } else {
+                        Phase::Login
+                    };
+                }
+            }
+            Phase::Status => match status::Serverbound::decode(id, payload) {
+                Ok(status::Serverbound::StatusRequest(_)) => {
+                    let json = self.query_status()?;
+                    self.answer(
+                        &status::Clientbound::StatusResponse(status::StatusResponse { json })
+                            .encode(),
+                    );
+                }
+                Ok(status::Serverbound::PingRequest(ping)) => {
+                    self.answer(&status::Clientbound::PongResponse(ping).encode());
+                }
+                _ => {}
+            },
+            Phase::Login => {
+                if let Ok(login::Serverbound::Hello(hello)) =
+                    login::Serverbound::decode(id, payload)
+                {
+                    self.socket.set_read_timeout(Some(STEP));
+                    let result = self.log_in(&hello.name);
+                    self.socket.set_read_timeout(None);
+                    match result {
+                        Ok((name, uuid)) => {
+                            self.answer(
+                                &login::Clientbound::LoginFinished(login::LoginFinished {
+                                    profile: login::GameProfile {
+                                        uuid,
+                                        name,
+                                        properties: Vec::new(),
+                                    },
+                                    session: uuid,
+                                })
+                                .encode(),
+                            );
+                            self.shared().phase = Phase::Acknowledge;
+                        }
+                        Err(reason_json) => {
+                            self.answer(
+                                &login::Clientbound::Disconnect(login::Disconnect { reason_json })
+                                    .encode(),
+                            );
+                            self.shared().phase = Phase::Closed;
+                        }
+                    }
+                }
+            }
+            Phase::Acknowledge => {
+                if id == LOGIN_ACKNOWLEDGED {
+                    self.shared().phase = Phase::Play;
+                }
+            }
+            Phase::Play | Phase::Closed => {}
+        }
+        Ok(())
+    }
+
+    /// The next binary message during the login, `Err` with a reason the
+    /// client shows.
+    fn next(&self) -> Result<Vec<u8>, String> {
+        loop {
+            match self.socket.recv() {
+                Ok(Some(Message::Binary(data))) if !data.is_empty() => return Ok(data),
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(text("Connection closed by the server")),
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                    return Err(text("Timed out"));
+                }
+                Err(e) => return Err(text(&e.to_string())),
+            }
+        }
+    }
+
+    fn send(&self, data: Vec<u8>) -> Result<(), String> {
+        self.socket
+            .send(Message::Binary(data))
+            .map_err(|e| text(&e.to_string()))
+    }
+
+    /// The plugin's login (EaglerXServer's HandshakerV5): the name and UUID
+    /// the server gave, or the reason it refused, as a JSON component.
+    fn log_in(&self, name: &str) -> Result<(String, u128), String> {
+        let protocol = self.shared().protocol;
+        // CLIENT_VERSION: the "legacy" marker 2, the Eagler protocols, the
+        // Minecraft ones, brand, version, no password, the name.
+        let mut w = Writer::new();
+        w.u8(0x01);
+        w.u8(0x02);
+        w.u16(1);
+        w.u16(EAGLER_PROTOCOL);
+        w.u16(1);
+        w.u16(u16::try_from(protocol).unwrap_or(u16::MAX));
+        str8(&mut w, "Horizon");
+        str8(&mut w, env!("CARGO_PKG_VERSION"));
+        w.u8(0);
+        str8(&mut w, name);
+        self.send(w.data)?;
+        let reply = self.next()?;
+        refusal(&reply)?;
+        if reply[0] != 0x02 {
+            return Err(text("Unexpected reply from the Eaglercraft server"));
+        }
+        // REQUEST_LOGIN: the name, the default server, no password, no
+        // cookie, no capabilities.
+        let mut w = Writer::new();
+        w.u8(0x04);
+        str8(&mut w, name);
+        str8(&mut w, "default");
+        w.u8(0);
+        w.u8(0);
+        w.u8(0);
+        w.varint(0);
+        w.u8(0);
+        self.send(w.data)?;
+        // ALLOW_LOGIN comes once the backend took the login.
+        let reply = self.next()?;
+        refusal(&reply)?;
+        let allowed = (|| {
+            let mut r = Reader::new(&reply);
+            if r.u8()? != 0x05 {
+                return Err(crate::Error::new("not ALLOW_LOGIN"));
+            }
+            let n = r.u8()?;
+            let name = String::from_utf8_lossy(r.bytes(n.into())?).into_owned();
+            let uuid = (u128::from(r.i64()? as u64) << 64) | u128::from(r.i64()? as u64);
+            Ok((name, uuid))
+        })()
+        .map_err(|_| text("Unexpected reply from the Eaglercraft server"))?;
+        // No skin or cape: the plugin then gives the default ones.
+        self.send(vec![0x08])?;
+        loop {
+            let reply = self.next()?;
+            refusal(&reply)?;
+            if reply[0] == 0x09 {
+                return Ok(allowed);
+            }
+        }
+    }
+
+    /// The server list's status from the plugin's MOTD query, in the JSON a
+    /// vanilla server answers with.
+    fn query_status(&self) -> io::Result<String> {
+        self.socket.set_read_timeout(Some(STEP));
+        self.socket.send(Message::Text("Accept: motd".into()))?;
+        let reply = loop {
+            match self.socket.recv()? {
+                Some(Message::Text(t)) => break t,
+                Some(Message::Binary(_)) => {}
+                None => return Err(io::ErrorKind::UnexpectedEof.into()),
+            }
+        };
+        let protocol = self.shared().protocol;
+        Ok(status_json(&reply, protocol).to_string())
+    }
+}
+
+/// A JSON text component.
+fn text(message: &str) -> String {
+    serde_json::json!({ "text": message }).to_string()
+}
+
+fn str8(w: &mut Writer, s: &str) {
+    let bytes = &s.as_bytes()[..s.len().min(255)];
+    w.u8(bytes.len() as u8);
+    w.data.extend_from_slice(bytes);
+}
+
+/// The plugin's ways of saying no: a version mismatch, a refused login, a
+/// redirect elsewhere or an error, as the reason the client shows.
+fn refusal(reply: &[u8]) -> Result<(), String> {
+    let mut r = Reader::new(reply);
+    let reason = (|| -> crate::Result<Option<String>> {
+        Ok(match r.u8()? {
+            // VERSION_MISMATCH: the Eagler protocols, the Minecraft range,
+            // then a message.
+            0x03 => {
+                let n = r.u16()?;
+                r.bytes(2 * usize::from(n))?;
+                r.u16()?;
+                let (min, max) = (r.u16()?, r.u16()?);
+                let n = r.u8()?;
+                let message = String::from_utf8_lossy(r.bytes(n.into())?).into_owned();
+                Some(text(&format!(
+                    "{message} (this server takes Minecraft protocols {min} to {max})"
+                )))
+            }
+            // DENY_LOGIN: a JSON component.
+            0x06 => {
+                let n = r.u16()?;
+                Some(String::from_utf8_lossy(r.bytes(n.into())?).into_owned())
+            }
+            0x0A => {
+                let n = r.u16()?;
+                let to = String::from_utf8_lossy(r.bytes(n.into())?).into_owned();
+                Some(text(&format!("This server sends its players to {to}")))
+            }
+            // ERROR: a code, then the message (u16-long once the version is
+            // settled, u8-long before; tell them apart by what fits).
+            0xFF => {
+                let code = r.u8()?;
+                let rest = r.rest();
+                let message = match rest {
+                    [a, b, m @ ..] if usize::from(u16::from_be_bytes([*a, *b])) == m.len() => m,
+                    [_, m @ ..] => m,
+                    [] => &[],
+                };
+                let message = String::from_utf8_lossy(message);
+                Some(match serde_json::from_str::<serde_json::Value>(&message) {
+                    Ok(v) if v.is_object() => message.into_owned(),
+                    _ if message.is_empty() => text(&format!("Eaglercraft error {code}")),
+                    _ => text(&message),
+                })
+            }
+            _ => None,
+        })
+    })();
+    match reason {
+        Ok(None) => Ok(()),
+        Ok(Some(reason)) => Err(reason),
+        Err(_) => Err(text("Unexpected reply from the Eaglercraft server")),
+    }
+}
+
+/// `{"type":"motd","data":{"motd":[..],"online":n,"max":n,"players":[..]}}`
+/// as a vanilla status.
+fn status_json(reply: &str, protocol: i32) -> serde_json::Value {
+    let reply: serde_json::Value = serde_json::from_str(reply).unwrap_or_default();
+    let data = &reply["data"];
+    let motd = data["motd"]
+        .as_array()
+        .map(|lines| {
+            lines
+                .iter()
+                .filter_map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    let sample: Vec<_> = data["players"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.as_str())
+        .map(|name| serde_json::json!({ "name": name, "id": "00000000-0000-0000-0000-000000000000" }))
+        .collect();
+    serde_json::json!({
+        "version": { "name": reply["name"].as_str().unwrap_or("Eaglercraft"), "protocol": protocol },
+        "players": {
+            "online": data["online"].as_i64().unwrap_or(0),
+            "max": data["max"].as_i64().unwrap_or(0),
+            "sample": sample,
+        },
+        "description": { "text": motd },
+    })
+}
+
+impl Read for EaglerSocket {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let mut shared = self.shared();
+            if !shared.incoming.is_empty() {
+                let n = out.len().min(shared.incoming.len());
+                out[..n].copy_from_slice(&shared.incoming[..n]);
+                shared.incoming.drain(..n);
+                return Ok(n);
+            }
+            match shared.phase {
+                Phase::Closed => return Ok(0),
+                Phase::Play | Phase::Acknowledge => {}
+                // Before the login only answers made here come.
+                _ => return Err(io::ErrorKind::WouldBlock.into()),
+            }
+            drop(shared);
+            match self.socket.recv()? {
+                None => return Ok(0),
+                // The plugin's own messages (skins, voice, its pause menu)
+                // start with 0xEE, which no game packet id does.
+                Some(Message::Binary(data)) if data.first() != Some(&0xEE) && !data.is_empty() => {
+                    let framed = frame::prefixed(&data);
+                    self.shared().incoming.extend_from_slice(&framed);
+                }
+                Some(_) => {}
+            }
+        }
+    }
+}
+
+impl Write for EaglerSocket {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        self.outgoing.extend_from_slice(data);
+        while let Some(body) = frame::split(&mut self.outgoing).map_err(io::Error::other)? {
+            self.handle(body)?;
+        }
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::Connection;
+    use std::collections::VecDeque;
+
+    /// The plugin's side: what the client sent, and replies queued for it.
+    #[derive(Default)]
+    struct Server {
+        sent: Mutex<Vec<Message>>,
+        replies: Mutex<VecDeque<Message>>,
+    }
+    struct Fake(Arc<Server>);
+    impl Messages for Fake {
+        fn send(&self, message: Message) -> io::Result<()> {
+            self.0.sent.lock().unwrap().push(message);
+            Ok(())
+        }
+        fn recv(&self) -> io::Result<Option<Message>> {
+            Ok(self.0.replies.lock().unwrap().pop_front())
+        }
+        fn set_read_timeout(&self, _: Option<Duration>) {}
+        fn shutdown(&self) {}
+        fn try_clone(&self) -> io::Result<Box<dyn Messages>> {
+            Ok(Box::new(Fake(self.0.clone())))
+        }
+    }
+
+    fn connection(replies: Vec<Message>) -> (Connection, Arc<Server>) {
+        let server = Arc::new(Server::default());
+        server.replies.lock().unwrap().extend(replies);
+        let c = Connection::eagler(Box::new(Fake(server.clone()))).unwrap();
+        (c, server)
+    }
+
+    fn intention(intent: i32) -> Vec<u8> {
+        handshake::Serverbound::Intention(handshake::Intention {
+            protocol: 777,
+            host: "play.example.net".into(),
+            port: 443,
+            intent,
+        })
+        .encode()
+    }
+
+    #[test]
+    fn logs_in_through_the_plugin() {
+        let uuid = crate::crypto::offline_uuid("Steve");
+        let mut allow = vec![0x05, 5];
+        allow.extend_from_slice(b"Steve");
+        allow.extend_from_slice(&uuid.to_be_bytes());
+        allow.extend_from_slice(&[0, 0]);
+        let (mut c, server) = connection(vec![
+            // SERVER_VERSION: Eagler 5, Minecraft 777, brand, version, no
+            // auth, no salt, no nickname selection.
+            Message::Binary(vec![0x02, 0, 5, 0x03, 0x09, 1, b'E', 1, b'1', 0, 0, 0, 0]),
+            Message::Binary(allow),
+            Message::Binary(vec![0x09]),
+            // The first configuration packet, and the plugin's own message.
+            Message::Binary(vec![0xEE, 1, 2]),
+            Message::Binary(vec![0x03, 7]),
+        ]);
+        c.send(&intention(handshake::LOGIN)).unwrap();
+        c.send(
+            &login::Serverbound::Hello(login::ServerHello {
+                name: "Steve".into(),
+                uuid,
+            })
+            .encode(),
+        )
+        .unwrap();
+        let (id, payload) = c.recv().unwrap();
+        match login::Clientbound::decode(id, &payload).unwrap() {
+            login::Clientbound::LoginFinished(p) => {
+                assert_eq!((p.profile.name.as_str(), p.profile.uuid), ("Steve", uuid));
+            }
+            p => panic!("{p:?}"),
+        }
+        c.send(&login::Serverbound::LoginAcknowledged(crate::packets::Empty).encode())
+            .unwrap();
+        assert_eq!(c.recv().unwrap(), (3, vec![7]));
+        c.send(&[2, 1, 2, 3]).unwrap();
+        let sent = server.sent.lock().unwrap();
+        let Message::Binary(hello) = &sent[0] else {
+            panic!()
+        };
+        // Eagler 5 offered with Minecraft 777 (0x0309).
+        assert_eq!(&hello[..8], &[0x01, 0x02, 0, 1, 0, 5, 0, 1]);
+        assert_eq!(&hello[8..10], &[0x03, 0x09]);
+        assert_eq!(
+            sent[1..],
+            [
+                Message::Binary(
+                    [&[0x04, 5][..], b"Steve", &[7], b"default", &[0, 0, 0, 0, 0]].concat()
+                ),
+                Message::Binary(vec![0x08]),
+                // The acknowledgement stayed here; the game packet went as
+                // its own message, without its length.
+                Message::Binary(vec![2, 1, 2, 3]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_refusal_is_the_login_disconnect() {
+        let reason = br#"{"text":"Banned"}"#;
+        let mut deny = vec![0x06, 0, reason.len() as u8];
+        deny.extend_from_slice(reason);
+        let (mut c, _) = connection(vec![
+            Message::Binary(vec![0x02, 0, 5, 0x03, 0x09, 0, 0, 0, 0, 0, 0]),
+            Message::Binary(deny),
+        ]);
+        c.send(&intention(handshake::LOGIN)).unwrap();
+        c.send(
+            &login::Serverbound::Hello(login::ServerHello {
+                name: "Steve".into(),
+                uuid: 1,
+            })
+            .encode(),
+        )
+        .unwrap();
+        let (id, payload) = c.recv().unwrap();
+        match login::Clientbound::decode(id, &payload).unwrap() {
+            login::Clientbound::Disconnect(d) => assert_eq!(d.reason_json.as_bytes(), reason),
+            p => panic!("{p:?}"),
+        }
+        assert!(c.recv().is_err());
+    }
+
+    #[test]
+    fn status_comes_from_the_motd_query() {
+        let (mut c, server) = connection(vec![Message::Text(
+            r#"{"name":"Lobby","type":"motd","data":{"motd":["A","B"],"online":3,"max":20,"players":["Alex"]}}"#
+                .into(),
+        )]);
+        c.send(&intention(handshake::STATUS)).unwrap();
+        c.send(&status::Serverbound::StatusRequest(crate::packets::Empty).encode())
+            .unwrap();
+        let (id, payload) = c.recv().unwrap();
+        let status::Clientbound::StatusResponse(s) =
+            status::Clientbound::decode(id, &payload).unwrap()
+        else {
+            panic!()
+        };
+        let json: serde_json::Value = serde_json::from_str(&s.json).unwrap();
+        assert_eq!(json["description"]["text"], "A\nB");
+        assert_eq!(json["players"]["online"], 3);
+        assert_eq!(json["players"]["sample"][0]["name"], "Alex");
+        assert_eq!(json["version"]["protocol"], 777);
+        c.send(&status::Serverbound::PingRequest(status::Ping { time: 42 }).encode())
+            .unwrap();
+        let (id, payload) = c.recv().unwrap();
+        assert!(matches!(
+            status::Clientbound::decode(id, &payload).unwrap(),
+            status::Clientbound::PongResponse(status::Ping { time: 42 })
+        ));
+        assert_eq!(
+            server.sent.lock().unwrap()[..],
+            [Message::Text("Accept: motd".into())]
+        );
+    }
+}

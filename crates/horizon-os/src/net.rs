@@ -7,6 +7,9 @@
 //! asks the page to open, flush or close a socket by a message. What threads
 //! write goes into one queue the page sends from, so the bytes keep their
 //! order whichever thread wrote them.
+//!
+//! A socket opened by URL (an Eaglercraft server's) is read and written a
+//! message at a time instead ([`WebSocket::send`], [`WebSocket::recv`]).
 
 use crate::time::Duration;
 use std::{
@@ -22,12 +25,15 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(inline_js = r#"
 const sockets = new Map();
 let onEvent = null, take = null;
-function open(id, host, port) {
-    const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const name = host.includes(":") ? `[${host}]` : host;
+function open(id, url, host, port) {
+    if (!url) {
+        const scheme = location.protocol === "https:" ? "wss" : "ws";
+        const name = host.includes(":") ? `[${host}]` : host;
+        url = `${scheme}://${name}:${port}/`;
+    }
     let ws;
     try {
-        ws = new WebSocket(`${scheme}://${name}:${port}/`);
+        ws = new WebSocket(url);
     } catch (e) {
         onEvent(id, 2, null, String(e.message ?? e));
         return;
@@ -40,6 +46,7 @@ function open(id, host, port) {
     };
     ws.onmessage = ({ data }) => {
         if (data instanceof ArrayBuffer) onEvent(id, 1, new Uint8Array(data), "");
+        else onEvent(id, 3, null, data);
     };
     ws.onclose = ({ code, reason }) => {
         sockets.delete(id);
@@ -49,8 +56,7 @@ function open(id, host, port) {
 function flush(id) {
     const ws = sockets.get(id);
     if (ws && ws.readyState === WebSocket.OPEN) {
-        const data = take(id);
-        if (data) ws.send(data);
+        for (const data of take(id)) ws.send(data);
     }
 }
 function close(id) {
@@ -59,7 +65,7 @@ function close(id) {
     ws?.close();
 }
 function onPage(data) {
-    if (data.socket === "open") open(data.id, data.host, data.port);
+    if (data.socket === "open") open(data.id, data.url, data.host, data.port);
     else if (data.socket === "flush") flush(data.id);
     else close(data.id);
 }
@@ -80,14 +86,23 @@ extern "C" {
     fn horizon_socket_ask(data: &JsValue);
 }
 
+/// One WebSocket message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Message {
+    Binary(Vec<u8>),
+    Text(String),
+}
+
 /// What the page knows of a socket, and what its threads wrote.
 #[derive(Default)]
 struct State {
     open: bool,
     /// Why it closed, once it has.
     closed: Option<String>,
-    incoming: VecDeque<u8>,
-    outgoing: Vec<u8>,
+    incoming: VecDeque<Message>,
+    /// How much of the first incoming message a byte read has taken.
+    taken: usize,
+    outgoing: Vec<Message>,
 }
 
 #[derive(Default)]
@@ -108,14 +123,15 @@ fn find(id: u32) -> Option<Arc<Shared>> {
         .cloned()
 }
 
-fn ask(what: &str, id: u32, address: Option<(&str, u16)>) {
+fn ask(what: &str, id: u32, address: Option<(&str, &str, u16)>) {
     let data = js_sys::Object::new();
     let set = |key: &str, value: JsValue| {
         let _ = js_sys::Reflect::set(&data, &JsValue::from_str(key), &value);
     };
     set("socket", JsValue::from_str(what));
     set("id", JsValue::from(id));
-    if let Some((host, port)) = address {
+    if let Some((url, host, port)) = address {
+        set("url", JsValue::from_str(url));
         set("host", JsValue::from_str(host));
         set("port", JsValue::from(port));
     }
@@ -133,7 +149,8 @@ pub(crate) fn install() {
                 0 => state.open = true,
                 1 => state
                     .incoming
-                    .extend(js_sys::Uint8Array::new(&data).to_vec()),
+                    .push_back(Message::Binary(js_sys::Uint8Array::new(&data).to_vec())),
+                3 => state.incoming.push_back(Message::Text(reason)),
                 _ => {
                     state.closed.get_or_insert(reason);
                     crate::sync::lock(sockets())
@@ -146,17 +163,20 @@ pub(crate) fn install() {
         },
     );
     let take = Closure::<dyn FnMut(u32) -> JsValue>::new(|id: u32| {
+        let messages = js_sys::Array::new();
         let Some(shared) = find(id) else {
-            return JsValue::NULL;
+            return messages.into();
         };
         let mut state = crate::sync::lock(&shared.state).unwrap_or_else(|e| e.into_inner());
-        if state.outgoing.is_empty() {
-            return JsValue::NULL;
+        for message in state.outgoing.drain(..) {
+            messages.push(&match message {
+                // A copy outside the shared memory, which `WebSocket.send`
+                // refuses.
+                Message::Binary(data) => js_sys::Uint8Array::from(&data[..]).into(),
+                Message::Text(text) => JsValue::from_str(&text),
+            });
         }
-        // A copy outside the shared memory, which `WebSocket.send` refuses.
-        let data = js_sys::Uint8Array::from(&state.outgoing[..]);
-        state.outgoing.clear();
-        data.into()
+        messages.into()
     });
     horizon_socket_install(events.as_ref(), take.as_ref());
     events.forget();
@@ -198,6 +218,15 @@ impl WebSocket {
     /// Opens the socket (`wss:` on an `https:` page, else `ws:`) and waits
     /// until it is open. Only on a worker: the page can't wait.
     pub fn connect(host: &str, port: u16, timeout: Duration) -> io::Result<Self> {
+        Self::open(("", host, port), timeout)
+    }
+
+    /// Opens a socket to a `ws:` or `wss:` URL, to read a message at a time.
+    pub fn connect_url(url: &str, timeout: Duration) -> io::Result<Self> {
+        Self::open((url, "", 0), timeout)
+    }
+
+    fn open(address: (&str, &str, u16), timeout: Duration) -> io::Result<Self> {
         if !crate::workers::in_worker() {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -214,7 +243,7 @@ impl WebSocket {
             handle: Arc::new(Handle { id, shared }),
             timeout: Mutex::new(None),
         };
-        ask("open", id, Some((host, port)));
+        ask("open", id, Some(address));
         let shared = &socket.handle.shared;
         let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let (state, timed_out) =
@@ -252,10 +281,35 @@ impl WebSocket {
     pub fn shutdown(&self) {
         close(self.handle.id, &self.handle.shared);
     }
-}
 
-impl Read for WebSocket {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+    /// Sends one message.
+    pub fn send(&self, message: Message) -> io::Result<()> {
+        let handle = &self.handle;
+        let mut state = crate::sync::lock(&handle.shared.state).unwrap_or_else(|e| e.into_inner());
+        if state.closed.is_some() {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
+        // The page sends all that is queued: one request covers the messages
+        // written before it gets to it.
+        let first = state.outgoing.is_empty();
+        state.outgoing.push(message);
+        drop(state);
+        if first {
+            ask("flush", handle.id, None);
+        }
+        Ok(())
+    }
+
+    /// The next whole message, waiting for it as a read does (with the read
+    /// timeout); `None` once the socket closed.
+    pub fn recv(&self) -> io::Result<Option<Message>> {
+        let mut state = self.wait()?;
+        state.taken = 0;
+        Ok(state.incoming.pop_front())
+    }
+
+    /// The state once a message came or the socket closed.
+    fn wait(&self) -> io::Result<std::sync::MutexGuard<'_, State>> {
         let shared = &self.handle.shared;
         let mut state = crate::sync::lock(&shared.state).unwrap_or_else(|e| e.into_inner());
         if crate::workers::in_worker() {
@@ -278,9 +332,32 @@ impl Read for WebSocket {
         } else if state.incoming.is_empty() && state.closed.is_none() {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        let n = out.len().min(state.incoming.len());
-        for (o, b) in out.iter_mut().zip(state.incoming.drain(..n)) {
-            *o = b;
+        Ok(state)
+    }
+}
+
+impl Read for WebSocket {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let mut state = self.wait()?;
+        // A byte stream has no use for text messages.
+        while let Some(Message::Text(_)) = state.incoming.front() {
+            state.incoming.pop_front();
+            if state.incoming.is_empty() {
+                drop(state);
+                state = self.wait()?;
+            }
+        }
+        let taken = state.taken;
+        let Some(Message::Binary(data)) = state.incoming.front() else {
+            return Ok(0);
+        };
+        let n = out.len().min(data.len() - taken);
+        out[..n].copy_from_slice(&data[taken..taken + n]);
+        if taken + n == data.len() {
+            state.incoming.pop_front();
+            state.taken = 0;
+        } else {
+            state.taken += n;
         }
         Ok(n)
     }
@@ -288,19 +365,7 @@ impl Read for WebSocket {
 
 impl Write for WebSocket {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        let handle = &self.handle;
-        let mut state = crate::sync::lock(&handle.shared.state).unwrap_or_else(|e| e.into_inner());
-        if state.closed.is_some() {
-            return Err(io::ErrorKind::BrokenPipe.into());
-        }
-        // The page sends all that is queued: one request covers the bytes
-        // written before it gets to it.
-        let first = state.outgoing.is_empty();
-        state.outgoing.extend_from_slice(data);
-        drop(state);
-        if first {
-            ask("flush", handle.id, None);
-        }
+        self.send(Message::Binary(data.to_vec()))?;
         Ok(data.len())
     }
     fn flush(&mut self) -> io::Result<()> {

@@ -4,7 +4,7 @@
 
 Branch `web` ports the client to the browser: `horizon-client` compiled for `wasm32-unknown-unknown`,
 drawing through WebGPU, with threads as Web Workers. It boots to the title screen, opens single-player worlds
-and joins offline-mode Horizon servers over a WebSocket, with sound and controllers (options and saves are kept in the browser's OPFS; a service worker keeps the large
+and joins offline-mode Horizon and Eaglercraft servers over a WebSocket, with sound and controllers (options and saves are kept in the browser's OPFS; a service worker keeps the large
 files). Design and status:
 [web/README.md](web/README.md). Everything above still applies; this section adds what the port needs.
 

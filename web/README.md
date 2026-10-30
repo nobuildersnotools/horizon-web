@@ -2,7 +2,8 @@
 
 An experimental build of the Horizon client for the web: the same game code
 compiled to WebAssembly, drawing through the browser's WebGPU. It creates and
-opens single-player worlds, joins offline-mode Horizon servers, plays sound,
+opens single-player worlds, joins offline-mode Horizon and Eaglercraft
+servers, plays sound,
 reads controllers, and keeps the worlds and
 the options in the browser's storage (see [What's missing](#whats-missing)).
 
@@ -139,6 +140,23 @@ world `Test` in creative mode at start.
   the same bytes in binary messages. Join from *Multiplayer* or with
   `?args=--server%20host:port`. Without threads (`THREADS=0`) there is no
   network worker, so no multiplayer.
+- **Eaglercraft servers**: an address that is a `ws://` or `wss://` URL
+  (`servers::websocket_url`) is an EaglerXServer plugin in front of a proxy,
+  whose ViaVersion takes 26.3's protocol (777). The socket then goes a message
+  at a time, and `horizon-protocol/src/eagler.rs` stands between it and the
+  connection's byte stream. It reads the client's own handshake and login
+  start, runs the plugin's login (Eagler protocol 5, which lifts the default
+  1.12 cap on Minecraft protocols: client version → server version → request
+  login → allow login → finish login, no skin sent), and answers with the
+  login-finished packet; it drops the client's login acknowledgement, which the
+  plugin sends itself. After that each game packet is one binary message
+  without its length (never compressed or encrypted), and the plugin's own
+  messages (`0xEE` first) are skipped. A refusal (version mismatch, denied
+  login, redirect, error) becomes the login disconnect, so the client shows
+  the reason. The server list's status is the plugin's `Accept: motd` text
+  query, turned into a vanilla status. Checked against
+  `wss://eagler.carrot-craft.org` (EaglercraftXServer 1.1.1 on Velocity):
+  login, configuration, play and keep-alives.
 - **Chunk work** (`streaming.rs`): chunk workers are Web Workers. Without
   threads (`THREADS=0`), the frame runs queued generation, lighting and meshing
   jobs itself for up to 12 ms per update.
@@ -156,8 +174,16 @@ world `Test` in creative mode at start.
 - **Moving worlds in and out**: no export or import of a world folder (a
   `.zip`) yet; a world stays in the browser that made it.
 - **Online-mode servers**: Microsoft sign-in needs a backend, so the page
-  joins offline-mode servers only. Servers that aren't Horizon's take no
-  WebSockets: they need a proxy in front (none written yet).
+  joins offline-mode servers only. Java servers with neither Horizon nor the
+  Eaglercraft plugin take no WebSockets: they need a proxy in front (none
+  written yet).
+- **Eaglercraft extras**: no skin or cape is sent (the plugin gives the
+  default ones), the server list shows no icon (the plugin's 64×64 RGBA icon
+  isn't read), Eagler passwords (`authEnabled`) and its cookies aren't
+  offered, and the plugin's messages (skins, voice, its pause menu) are
+  dropped. Servers whose plugin only offers Eagler 3/4, or caps
+  `max_minecraft_protocol_v5` under 777, refuse the version. The native
+  client can't join a `ws:` address.
 - **Secure pages and plain servers**: an `https:` page may only open `wss:`,
   so a page served over HTTPS reaches a server through a TLS proxy (Caddy,
   nginx) in front of its port.

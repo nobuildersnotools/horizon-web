@@ -130,10 +130,15 @@ fn write(path: &Path, root: &NamedTag) -> std::io::Result<()> {
 }
 
 /// ServerAddress.parseString: `host`, `host:port` or `[v6]:port`; default 25565.
+/// The browser build also takes an Eaglercraft server's `ws:`/`wss:` URL.
 pub fn parse_address(text: &str) -> Option<(String, u16)> {
     let text = text.trim();
     if text.is_empty() {
         return None;
+    }
+    #[cfg(target_arch = "wasm32")]
+    if let Some(url) = websocket_url(text) {
+        return url_address(url);
     }
     if let Some(rest) = text.strip_prefix('[') {
         let (host, tail) = rest.split_once(']')?;
@@ -151,9 +156,64 @@ pub fn parse_address(text: &str) -> Option<(String, u16)> {
     }
 }
 
+/// An Eaglercraft server's address: a `ws:` or `wss:` URL.
+pub fn websocket_url(text: &str) -> Option<&str> {
+    let text = text.trim();
+    let scheme = text.get(..6)?.to_ascii_lowercase();
+    (scheme.starts_with("ws://") || scheme == "wss://").then_some(text)
+}
+
+/// The host and port of a `ws:`/`wss:` URL (80 or 443 when it names none).
+pub fn url_address(url: &str) -> Option<(String, u16)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let default = if scheme.eq_ignore_ascii_case("wss") {
+        443
+    } else {
+        80
+    };
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, a)| a);
+    if authority.is_empty() {
+        return None;
+    }
+    if let Some(v6) = authority.strip_prefix('[') {
+        let (host, tail) = v6.split_once(']')?;
+        let port = match tail.strip_prefix(':') {
+            Some(p) => p.parse().ok()?,
+            None if tail.is_empty() => default,
+            None => return None,
+        };
+        return Some((host.to_owned(), port));
+    }
+    match authority.split_once(':') {
+        Some((host, port)) => Some((host.to_owned(), port.parse().ok()?)),
+        None => Some((authority.to_owned(), default)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn websocket_urls() {
+        assert_eq!(
+            websocket_url(" wss://mc.example.net/ "),
+            Some("wss://mc.example.net/")
+        );
+        assert_eq!(websocket_url("WS://x"), Some("WS://x"));
+        assert_eq!(websocket_url("wsx.example.net:25565"), None);
+        assert_eq!(
+            url_address("wss://mc.example.net/play?x=1"),
+            Some(("mc.example.net".into(), 443))
+        );
+        assert_eq!(
+            url_address("ws://127.0.0.1:8081"),
+            Some(("127.0.0.1".into(), 8081))
+        );
+        assert_eq!(url_address("ws://[::1]/"), Some(("::1".into(), 80)));
+        assert_eq!(url_address("wss://"), None);
+    }
 
     #[test]
     fn servers_dat_round_trips() {
