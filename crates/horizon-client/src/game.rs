@@ -16902,6 +16902,8 @@ pub fn run() -> Result<()> {
     // horizon-ctl drives: those start in a source checkout and wrote the list there.
     if !options.offscreen && !synchronous_startup(&options) {
         horizon_client::heartbeat::start();
+        // The web build pins its own featured server instead (`multiplayer::FEATURED_SERVER`).
+        #[cfg(not(target_arch = "wasm32"))]
         if let Err(e) =
             horizon_client::multiplayer::add_official_server(&horizon_os::env::current_dir()?)
         {

@@ -291,6 +291,48 @@ pub fn add_official_server(game_dir: &Path) -> std::io::Result<()> {
     horizon_os::fs::write(marker, format!("{address}\n"))
 }
 
+/// The web build's featured server, in place of the official one (browsers reach servers only
+/// over a WebSocket): always first in the list, and the player can't edit, move or delete it.
+#[cfg(target_arch = "wasm32")]
+pub const FEATURED_SERVER: (&str, &str) = ("Carrotcraft", "wss://eagler.carrot-craft.org");
+/// How many entries at the top of the list are pinned there: the featured server on the web.
+const PINNED: usize = if cfg!(target_arch = "wasm32") { 1 } else { 0 };
+/// Whether the player may edit, move or delete the server at `index`.
+fn unpinned(index: usize) -> bool {
+    (PINNED..).contains(&index)
+}
+
+/// Puts the featured server first in the list in `file` (dropping the official server, which a
+/// browser can't reach), keeping what its old entry saved (icon, pack setting).
+#[cfg(target_arch = "wasm32")]
+fn pin_featured(file: &Path) -> Vec<ServerEntry> {
+    let (name, address) = FEATURED_SERVER;
+    let key = |ip: &str| servers::parse_address(ip).map(|(h, p)| (h.to_ascii_lowercase(), p));
+    let _guard = horizon_os::sync::lock(&SAVING);
+    let mut list = servers::load(file);
+    let is_featured = |s: &ServerEntry| key(&s.ip) == key(address);
+    let pinned = list
+        .first()
+        .is_some_and(|s| s.name == name && s.ip == address)
+        && !list[1..].iter().any(is_featured)
+        && !list.iter().any(|s| key(&s.ip) == key(OFFICIAL_SERVER.1));
+    if pinned {
+        return list;
+    }
+    let mut entry = list
+        .iter()
+        .find(|s| is_featured(s))
+        .cloned()
+        .unwrap_or_else(|| ServerEntry::new(name, address));
+    (entry.name, entry.ip) = (name.to_owned(), address.to_owned());
+    list.retain(|s| !is_featured(s) && key(&s.ip) != key(OFFICIAL_SERVER.1));
+    list.insert(0, entry);
+    if let Err(e) = servers::save(file, &list) {
+        log::warn!("could not save the featured server to servers.dat: {e}");
+    }
+    list
+}
+
 /// The address of list row `index`: the saved servers, then the LAN games.
 fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option<String> {
     match servers.get(index) {
@@ -501,7 +543,10 @@ impl Screen {
     }
 
     pub fn list(saves: &Path) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
         let servers = servers::load(&servers_file(saves));
+        #[cfg(target_arch = "wasm32")]
+        let servers = pin_featured(&servers_file(saves));
         let pings: Pings = Arc::default();
         let icons: Icons = Arc::default();
         ping_all(&servers, &pings, &icons, &servers_file(saves));
@@ -527,7 +572,7 @@ impl Screen {
             } => {
                 let (w, h) = (w.ceil(), h.ceil());
                 let x = ((w - 308.0) / 2.0).floor();
-                let saved = selected.is_some_and(|i| i < servers.len());
+                let saved = selected.is_some_and(|i| (PINNED..servers.len()).contains(&i));
                 let label = |key: &str, fallback: &str| crate::lang::get_or(key, fallback);
                 vec![
                     b(
@@ -909,8 +954,12 @@ impl Screen {
                                 batch.fill(atlas, cx, cy, 32.0, 32.0, 0xA0909090);
                                 for (sprite, shown, over) in [
                                     ("join", true, over_right_half(rx, ry)),
-                                    ("move_up", k > 0, over_top_left(rx, ry)),
-                                    ("move_down", k + 1 < servers.len(), over_bottom_left(rx, ry)),
+                                    ("move_up", k > PINNED, over_top_left(rx, ry)),
+                                    (
+                                        "move_down",
+                                        unpinned(k) && k + 1 < servers.len(),
+                                        over_bottom_left(rx, ry),
+                                    ),
                                 ] {
                                     if shown {
                                         let lit = if over { "_highlighted" } else { "" };
@@ -1170,7 +1219,9 @@ impl Screen {
                 },
                 Some(43),
             ) => {
-                if let Some((i, s)) = selected.and_then(|i| servers.get(i).map(|s| (i, s.clone())))
+                if let Some((i, s)) = selected
+                    .filter(|&i| unpinned(i))
+                    .and_then(|i| servers.get(i).map(|s| (i, s.clone())))
                 {
                     *self = Self::Edit {
                         index: Some(i),
@@ -1189,6 +1240,7 @@ impl Screen {
             ) => {
                 // JoinMultiplayerScreen's Delete asks first (ConfirmScreen).
                 if let Some(name) = selected
+                    .filter(|&i| unpinned(i))
                     .and_then(|i| servers.get(i))
                     .map(|s| s.name.clone())
                 {
@@ -1222,7 +1274,7 @@ impl Screen {
                         servers, selected, ..
                     } = self
                     && let Some(i) = selected.take()
-                    && i < servers.len()
+                    && (PINNED..servers.len()).contains(&i)
                 {
                     servers.remove(i);
                     save_servers(&servers_file(saves), servers);
@@ -1258,9 +1310,9 @@ impl Screen {
                         *selected = Some(k);
                         return Outcome::Connect(servers[k].ip.clone());
                     }
-                    let to = if k > 0 && over_top_left(rx, ry) {
+                    let to = if k > PINNED && over_top_left(rx, ry) {
                         Some(k - 1)
-                    } else if k + 1 < servers.len() && over_bottom_left(rx, ry) {
+                    } else if unpinned(k) && k + 1 < servers.len() && over_bottom_left(rx, ry) {
                         Some(k + 1)
                     } else {
                         None
