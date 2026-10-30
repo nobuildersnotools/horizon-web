@@ -2,7 +2,9 @@
 //! encryption, VarInt21 framing and threshold compression. After login it
 //! splits into a reader (for a receive thread) and a shareable writer. It runs
 //! over TCP, or over an in-memory pipe between two threads of one process
-//! (vanilla's `LocalChannel`, which an integrated server's player uses).
+//! (vanilla's `LocalChannel`, which an integrated server's player uses). A
+//! server also takes browsers' WebSockets on its port, and on the web the
+//! client reaches servers through one.
 use crate::{Error, Result, buf::Reader, crypto::Cfb8, frame};
 use horizon_os::time::{Duration, Instant};
 use std::{
@@ -109,12 +111,20 @@ impl Write for Pipe {
 enum Stream {
     Tcp(TcpStream),
     Memory(Pipe),
+    /// A browser's connection to this server.
+    WebSocket(crate::websocket::ServerSocket),
+    /// This page's connection to a server.
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    Web(horizon_os::net::WebSocket),
 }
 impl Stream {
     fn try_clone(&self) -> std::io::Result<Self> {
         Ok(match self {
             Self::Tcp(s) => Self::Tcp(s.try_clone()?),
             Self::Memory(p) => Self::Memory(p.try_clone()),
+            Self::WebSocket(s) => Self::WebSocket(s.try_clone()?),
+            #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+            Self::Web(s) => Self::Web(s.try_clone()),
         })
     }
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
@@ -122,6 +132,12 @@ impl Stream {
             Self::Tcp(s) => s.set_read_timeout(timeout),
             Self::Memory(p) => {
                 *p.timeout.lock().unwrap() = timeout;
+                Ok(())
+            }
+            Self::WebSocket(s) => s.stream().set_read_timeout(timeout),
+            #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+            Self::Web(s) => {
+                s.set_read_timeout(timeout);
                 Ok(())
             }
         }
@@ -132,6 +148,9 @@ impl Stream {
                 let _ = s.shutdown(Shutdown::Both);
             }
             Self::Memory(p) => p.shutdown(),
+            Self::WebSocket(s) => s.shutdown(),
+            #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+            Self::Web(s) => s.shutdown(),
         }
     }
 }
@@ -140,6 +159,9 @@ impl Read for Stream {
         match self {
             Self::Tcp(s) => s.read(out),
             Self::Memory(p) => p.read(out),
+            Self::WebSocket(s) => s.read(out),
+            #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+            Self::Web(s) => s.read(out),
         }
     }
 }
@@ -148,12 +170,18 @@ impl Write for Stream {
         match self {
             Self::Tcp(s) => s.write(data),
             Self::Memory(p) => p.write(data),
+            Self::WebSocket(s) => s.write(data),
+            #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+            Self::Web(s) => s.write(data),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Self::Tcp(s) => s.flush(),
             Self::Memory(p) => p.flush(),
+            Self::WebSocket(s) => s.flush(),
+            #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+            Self::Web(s) => s.flush(),
         }
     }
 }
@@ -197,6 +225,9 @@ pub struct Connection {
 }
 impl Connection {
     pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<Self> {
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        return Self::connect_web(host, port, timeout);
+        #[allow(unreachable_code)]
         let addrs: Vec<_> = (host, port)
             .to_socket_addrs()
             .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))?
@@ -206,6 +237,9 @@ impl Connection {
     /// Minecraft's SRV redirect applies to the socket destination only. Callers
     /// keep the player's original host and port in the protocol handshake.
     pub fn connect_server(host: &str, port: u16, timeout: Duration) -> Result<Self> {
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        return Self::connect_web(host, port, timeout);
+        #[allow(unreachable_code)]
         let addrs = crate::resolver::resolve(host, port)?;
         Self::connect_addresses(host, addrs, timeout)
     }
@@ -257,6 +291,21 @@ impl Connection {
             Some(e) => Err(Error::new(format!("Connection refused: {e}"))),
             None => Err(Error::new(format!("Unknown host {host}"))),
         }
+    }
+    /// The page has no TCP: a WebSocket to the server's port instead.
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    fn connect_web(host: &str, port: u16, timeout: Duration) -> Result<Self> {
+        let socket = horizon_os::net::WebSocket::connect(host, port, timeout)
+            .map_err(|e| Error::new(format!("Connection refused: {e}")))?;
+        Self::over(Stream::Web(socket))
+    }
+    /// A browser's connection, whose HTTP upgrade request is still to read
+    /// ([`crate::websocket::is_http`] told it apart).
+    pub fn from_websocket(stream: TcpStream) -> Result<Self> {
+        stream.set_nodelay(true)?;
+        Self::over(Stream::WebSocket(crate::websocket::ServerSocket::accept(
+            stream,
+        )?))
     }
     pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream.set_nodelay(true)?;
@@ -403,7 +452,7 @@ mod tests {
     fn peer(c: &Connection) -> SocketAddr {
         match &c.reader.stream {
             Stream::Tcp(s) => s.peer_addr().unwrap(),
-            Stream::Memory(_) => panic!("not a socket"),
+            _ => panic!("not a TCP socket"),
         }
     }
 

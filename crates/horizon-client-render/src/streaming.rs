@@ -1965,6 +1965,12 @@ impl Drop for Streaming {
         self.shared.stop.store(true, Ordering::Relaxed);
         self.shared.ready.notify_all();
         for t in self.threads.drain(..) {
+            // The page may not wait for its workers, which may not even have
+            // started yet (`--server` drops the title's streaming at once):
+            // they see `stop` and end on their own.
+            #[cfg(target_arch = "wasm32")]
+            drop(t);
+            #[cfg(not(target_arch = "wasm32"))]
             let _ = t.join();
         }
     }

@@ -2,7 +2,8 @@
 
 An experimental build of the Horizon client for the web: the same game code
 compiled to WebAssembly, drawing through the browser's WebGPU. It creates and
-opens single-player worlds with sound and controllers, and keeps the worlds and
+opens single-player worlds, joins offline-mode Horizon servers, plays sound,
+reads controllers, and keeps the worlds and
 the options in the browser's storage (see [What's missing](#whats-missing)).
 
 ## Build and run
@@ -125,6 +126,19 @@ world `Test` in creative mode at start.
   `…?v=<hash>`. The service worker keeps those until a build changes them;
   everything else goes to the network first and falls back to its copy offline.
   Files fetched when read (`fs/res/`) aren't kept.
+- **Multiplayer**: pages have no TCP, so the client reaches a server through a
+  WebSocket to the server's own port (`horizon_os::net`): `ws://host:port/`,
+  or `wss:` when the page is `https:`. The socket lives on the page, whose
+  thread gets its events; the network and ping workers read it like a socket,
+  waiting on a condvar, and ask the page by a message to open, flush or close
+  it. All writes go into one queue the page sends from, so bytes keep their
+  order whoever wrote them (the window's packets and the network thread's
+  keep-alives). Horizon's servers (dedicated, and a world opened to LAN) take
+  WebSockets beside Minecraft's TCP on the same port: a connection starting
+  with `GET ` is upgraded (`horizon-protocol/src/websocket.rs`), then carries
+  the same bytes in binary messages. Join from *Multiplayer* or with
+  `?args=--server%20host:port`. Without threads (`THREADS=0`) there is no
+  network worker, so no multiplayer.
 - **Chunk work** (`streaming.rs`): chunk workers are Web Workers. Without
   threads (`THREADS=0`), the frame runs queued generation, lighting and meshing
   jobs itself for up to 12 ms per update.
@@ -141,8 +155,12 @@ world `Test` in creative mode at start.
   for the GPU. They report an error on the web; the world list shows no icon.
 - **Moving worlds in and out**: no export or import of a world folder (a
   `.zip`) yet; a world stays in the browser that made it.
-- **Network.** Browsers have no raw sockets: multiplayer needs a WebSocket
-  endpoint on the server or a proxy, and Microsoft sign-in needs a backend.
+- **Online-mode servers**: Microsoft sign-in needs a backend, so the page
+  joins offline-mode servers only. Servers that aren't Horizon's take no
+  WebSockets: they need a proxy in front (none written yet).
+- **Secure pages and plain servers**: an `https:` page may only open `wss:`,
+  so a page served over HTTPS reaches a server through a TLS proxy (Caddy,
+  nginx) in front of its port.
 - **Sounds kept in memory**: every sound file fetched stays in the virtual
   filesystem for the session, as do the decoded samples' 64 MB cache.
 - **Controller output**: rumble through gilrs' force feedback has no thread

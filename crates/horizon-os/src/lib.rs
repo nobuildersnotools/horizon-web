@@ -6,6 +6,8 @@
 
 pub mod env;
 pub mod fs;
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub mod net;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]

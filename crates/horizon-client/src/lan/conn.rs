@@ -441,6 +441,19 @@ pub fn serve(
     {
         return serve_legacy(stream, &shared);
     }
+    // A browser's WebSocket (the web client has no TCP): an HTTP request
+    // where a handshake frame would be.
+    let mut head = [0u8; 4];
+    if stream
+        .peek(&mut head)
+        .is_ok_and(|n| horizon_protocol::websocket::is_http(&head[..n]))
+    {
+        return serve_connection(
+            Connection::from_websocket(stream).map_err(e)?,
+            address,
+            shared,
+        );
+    }
     serve_connection(Connection::from_stream(stream).map_err(e)?, address, shared)
 }
 
