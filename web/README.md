@@ -2,8 +2,8 @@
 
 An experimental build of the Horizon client for the web: the same game code
 compiled to WebAssembly, drawing through the browser's WebGPU. It creates and
-opens single-player worlds, and keeps them and the options in the browser's
-storage (see [What's missing](#whats-missing)).
+opens single-player worlds with sound and controllers, and keeps the worlds and
+the options in the browser's storage (see [What's missing](#whats-missing)).
 
 ## Build and run
 
@@ -14,7 +14,11 @@ README's *Build from source*), and once:
 rustup target add wasm32-unknown-unknown
 rustup toolchain install nightly-2026-10-14 --component rust-src   # threads: std rebuilt with atomics
 cargo install wasm-bindgen-cli --version 0.2.129   # the version in Cargo.lock
+sudo pacman -S binaryen       # wasm-opt, for the release build (or your system's binaryen package)
 ```
+
+Sounds come with the prepared resources when your Minecraft install has them
+(`horizon-prepare sounds` adds them to resources prepared without).
 
 Then:
 
@@ -28,8 +32,28 @@ on Windows, macOS and ChromeOS. On Linux, Chromium-based browsers need it switch
 on: `brave --enable-unsafe-webgpu --enable-features=Vulkan http://localhost:8080`
 (or the same flags for `chromium` / `google-chrome`).
 
-`PROFILE=release web/build.sh` builds with LTO (slower to build, smaller and faster).
-`THREADS=0 web/build.sh` builds with stable Rust and no threads.
+`web/build.sh` makes the release build: LTO, then `wasm-opt` when it is installed
+(slow to build; what players should get). `PROFILE=fast web/build.sh` skips both and
+rebuilds in about a minute while you work. `THREADS=0 web/build.sh` builds with
+stable Rust and no threads.
+
+### Browsers
+
+The game needs WebGPU, and the threaded build a cross-origin isolated page
+(`web/serve.py` sends the headers; any host must send
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`):
+
+| Browser | Platforms |
+|---|---|
+| Chrome, Edge 113+ | Windows, macOS, ChromeOS |
+| Chrome 121+ | Android |
+| Safari 26 | macOS, iOS, iPadOS |
+| Firefox 141+ | Windows |
+| Chrome, Edge, Brave | Linux, with `--enable-unsafe-webgpu --enable-features=Vulkan` |
+
+A browser without WebGPU, or with no GPU it can use, gets a message saying so
+and this list instead of the game.
 
 The address passes the game its command-line arguments:
 <http://localhost:8080/?args=--world%20Test%20--creative> opens (or creates) the
@@ -47,8 +71,9 @@ world `Test` in creative mode at start.
   everything the game reads to reach the title screen and open a world into
   `boot.tar.gz` (about 15 MB). The rest (other languages, the world generator's
   bundle) is listed in `manifest.txt` and fetched the first time it is read.
-- **Startup** (`web/main.js`): load the WebAssembly, download and install the
-  archive, load the player's saved files, then `horizon_start()`. The first renderer opens asynchronously
+- **Startup** (`web/main.js`): check for WebGPU, start the service worker, load
+  the WebAssembly, download and install the archive, load the player's saved
+  files, then `horizon_start()`. The first renderer opens asynchronously
   (`Loading::resumed`), because the page can't wait for the GPU.
 - **Threads** (`horizon-os/src/workers.rs`, `web/worker.js`): the module is
   built with atomics on a shared memory (std rebuilt on nightly, the linker's
@@ -84,6 +109,22 @@ world `Test` in creative mode at start.
   on the player's next click. Escape while the pointer is locked only releases
   the lock and never reaches the page, so the game takes a lost lock during
   play as that Escape and pauses (`horizon_os::web::pointer_lock_lost`).
+- **Sound**: cpal's Web Audio backend (`audio.rs` mixes as on native). Its
+  `AudioContext` starts suspended until the player clicks or presses a key;
+  `web/audio.js` wraps the class before the game's glue loads (the glue keeps
+  the one it finds) and resumes every context on the first click or key.
+  Sound files are in `manifest.txt`, fetched when a sound first plays, by the
+  decoder and music workers. The mixer and decoded-sound locks are shared
+  between the page (cpal's callback) and those workers, so they go through
+  `horizon_os::sync::lock`.
+- **Controllers**: gilrs reads the browser's Gamepad API. The DualSense's own
+  output (rumble, adaptive triggers, lights) needs HID, which pages don't
+  have: `horizon-dualsense` builds without it, as on iOS.
+- **Caching** (`web/sw.js`): `build.sh` writes `build.json` with the content
+  hashes of the WebAssembly and `boot.tar.gz`, and the page asks for them as
+  `…?v=<hash>`. The service worker keeps those until a build changes them;
+  everything else goes to the network first and falls back to its copy offline.
+  Files fetched when read (`fs/res/`) aren't kept.
 - **Chunk work** (`streaming.rs`): chunk workers are Web Workers. Without
   threads (`THREADS=0`), the frame runs queued generation, lighting and meshing
   jobs itself for up to 12 ms per update.
@@ -102,5 +143,8 @@ world `Test` in creative mode at start.
   `.zip`) yet; a world stays in the browser that made it.
 - **Network.** Browsers have no raw sockets: multiplayer needs a WebSocket
   endpoint on the server or a proxy, and Microsoft sign-in needs a backend.
-- **Sound.** cpal's Web Audio backend is not enabled yet.
+- **Sounds kept in memory**: every sound file fetched stays in the virtual
+  filesystem for the session, as do the decoded samples' 64 MB cache.
+- **Controller output**: rumble through gilrs' force feedback has no thread
+  on the web, and the DualSense's own output needs HID.
 - **Mods** that run WebAssembly through wasmtime can't run inside the page.

@@ -1,6 +1,7 @@
 // Loads the game, installs the prepared resources and the player's saved
 // files in its virtual filesystem, then starts it and keeps saving the
-// player's files in the browser's storage (OPFS).
+// player's files in the browser's storage (OPFS). A service worker (sw.js)
+// keeps the large files for later visits.
 import "./audio.js"; // before the game's glue, which keeps the AudioContext it finds
 import init, {
     horizon_install_manifest,
@@ -13,6 +14,56 @@ import init, {
 
 const ROOT = ".local/horizon-client/26.3";
 const status = document.getElementById("status");
+
+const BROWSERS = `It runs in:
+Chrome and Edge 113 or later on Windows, macOS and ChromeOS
+Chrome 121 or later on Android
+Safari 26 on macOS, iOS and iPadOS
+Firefox 141 or later on Windows
+On Linux, Chrome, Edge and Brave need WebGPU switched on:
+--enable-unsafe-webgpu --enable-features=Vulkan`;
+
+// Whether this browser can draw the game; says why not on the page.
+async function webgpu() {
+    if (!navigator.gpu) {
+        status.textContent = `Horizon needs WebGPU, which this browser doesn't offer.\n\n${BROWSERS}`;
+        return false;
+    }
+    if (!(await navigator.gpu.requestAdapter().catch(() => null))) {
+        status.textContent = "Horizon needs WebGPU, and this browser offers it but found no GPU to use " +
+            `(it may be switched off, or the graphics driver not supported).\n\n${BROWSERS}`;
+        return false;
+    }
+    return true;
+}
+
+// Starts the service worker and, on a first visit, waits briefly for it to
+// take over the page, so the large files it fetches are kept.
+async function cacheWorker() {
+    const workers = navigator.serviceWorker;
+    if (!workers) return;
+    try {
+        await workers.register("sw.js");
+        if (!workers.controller) {
+            await Promise.race([
+                new Promise((resolve) => workers.addEventListener("controllerchange", resolve, { once: true })),
+                new Promise((resolve) => setTimeout(resolve, 3000)),
+            ]);
+        }
+    } catch (e) {
+        console.warn(`Horizon: no service worker, files won't be kept for later visits: ${e}`);
+    }
+}
+
+// The large files' addresses with their content hash (build.json), which the
+// service worker keeps them by.
+async function versioned() {
+    const files = await fetch("build.json", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : {}))
+        .catch(() => ({}));
+    const at = (path) => (files[path] ? `${path}?v=${files[path]}` : path);
+    return { wasm: at("pkg/horizon-client_bg.wasm"), boot: at("fs/boot.tar.gz") };
+}
 
 async function download(url, label) {
     const response = await fetch(url);
@@ -127,23 +178,22 @@ function saveChanges(root) {
 }
 
 async function main() {
-    if (!navigator.gpu) {
-        status.textContent = "Horizon needs WebGPU, which this browser doesn't offer.";
-        return;
-    }
+    if (!(await webgpu())) return;
+    await cacheWorker();
+    const files = await versioned();
     status.textContent = "Loading the game…";
     // Runs the game's main, which only registers the game to start.
-    await init();
+    await init({ module_or_path: files.wasm });
 
     const t0 = performance.now();
-    const gz = await download("fs/boot.tar.gz", "Downloading resources");
+    const gz = await download(files.boot, "Downloading resources");
     const tar = new Uint8Array(
         await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
     status.textContent = "Installing resources…";
-    const files = horizon_install_tar(ROOT, tar);
+    const installed = horizon_install_tar(ROOT, tar);
     const manifest = await (await fetch("fs/manifest.txt")).text();
     horizon_install_manifest(ROOT, "fs/res/", manifest);
-    console.log(`Horizon: ${files} files installed in ${Math.round(performance.now() - t0)} ms`);
+    console.log(`Horizon: ${installed} files installed in ${Math.round(performance.now() - t0)} ms`);
 
     const root = await savedRoot();
     if (root) {
@@ -173,5 +223,10 @@ async function main() {
 
 main().catch((e) => {
     console.error(e);
-    status.textContent = `Horizon could not start:\n${e}`;
+    // The threaded build shares memory between workers, which browsers allow
+    // only on a cross-origin isolated page.
+    const isolation = window.crossOriginIsolated ? "" :
+        "\n\nThe page isn't cross-origin isolated: its server must send " +
+        "Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp.";
+    status.textContent = `Horizon could not start:\n${e}${isolation}`;
 });

@@ -2,19 +2,21 @@
 # Builds Horizon for the browser into web/dist: the game as WebAssembly, the
 # page, and the prepared resources packed for download.
 #
-#   web/build.sh            optimized, no LTO (the `fast` profile)
-#   PROFILE=release web/build.sh
+#   web/build.sh            the release build: LTO, then wasm-opt (binaryen) when installed
+#   PROFILE=fast web/build.sh  optimized, no LTO or wasm-opt: quick to rebuild while working
 #   THREADS=0 web/build.sh  stable Rust, no threads (everything on the page's)
+#   WASM_OPT=0 web/build.sh skip wasm-opt
 #
 # Threads are Web Workers on shared memory, which std only supports when it is
 # rebuilt with atomics: that build needs the pinned nightly below with its
 # rust-src (rustup component add rust-src --toolchain <it>).
 # Needs: rustup target add wasm32-unknown-unknown, and the wasm-bindgen CLI of
-# the version in Cargo.lock (cargo install wasm-bindgen-cli --version <it>).
+# the version in Cargo.lock (cargo install wasm-bindgen-cli --version <it>); for
+# the release build, wasm-opt (binaryen's package, e.g. pacman -S binaryen).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-profile="${PROFILE:-fast}"
+profile="${PROFILE:-release}"
 resources="${HORIZON_RESOURCES:-.local/horizon-client/26.3}"
 dist=web/dist
 
@@ -36,16 +38,46 @@ if [ "${THREADS:-1}" != 0 ]; then
     cargo=(cargo "+$nightly" -Z build-std=std,panic_abort)
 fi
 "${cargo[@]}" build --target wasm32-unknown-unknown --profile "$profile" \
-    -p horizon-client --bin horizon-client --no-default-features --features audio
+    -p horizon-client --bin horizon-client --no-default-features --features audio,controllers
 
 target_dir="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 mkdir -p "$dist/pkg"
-wasm-bindgen --target web --no-typescript --out-dir "$dist/pkg" \
-    "$target_dir/wasm32-unknown-unknown/$profile/horizon-client.wasm"
-cp web/index.html web/main.js web/audio.js web/worker.js "$dist/"
+bindgen=(wasm-bindgen --target web --no-typescript --out-dir "$dist/pkg")
+# Function names (5 MB) only make stack traces readable: the release build drops them.
+[ "$profile" = release ] && bindgen+=(--remove-name-section)
+"${bindgen[@]}" "$target_dir/wasm32-unknown-unknown/$profile/horizon-client.wasm"
+wasm="$dist/pkg/horizon-client_bg.wasm"
+if [ "$profile" = release ] && [ "${WASM_OPT:-1}" != 0 ]; then
+    if command -v wasm-opt > /dev/null; then
+        # The features rustc's wasm32 target turns on, and the threaded build's atomics.
+        wasm-opt -O2 --enable-threads --enable-bulk-memory --enable-mutable-globals \
+            --enable-sign-ext --enable-nontrapping-float-to-int --enable-reference-types \
+            --enable-multivalue "$wasm" -o "$wasm.opt"
+        mv "$wasm.opt" "$wasm"
+    else
+        echo "wasm-opt not found: the module is left as rustc made it (install binaryen)" >&2
+    fi
+fi
+cp web/index.html web/main.js web/audio.js web/worker.js web/sw.js "$dist/"
 
-if [ ! -f "$dist/fs/boot.tar.gz" ] || [ "$resources/horizon-resources.json" -nt "$dist/fs/boot.tar.gz" ]; then
+if [ ! -f "$dist/fs/boot.tar.gz" ] || [ "$resources/horizon-resources.json" -nt "$dist/fs/boot.tar.gz" ] \
+    || [ web/bundle.py -nt "$dist/fs/boot.tar.gz" ]; then
     python3 web/bundle.py "$resources" "$dist/fs"
 fi
+# The large files' content hashes: the page asks for them with these, so the
+# service worker (sw.js) can keep them until they change.
+python3 - "$dist" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+dist = Path(sys.argv[1])
+def digest(rel):
+    h = hashlib.sha256()
+    with open(dist / rel, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()[:16]
+files = {rel: digest(rel) for rel in ("pkg/horizon-client_bg.wasm", "fs/boot.tar.gz")}
+(dist / "build.json").write_text(json.dumps(files) + "\n")
+PY
 ls -l "$dist/pkg"/*.wasm
 echo "Serve it with: python3 web/serve.py, then open http://localhost:8080"

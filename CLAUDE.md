@@ -4,8 +4,14 @@
 
 Branch `web` ports the client to the browser: `horizon-client` compiled for `wasm32-unknown-unknown`,
 drawing through WebGPU, with threads as Web Workers. It boots to the title screen and opens single-player worlds
-(saves live in memory). Design and status:
+with sound and controllers (options and saves are kept in the browser's OPFS; a service worker keeps the large
+files). Design and status:
 [web/README.md](web/README.md). Everything above still applies; this section adds what the port needs.
+
+The port's roadmap (phases, gates, what's next) is the Claude doc
+[Horizon Web Port Roadmap](https://claude.ai/artifact/K226zHbJth7LrVbYptsazz): read it with the docs
+tools, and tick its items and add a result line when a phase moves. `ROADMAP.md` is the whole project's
+roadmap, not the port's.
 
 ## Rules that bite
 
@@ -51,17 +57,18 @@ drawing through WebGPU, with threads as Web Workers. It boots to the title scree
 ## Build and check
 
 ```sh
-web/build.sh                       # the browser build into web/dist (fast profile; PROFILE=release for LTO; THREADS=0 for stable Rust)
+web/build.sh                       # the browser build into web/dist (release: LTO + wasm-opt; PROFILE=fast to iterate; THREADS=0 for stable Rust)
 python3 web/serve.py               # http://localhost:8080, cross-origin isolated
-cargo check --target wasm32-unknown-unknown -p horizon-client --bin horizon-client --no-default-features --features audio
-cargo clippy --target wasm32-unknown-unknown -p horizon-client --bin horizon-client --no-default-features --features audio -- -D warnings
+cargo check --target wasm32-unknown-unknown -p horizon-client --bin horizon-client --no-default-features --features audio,controllers
+cargo clippy --target wasm32-unknown-unknown -p horizon-client --bin horizon-client --no-default-features --features audio,controllers -- -D warnings
 # the threaded build's own check (the flags web/build.sh sets)
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' \
-  cargo +nightly-2026-10-14 -Z build-std=std,panic_abort clippy --target wasm32-unknown-unknown -p horizon-client --bin horizon-client --no-default-features --features audio -- -D warnings
+  cargo +nightly-2026-10-14 -Z build-std=std,panic_abort clippy --target wasm32-unknown-unknown -p horizon-client --bin horizon-client --no-default-features --features audio,controllers -- -D warnings
 cargo clippy --workspace --all-targets -- -D warnings      # native must stay clean too
 ```
 
-- The web build drops `controllers` (hidapi has no web target); `.cargo/config.toml` sets getrandom's
+- The web build keeps `controllers` (gilrs reads the Gamepad API); `horizon-dualsense` builds without
+  hidapi there, as on iOS. `.cargo/config.toml` sets getrandom's
   `wasm_js` backend for wasm only, so don't export it in `RUSTFLAGS` (it breaks native builds).
 - The threaded build needs the pinned nightly with `rust-src` (`rustup component add rust-src --toolchain
   nightly-2026-10-14`): std is rebuilt with atomics, and the module imports a shared memory the page hands
