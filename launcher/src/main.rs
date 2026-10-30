@@ -19,6 +19,7 @@ mod game_tools;
 mod home;
 mod home_tabs;
 mod import_page;
+mod instance_mods;
 mod instances_page;
 mod internet;
 mod language_page;
@@ -177,9 +178,10 @@ struct Launcher {
     releases: Load<Vec<Release>>,
     installed: Vec<String>,
     installing: Option<(String, f32)>,
-    /// The version being deleted on a background thread. It is already out of `installed`, so
+    /// The versions being deleted on background threads. Each is already out of `installed`, so
     /// nothing can launch, select or prepare it, and its row can't install or remove it again.
-    removing: Option<String>,
+    /// More than one may run at once: a row's Remove stays usable while another version goes.
+    removing: Vec<String>,
     /// What each installed version takes on disk, measured on a thread for the Versions page, and
     /// the installed list it was measured for.
     disk: Vec<(String, u64)>,
@@ -276,6 +278,8 @@ struct Launcher {
     download_seen: Option<(Instant, usize)>,
     /// The tab open under Home's hero (`home_tabs.rs`).
     home_tab: home_tabs::HomeTab,
+    /// The selected instance's mods, for Home's Mods tab (`instance_mods.rs`).
+    instance_mods: instance_mods::InstanceMods,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -416,7 +420,7 @@ impl Launcher {
             releases: Load::Loading,
             installed,
             installing: None,
-            removing: None,
+            removing: Vec::new(),
             disk: Vec::new(),
             disk_for: Vec::new(),
             install_error: None,
@@ -480,6 +484,7 @@ impl Launcher {
             prepare_started: None,
             download_seen: None,
             home_tab: home_tabs::HomeTab::from_env(),
+            instance_mods: Default::default(),
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
@@ -602,7 +607,7 @@ impl Launcher {
         let Some(release) = self.updates.horizon.clone() else {
             return;
         };
-        if self.installing.is_some() || self.removing.as_ref() == Some(&release.tag) {
+        if self.installing.is_some() || self.removing.contains(&release.tag) {
             return;
         }
         let select =
@@ -862,9 +867,7 @@ impl Launcher {
                     }
                 }
                 Msg::Removed(tag, result) => {
-                    if self.removing.as_ref() == Some(&tag) {
-                        self.removing = None;
-                    }
+                    self.removing.retain(|t| *t != tag);
                     self.installed = backend::installed();
                     self.settings.selected =
                         selection_after_removal(&self.installed, Settings::load().selected);
@@ -1097,7 +1100,7 @@ impl Launcher {
     }
 
     fn install(&mut self, release: &Release) {
-        if release.asset.is_none() || self.removing.as_ref() == Some(&release.tag) {
+        if release.asset.is_none() || self.removing.contains(&release.tag) {
             return;
         }
         let (release, tx) = (release.clone(), self.tx.clone());
@@ -1119,14 +1122,12 @@ impl Launcher {
     /// the window must keep drawing meanwhile. `Msg::Removed` ends it.
     fn remove(&mut self, tag: &str) {
         self.confirm_remove = None;
-        if self.removing.is_some()
-            || self.installing.as_ref().is_some_and(|(t, _)| t == tag)
-            || !self.installed.iter().any(|t| t == tag)
-        {
+        let installing = self.installing.as_ref().map(|(t, _)| t.as_str());
+        if !removable(&self.installed, installing, &self.removing, tag) {
             return;
         }
         self.install_error = None;
-        self.removing = Some(tag.to_string());
+        self.removing.push(tag.to_string());
         self.installed.retain(|t| t != tag);
         self.settings.selected =
             selection_after_removal(&self.installed, self.settings.selected.take());
@@ -1735,6 +1736,19 @@ fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
 /// the game would open on half-written files.
 fn starts_now(prepared: bool, preparing: bool, running: bool) -> bool {
     play_press(prepared, None, preparing || running) == PlayPress::Play
+}
+
+/// Whether `tag` can start being deleted now: it is installed, no install is writing it, and it
+/// is not already going. Another version deleting at the same time does not stop it.
+fn removable(
+    installed: &[String],
+    installing: Option<&str>,
+    removing: &[String],
+    tag: &str,
+) -> bool {
+    installing != Some(tag)
+        && installed.iter().any(|t| t == tag)
+        && !removing.iter().any(|t| t == tag)
 }
 
 /// The selected version once one has been removed: the saved choice if it is still installed,
@@ -3549,7 +3563,7 @@ impl Launcher {
             self.installing.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.install_error.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.confirm_remove.as_ref() == Some(tag)
-                || self.removing.as_ref() == Some(tag)
+                || self.removing.contains(tag)
         };
         let list = self.long_list.clone().column(
             &self.content_scroll.handle,
@@ -3589,7 +3603,7 @@ impl Launcher {
                                 .child(format!("{:.0}%", p * 100.)),
                         )
                         .into_any_element()
-                } else if self.removing.as_ref() == Some(&tag) {
+                } else if self.removing.contains(&tag) {
                     div()
                         .flex()
                         .items_center()
@@ -4283,6 +4297,21 @@ mod tests {
         assert!(hit.iter().any(|b| b.action().partial_eq(&Quit)));
         let (hit, _) = keymap.bindings_for_input(&key("cmd-w"), &[]);
         assert!(hit.iter().any(|b| b.action().partial_eq(&CloseWindow)));
+    }
+
+    #[test]
+    fn a_second_version_can_be_removed_while_another_deletes() {
+        let installed = ["v0.2.97".to_string(), "v0.2.76".to_string()];
+        let removing = ["v0.2.97".to_string()];
+        assert!(super::removable(&installed, None, &removing, "v0.2.76"));
+        assert!(!super::removable(&installed, None, &removing, "v0.2.97"));
+        assert!(!super::removable(
+            &installed,
+            Some("v0.2.76"),
+            &[],
+            "v0.2.76"
+        ));
+        assert!(!super::removable(&installed, None, &[], "v0.2.85"));
     }
 
     #[test]
