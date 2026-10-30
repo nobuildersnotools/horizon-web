@@ -14,6 +14,7 @@ use horizon_client::{
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
 use horizon_os::fs;
+use horizon_world::loot::PackOverlay;
 use horizon_world::nbt::Tag;
 use std::{collections::HashMap, fmt::Write as _, path::Path};
 
@@ -238,12 +239,12 @@ pub fn main() -> horizon_client::Result<()> {
     let root = Path::new(args.get(1).ok_or(usage)?);
     let input = fs::read_to_string(args.get(2).ok_or(usage)?)?;
     let vanilla = fs::read_to_string(args.get(3).ok_or(usage)?)?;
-    let items = Items::catalog(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE)?;
     let enchantments = Enchantments::load(root);
     let names = horizon_client::creative::Names::default();
     let trades = Trades::load(root);
-    let recipes = horizon_client::crafting::Recipes::load(root, &items)?;
-    let brewing = horizon_client::brewing::Brewing::load(root, &items);
+    let recipes = horizon_client::crafting::Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let brewing = horizon_client::brewing::Brewing::load(root, &items, &PackOverlay::NONE);
     let banners = horizon_client::banner::Banners::load(root);
     let station_recipes = horizon_client::stations::StationRecipes::default();
     let types: HashMap<_, _> = horizon_client::mobs::MobTypes::load(root)?

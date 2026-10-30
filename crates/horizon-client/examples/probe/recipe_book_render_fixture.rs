@@ -17,6 +17,7 @@ use horizon_client::{
     },
 };
 use horizon_os::fs;
+use horizon_world::loot::PackOverlay;
 use serde_json::{Value, json};
 use std::{fmt::Write as _, path::Path};
 
@@ -36,8 +37,8 @@ pub fn main() -> horizon_client::Result<()> {
     let usage = "usage: recipe_book_render_fixture RESOURCES CASES OUTPUT";
     let root = Path::new(args.get(1).ok_or(usage)?);
     let cases = fs::read_to_string(args.get(2).ok_or(usage)?)?;
-    let items = Items::catalog(root)?;
-    let recipes = Recipes::load(root, &items)?;
+    let items = Items::catalog(root, &PackOverlay::NONE)?;
+    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
     let book = Book::build(&recipes, &items);
     let atlas = HudAtlas::build(root)?;
     let root_buf = root.to_path_buf();

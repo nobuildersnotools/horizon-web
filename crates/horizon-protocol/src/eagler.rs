@@ -39,7 +39,7 @@ pub enum Message {
 }
 
 /// A message socket: the browser's WebSocket on the web, a fake in tests.
-pub trait Messages: Send {
+pub trait Messages: Send + Sync {
     fn send(&self, message: Message) -> io::Result<()>;
     /// The next message, waiting up to the read timeout; `None` once closed.
     fn recv(&self) -> io::Result<Option<Message>>;

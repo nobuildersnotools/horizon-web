@@ -661,7 +661,7 @@ impl Screen {
                     half(w) - 100.0,
                     quarter(h) + 96.0 + 18.0,
                     200.0,
-                    "Join",
+                    &crate::lang::get_or("horizon.multiplayer.join", "Join"),
                     if cfg!(target_arch = "wasm32") {
                         shared_code(code).is_some()
                     } else {
@@ -692,7 +692,10 @@ impl Screen {
                         half(w) - 100.0,
                         half(h) + 54.0,
                         200.0,
-                        "Cancel Reconnecting",
+                        &crate::lang::get_or(
+                            "horizon.multiplayer.cancel_reconnecting",
+                            "Cancel Reconnecting",
+                        ),
                         true,
                         55,
                     ));
@@ -1063,17 +1066,20 @@ impl Screen {
                 // The browser joins Eaglercraft's way: a shared world's code
                 // on a relay.
                 let (heading, label) = if cfg!(target_arch = "wasm32") {
-                    ("Join Shared World", "Join Code")
+                    ("Join Shared World".to_owned(), "Join Code".to_owned())
                 } else {
-                    ("Join a Friend", "Invite Code")
+                    (
+                        crate::lang::get_or("horizon.multiplayer.join_friend", "Join a Friend"),
+                        crate::lang::get_or("horizon.multiplayer.invite_code", "Invite Code"),
+                    )
                 };
-                centered(batch, heading, 20.0, u32::MAX);
+                centered(batch, &heading, 20.0, u32::MAX);
                 Self::field(
                     atlas,
                     batch,
                     caret,
                     focused_at,
-                    label,
+                    &label,
                     code,
                     FRIEND_CODE,
                     max,
@@ -1085,7 +1091,7 @@ impl Screen {
                     batch,
                     caret,
                     focused_at,
-                    "Relay (optional)",
+                    &crate::lang::get_or("horizon.multiplayer.relay", "Relay (optional)"),
                     relay,
                     FRIEND_RELAY,
                     max,
@@ -1108,6 +1114,16 @@ impl Screen {
                     centered(batch, &text, half(h) + 16.0, rgba(170, 170, 170, 255));
                 }
             }
+        }
+    }
+    /// `DirectJoinServerScreen.keyPressed`: Enter joins the typed address
+    /// while the Join Server button is active.
+    pub fn confirm(&self) -> Outcome {
+        match self {
+            Self::Direct { address } if servers::parse_address(address).is_some() => {
+                Outcome::Connect(direct_address(address))
+            }
+            _ => Outcome::None,
         }
     }
     pub fn click(

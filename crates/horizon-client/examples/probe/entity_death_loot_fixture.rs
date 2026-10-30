@@ -9,7 +9,7 @@ use horizon_client::{
 };
 use horizon_core::{geometry::Vec3, random::LegacyRandom};
 use horizon_os::fs;
-use horizon_world::loot::{LootDamage, LootData, LootEntity, LootStack};
+use horizon_world::loot::{LootDamage, LootData, LootEntity, LootStack, PackOverlay};
 use std::{collections::BTreeMap, fmt::Write as _, path::Path, sync::Arc};
 
 /// `id[;enchantment:level...]`.
@@ -65,7 +65,7 @@ pub fn main() -> horizon_client::Result<()> {
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
     let types = MobTypes::load(root)?;
-    let loot = LootData::load(root)?;
+    let loot = LootData::load(root, &PackOverlay::NONE)?;
     let mut out = String::new();
     for raw in input.lines() {
         if raw.trim().is_empty() || raw.starts_with('#') {
@@ -135,7 +135,7 @@ pub fn main() -> horizon_client::Result<()> {
                     let item: Option<Arc<str>> = Some(Arc::from(s.item.as_str()));
                     let index = match *slot {
                         "mainhand" => {
-                            m.extra.main_hand = item;
+                            m.extra.set_main_hand(item);
                             Some(gear::MAIN)
                         }
                         "offhand" => {

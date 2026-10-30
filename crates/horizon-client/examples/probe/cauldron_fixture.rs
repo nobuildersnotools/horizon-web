@@ -11,6 +11,7 @@ use horizon_client::{
 };
 use horizon_os::fs;
 use horizon_world::chunk::BlockState;
+use horizon_world::loot::PackOverlay;
 use serde_json::Value;
 use std::path::Path;
 
@@ -78,9 +79,9 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: cauldron_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let items = Items::catalog(root)?;
-    let recipes = Recipes::load(root, &items)?;
-    let brewing = horizon_client::brewing::Brewing::load(root, &items);
+    let items = Items::catalog(root, &PackOverlay::NONE)?;
+    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let brewing = horizon_client::brewing::Brewing::load(root, &items, &PackOverlay::NONE);
     // The inventory menu never reads banner patterns.
     let banners = horizon_client::banner::Banners::default();
     let station_recipes = horizon_client::stations::StationRecipes::default();
