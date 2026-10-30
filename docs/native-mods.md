@@ -16,9 +16,12 @@ A native mod builds on one exact Horizon commit: `[compatibility] horizon_revisi
 and `horizon` in the `horizon-native.json` of its registry file (`.hnmod`, `horizon_mods::index::native`). Mods
 pin a **Nightly's commit** (or a release's). Every Nightly ships its source and keeps its commit for good as the
 tag `nightly-source/<date>-<short>` ([release-flow.md](release-flow.md#nightly-channel)), so a pinned mod still
-builds after its Nightly is replaced. All the mods of one build must pin the same commit; when they don't, the
-launcher says which mod pins which, and the player installs versions made for the same Nightly. A bundle with no
-pin builds on the commit of the installed version the build starts from.
+builds after its Nightly is replaced. When the mods of one build pin different commits, the launcher says which
+mod pins which and the commit the build would use, the newest of them, and builds only after the player chooses
+**Build anyway** (`native-build --allow-version-mismatch`): such mods often still apply and compile. A failed build
+then says the mods were made for other versions. Their horizon-mixins pins may differ too: the build uses the
+newest of them and the launcher's own, never one older than a mod was made with. A bundle with no pin builds on
+the commit of the installed version the build starts from.
 
 ### Mods on the hook points
 
@@ -31,18 +34,22 @@ pin, else on the installed version's commit (the game the player plays), after c
 `NATIVE_HOOKS_API` (read from GitHub) is at least the mod's; when it isn't and nothing pins, it builds on the commit the
 mod was tested on. In its own copy of the mod it sets `horizon_revision` to the commit it builds on. Horizon's
 own native mods (Zoom, FPS counter, Keystrokes, Minimap; horizon-rust/horizon-mods, `native/<name>/`) are made this way, so any of them build together
-with no re-release for each Nightly. The `mods` feature (WebAssembly mods) is passed to the build only when the source has it.
+with no re-release for each Nightly.
 
 API 2 adds the item panel beside container screens and its recipe pages (`native_panel_items`,
 `native_panel_recipes`, and the hook `native_panel_event` for the player's clicks, searches and keys over items), and
 the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_place_recipe`, `native_give`): what a
-recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
-mod shows one.
+recipe viewer needs.
+
+API 11 adds `GameLevel::native_send_particles` on authoritative servers. It sends supported
+vanilla particles to nearby players. Block particles require a valid block state. Item, trail and
+vibration particles are not supported by the current dispatch. Count zero sends one directional
+particle. The return value says whether the call was accepted, not whether any player received it. Bundles that use it need `"hooks": 11`.
 
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
 
-API 4 adds authoritative server tick events through `native_server_tick`: start and end of each non-paused
+API 4 adds authoritative server tick events through `native_server_tick`: start (before any level ticks, like NeoForge's `ServerTickEvent.Pre`) and end of each non-paused
 server tick, with `world_running`. A frozen world reports false except during a requested step. Bundles that
 use these events need `"hooks": 4`.
 
@@ -56,6 +63,10 @@ players](#server-commands-and-players)). Bundles that use them need `"hooks": 9`
 API 10 adds server menus: a vanilla chest menu a server mod opens and fills, whose clicks and closing reach the mod
 (`native_menu_clicked`, `native_menu_closed`), and `native_exchange_items`, two players' stacks swapped in one checked
 step ([Server menus](#server-menus)). Bundles that use them need `"hooks": 10`.
+
+API 12 adds item tooltips through `native_tooltip`: the hovered stack, with its components, and its tooltip's
+lines, which a mod can add to, change or take out of, wherever the game shows an item's tooltip. Bundles that use it
+need `"hooks": 12`.
 
 ## What the launcher does
 
@@ -73,7 +84,7 @@ trusting native code is the player's decision, never an agent's.
    rustup, nothing on the system; the player's own Rust is never used. Windows uses the `windows-gnu` host, which
    links without Visual Studio. `rust-mingw` only links, so on Windows the toolchain also brings MinGW-w64
    (`rust_toolchain::MINGW`: WinLibs' GCC 16.2.0 on MinGW-w64 14.0.0, MSVCRT like `rust-mingw`, one zip pinned by
-   SHA-256, its `mingw64/` without the documentation) on the build's `PATH`: `ring`, `hidapi` and wasmtime compile C,
+   SHA-256, its `mingw64/` without the documentation) on the build's `PATH`: `ring` and `hidapi` compile C,
    and `windows-sys`' `raw-dylib` imports need `dlltool` and the assembler it runs. The linker is the system's on
    macOS (the Command Line Tools: the launcher asks for `xcode-select --install`) and Linux (`cc`).
    `horizon-launcher rust status|install|remove`.
@@ -94,8 +105,41 @@ trusting native code is the player's decision, never an agent's.
    saying which commit, mods, horizon-mixins and Rust made it. The instance the mods are installed in plays it (a
    folder built from the command line, or mods of the default home, go to the **Native mods** instance). That
    instance gets each mod's settings from the default home the first time it plays it (its
-   `horizon-mods/.horizon-mod-data/<id>/` folder and `key.<id>.` lines of `horizon-mods.txt`, where the mod's
-   WebAssembly version kept them); nothing it already has is overwritten.
+   `horizon-mods/.horizon-mod-data/<id>/` folder and `key.<id>.` lines of `horizon-mods.txt`, where earlier versions of
+   the mod kept them); nothing it already has is overwritten.
+
+## Install from GitHub
+
+An author can ship a native mod without a registry pull request per version: the player installs it from a
+GitHub link, on the Mods page ("Add from GitHub") or with `horizon-launcher mods add-github <url>
+[--mod ID | --all] [--instance NAME] --trust-native-code`. The link is `https://github.com/<owner>/<repo>`
+(its latest release), `.../releases/tag/<tag>`, `.../tree/<ref>` or `.../commit/<sha>`.
+
+- **Resolved to something exact.** GitHub's public API (no sign-in; a rate limit is said plainly, and
+  `HORIZON_GITHUB_TOKEN` raises it) turns the link into a release's `.hnmod` file or a **commit SHA**, never a
+  branch that moves. A release with a `.hnmod` asset installs that file (its SHA-256 is compared with the one GitHub
+  lists). With no release or no such asset, the launcher fetches
+  `codeload.github.com/<owner>/<repo>/tar.gz/<sha>` and looks in it for mods by the rules of
+  `native-build <folder>`: a folder with `horizon-mixin.toml`, or an unpacked `.hnmod` (`horizon-native.json`).
+  Several mods: they are listed, and the player picks one or installs all. A source folder must pin the Horizon commit
+  (`[compatibility] horizon_revision`); the launcher packs its Rust, TOML and `data/` files into a `.hnmod`.
+  A release that ships only a content mod (`.hmod`) says "not supported yet": installing `.hmod` files from a link
+  is not built.
+- **Checked like the registry's files.** The `.hnmod` is read as `horizon_mods::index::native::Bundle::read` reads a
+  registry file (only Rust, TOML and data under `mixins/<id>/`, size limits, nothing run) before it is installed.
+- **Said first.** Before anything is downloaded: "not reviewed by the Horizon registry; native mods run with full
+  access to this computer; read the source", with a link to the exact commit. The command needs
+  `--trust-native-code`, as `native-build` does. It is not an MCP tool: trusting native code is the player's
+  decision, never an agent's.
+- **Origin kept.** `horizon-native-mods/<id>.origin.json` beside the `.hnmod`: owner/repo, release tag (for a
+  release), commit, asset name and the SHA-256 of the installed file. `mods list` shows "from GitHub: owner/repo @
+  tag" (or the commit's first 7 digits).
+- **Updates.** `horizon-launcher mods update-github [ID] [--check]` compares a mod from a release with the
+  repository's latest release, and a mod from a commit with the head of the default branch; a newer one is
+  installed with the same warning and `--trust-native-code`. `mods remove <id>` removes it. A mod already
+  installed from the registry (or by hand) is never replaced.
+
+Installing turns Native mods on, as any native mod does; then build as usual.
 
 ## Cache and disk
 
@@ -142,9 +186,9 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
   has read the source: the `.hnmod` contains `.rs` and `.toml` files and may contain data files under
   `mixins/<id>/data/`. The launcher checks the bundle without running anything. Native code is trusted.
   The file is pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
-  A WebAssembly mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
+  A content mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
-  player's `.hmod` (the game runs it until a native build has the mod, then skips it); removing the mod removes both.
+  player's `.hmod`; removing the mod removes both.
 - **Isolation of data.** Native mods run only in the instance built for them, with its own worlds, options and logs.
 - What this does not do: sandbox the compiled game. horizon-mixins' checks stop mistakes, not a malicious helper
   ([security notes](https://github.com/horizon-rust/horizon-mixins/blob/main/docs/security.md)).

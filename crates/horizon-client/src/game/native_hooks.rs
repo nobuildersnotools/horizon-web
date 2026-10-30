@@ -6,6 +6,10 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 12 adds item tooltips (`native_tooltip`).
+//!
+//! API 11 adds server particle emission (`native_send_particles`).
+//!
 //! API 10 adds server menus (`native_menu_clicked`, `native_menu_closed`,
 //! and `native_open_menu`, `native_exchange_items`... in `native_server.rs`).
 //!
@@ -51,8 +55,10 @@ use horizon_client::{
     extras::Corner,
     extras_hud::Corners,
     hud::{HudBatch, rgba},
+    items::ItemStack,
     keybinds,
     mod_list::{self, Installed, NativePage},
+    particles::{ParticleOptions, ParticleType},
     text::Text,
 };
 use horizon_core::position::BlockPos;
@@ -64,7 +70,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 10;
+pub(crate) const NATIVE_HOOKS_API: u32 = 12;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -339,8 +345,11 @@ impl Game<'_> {
     ) {
         let _ = (context, phase, error_text);
     }
-    /// The authoritative server tick's phases, read-only. A paused pass
-    /// fires nothing; a frozen world carries `world_running` false except
+    /// The authoritative server tick's phases: `ServerTickStart` before any
+    /// level is ticked (NeoForge's `ServerTickEvent.Pre`), `ServerTickEnd`
+    /// after the last (`.Post`). Read blocks with `native_server_block`, by
+    /// dimension: which level `self.world` holds here is not defined. A paused
+    /// pass fires nothing; a frozen world carries `world_running` false except
     /// during a requested step.
     pub(super) fn native_server_tick(
         &mut self,
@@ -441,9 +450,71 @@ impl Game<'_> {
     pub(super) fn native_menu_closed(&mut self, uuid: u128, window: i32) {
         let _ = (uuid, window);
     }
+    /// An item's tooltip, wherever the game shows one (slots, the creative
+    /// tabs, the recipe book, chat's hover): the stack, with its components
+    /// (`stack.data()`: a shulker box's contents...), and its lines, the name
+    /// first, each with a colour as `rgba` packs it (`u32::MAX` keeps the
+    /// text's own). Add, change or take out lines; `Text::legacy` reads `§`
+    /// codes. Asked each frame the tooltip shows, never for one the stack
+    /// hides. API 12.
+    pub(super) fn native_tooltip(&self, stack: &ItemStack, lines: &mut Vec<(Text, u32)>) {
+        let _ = (stack, lines);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
+/// Server-level helpers for native mods.
+#[allow(dead_code)]
+impl GameLevel<'_> {
+    /// Queue particles in this authoritative level. A zero count sends one
+    /// directional particle. The return value means accepted, not delivered.
+    /// Block particle types require their block state; item, trail and
+    /// vibration particles are not supported by the current network dispatch.
+    pub(super) fn native_send_particles(
+        &mut self,
+        options: &ParticleOptions,
+        state: Option<BlockStateId>,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: i32,
+    ) -> bool {
+        use ParticleType as T;
+        let supported = match options.ty {
+            T::Block | T::BlockMarker | T::FallingDust | T::DustPillar | T::BlockCrumble => {
+                state.is_some_and(|id| self.registry.state(id).is_some())
+            }
+            T::Item | T::Trail | T::Vibration => false,
+            T::Geyser | T::GeyserPlume | T::GeyserBase | T::GeyserPoof => options
+                .geyser
+                .is_some_and(|(_, impulse)| impulse.is_finite()),
+            _ => true,
+        };
+        if !self.native_authoritative
+            || !supported
+            || !at.into_iter().all(f64::is_finite)
+            || !spread
+                .into_iter()
+                .all(|v| v.is_finite() && v.abs() <= f32::MAX as f64)
+            || !speed.is_finite()
+            || speed.abs() > f32::MAX as f64
+            || !options.color.into_iter().all(f32::is_finite)
+            || !options.to_color.into_iter().all(f32::is_finite)
+            || !options.scale.is_finite()
+        {
+            return false;
+        }
+        let dimension = match self.dimension {
+            LevelDimension::Overworld => "minecraft:overworld",
+            LevelDimension::Nether => "minecraft:the_nether",
+            LevelDimension::End => "minecraft:the_end",
+        };
+        self.native_particles
+            .push((dimension, options.clone(), state, at, spread, speed, count));
+        true
+    }
+}
+
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {

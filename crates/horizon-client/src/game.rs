@@ -772,6 +772,15 @@ struct GameLevel<'w> {
     client_side: bool,
     /// Only the integrated or dedicated server dispatches native observations.
     native_authoritative: bool,
+    native_particles: &'w mut Vec<(
+        &'static str,
+        horizon_client::particles::ParticleOptions,
+        Option<BlockStateId>,
+        [f64; 3],
+        [f64; 3],
+        f64,
+        i32,
+    )>,
 }
 struct PlayerCollision {
     y: f64,
@@ -3304,9 +3313,13 @@ impl Game<'_> {
             lid_openers: &self.lid_openers,
             client_side: self.remote.is_some(),
             native_authoritative: self.serving.is_some() || self.options.dedicated.is_some(),
+            native_particles: &mut self.creatures.lan_particles,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
+        if self.lan.is_some() {
+            self.flush_lan_particles();
+        }
         result
     }
     /// Level.setBlock(pos, state, UPDATE_ALL) with neighbour/shape updates.
@@ -5792,10 +5805,10 @@ impl Game<'_> {
         self.ticks += 1;
         self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
-        let running = self.clock.world_runs();
-        if self.serving.is_some() || self.options.dedicated.is_some() {
-            self.native_lifecycle_server_tick_start(running);
-        }
+        let running = match self.level_pass.running {
+            Some(running) => running,
+            None => self.clock.world_runs(),
+        };
         // GameRenderer.tick: a wither's bar darkens the world, then fades;
         // the activated item counts down.
         self.boss_overlay.tick_darken(running);
@@ -9355,7 +9368,7 @@ impl Game<'_> {
         // the offset is the one from the player to the particle.
         let origin = from.unwrap_or(at);
         let spread = [at[0] - origin[0], 0.0, at[2] - origin[2]];
-        self.lan_send_particles(&arc, at, spread, 0.0, 0);
+        self.lan_send_particles(self.dim.id(), &arc, None, at, spread, 0.0, 0);
     }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
@@ -9585,11 +9598,13 @@ impl Game<'_> {
                 );
                 // The players a server serves are sent them too.
                 self.lan_send_particles(
+                    self.dim.id(),
                     &indicator,
+                    None,
                     [feet[0], feet[1] + height * 0.5, feet[2]],
                     [0.1, 0.0, 0.1],
                     0.2,
-                    (actual * 0.5) as u32,
+                    (actual * 0.5) as u32 as i32,
                 );
             }
             self.last_hurt_by_player
