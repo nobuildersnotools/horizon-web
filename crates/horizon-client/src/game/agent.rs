@@ -639,6 +639,7 @@ impl Game<'_> {
             }
             Mode::Profile(state) => json!({ "mode": "edit-profile", "name": state.profile.name }),
             Mode::Onboarding(_) => json!({ "mode": "accessibility-onboarding" }),
+            Mode::BanNotice(_) => json!({ "mode": "ban-notice" }),
         }
     }
 
