@@ -22,7 +22,8 @@ from pathlib import Path
 # Fetched when first read instead of downloaded up front.
 LAZY_DIRS = ("worldgen", "biome-parameters")
 LAZY_FILES = ("horizon-sprites.cache",)
-KEPT_LANGUAGES = ("en_us.json",)
+# deprecated.json (the renamed keys) is read with every language at startup.
+KEPT_LANGUAGES = ("en_us.json", "deprecated.json")
 # Lazy folders fetched whole, as <folder>.tar.gz, when one of their files is first read.
 PACKED_DIRS = ("worldgen", "biome-parameters")
 

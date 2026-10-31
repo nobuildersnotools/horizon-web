@@ -6,6 +6,8 @@
 #   PROFILE=fast web/build.sh  optimized, no LTO or wasm-opt: quick to rebuild while working
 #   THREADS=0 web/build.sh  stable Rust, no threads (everything on the page's)
 #   WASM_OPT=0 web/build.sh skip wasm-opt
+#   DIST=web/dist-st web/build.sh  build into another folder (web/package.py's single-threaded build)
+#   BUNDLE=0 web/build.sh   only the game and the page, not the resources
 #
 # Threads are Web Workers on shared memory, which std only supports when it is
 # rebuilt with atomics: that build needs the pinned nightly below with its
@@ -18,7 +20,7 @@ cd "$(dirname "$0")/.."
 
 profile="${PROFILE:-release}"
 resources="${HORIZON_RESOURCES:-.local/horizon-client/26.3}"
-dist=web/dist
+dist="${DIST:-web/dist}"
 
 nightly=nightly-2026-10-14
 cargo=(cargo)
@@ -36,6 +38,10 @@ if [ "${THREADS:-1}" != 0 ]; then
     )
     export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="${flags[*]}"
     cargo=(cargo "+$nightly" -Z build-std=std,panic_abort)
+else
+    # Threads are green threads on the page's (horizon-os's fibers), which
+    # switch Rust's stack pointer: the page reaches it as an export.
+    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C link-arg=--export=__stack_pointer'
 fi
 "${cargo[@]}" build --target wasm32-unknown-unknown --profile "$profile" \
     -p horizon-client --bin horizon-client --no-default-features --features audio,controllers
@@ -60,6 +66,7 @@ if [ "$profile" = release ] && [ "${WASM_OPT:-1}" != 0 ]; then
 fi
 cp web/index.html web/main.js web/audio.js web/worker.js web/sw.js "$dist/"
 
+[ "${BUNDLE:-1}" = 0 ] && { ls -l "$dist/pkg"/*.wasm; exit 0; }
 if [ ! -f "$dist/fs/boot.tar.gz" ] || [ "$resources/horizon-resources.json" -nt "$dist/fs/boot.tar.gz" ] \
     || [ web/bundle.py -nt "$dist/fs/boot.tar.gz" ]; then
     python3 web/bundle.py "$resources" "$dist/fs"

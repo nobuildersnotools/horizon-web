@@ -26,7 +26,7 @@ roadmap, not the port's.
   | `path.exists()`, `.is_dir()`, `.is_file()`, `.metadata()`, `.canonicalize()` on a `Path` | `path.fs_exists()`... (`use horizon_os::fs::PathExt;`) |
   | `std::time::{Instant, SystemTime, UNIX_EPOCH}` | `horizon_os::time::*`; `horizon_os::time::to_std` for chrono |
   | `std::thread::*` | `horizon_os::thread::*` |
-  | `rx.recv_timeout(t)`, `condvar.wait_timeout_while(g, t, f)` | `horizon_os::sync::recv_timeout(&rx, t)`, `horizon_os::sync::wait_timeout_while(&condvar, g, t, f)` (std's read std's clock, which panics on the web; plain `wait_timeout`, `park_timeout` and `sleep` are fine) |
+  | `rx.recv_timeout(t)`, `condvar.wait_timeout_while(g, t, f)`, `condvar.wait_while(g, f)` | `horizon_os::sync::recv_timeout(&rx, t)`, `horizon_os::sync::wait_timeout_while(&mutex, &condvar, g, t, f)`, `horizon_os::sync::wait_while(&mutex, &condvar, g, f)` (std's read std's clock, which panics on the web, and can't let a green thread's lock go; plain `wait_timeout`, `park_timeout` and `sleep` are fine on workers) |
   | `std::process::id()` | `horizon_os::process::id()` |
   | `std::env::{args, current_dir, current_exe, temp_dir}` | `horizon_os::env::*` (the page's `?args=` on the web) |
 
@@ -45,8 +45,14 @@ roadmap, not the port's.
   `Builder::spawn` start one ([crates/horizon-os/src/workers.rs](crates/horizon-os/src/workers.rs)). A worker
   starts only once the page's thread returns to the browser, so the page must never wait for one it just
   spawned (`join` on the page spins; scoped threads still run in sequence). `THREADS=0 web/build.sh` builds
-  without threads, where spawns fail ("no thread on the page for …"): keep the paths that work without them,
-  as `startup_menu::spawn_loader`, the world rest loader in `game.rs` and `Streaming`'s `pump` do.
+  without threads (the offline file, and pages that can't be cross-origin isolated). There the threads
+  single player needs (the server thread, its memory connection, `horizon-net`, the worldgen loader) run as
+  green threads on the page through JSPI stack switching ([crates/horizon-os/src/fibers.rs](crates/horizon-os/src/fibers.rs)):
+  they may wait only through `horizon_os` (`thread::sleep`, `sync::lock`, `recv_timeout`, `wait_while`,
+  `wait_timeout_while`), since std's own waits return at once there and a loop on them holds the page
+  forever. Other spawns fail ("no thread on the page for …"): keep the paths that work without them, as
+  `startup_menu::spawn_loader`, the world rest loader in `game.rs` and `Streaming`'s `pump` do. A thread
+  added to the green list in `fibers.rs` must wait only through `horizon_os`.
 - **Shaders must pass browsers' WGSL rules**, which naga doesn't enforce: derivative uniformity (sample
   textures in uniform control flow, or start the module with `diagnostic(off, derivative_uniformity);`
   as `hud.wgsl` and `entity_shader()` do) and parentheses when mixing `<<`/`>>` with `|`/`&`/`^`.

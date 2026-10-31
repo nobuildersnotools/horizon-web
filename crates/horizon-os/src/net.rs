@@ -588,7 +588,7 @@ impl WebSocket {
         let shared = &socket.handle.shared;
         let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let (state, timed_out) =
-            crate::sync::wait_timeout_while(&shared.ready, state, timeout, |s| {
+            crate::sync::wait_timeout_while(&shared.state, &shared.ready, state, timeout, |s| {
                 !s.open && s.closed.is_none()
             });
         if let Some(reason) = &state.closed {
@@ -663,8 +663,13 @@ impl WebSocket {
                 }
                 Some(timeout) => {
                     let timed_out;
-                    (state, timed_out) =
-                        crate::sync::wait_timeout_while(&shared.ready, state, timeout, pending);
+                    (state, timed_out) = crate::sync::wait_timeout_while(
+                        &shared.state,
+                        &shared.ready,
+                        state,
+                        timeout,
+                        pending,
+                    );
                     if timed_out {
                         return Err(io::ErrorKind::TimedOut.into());
                     }

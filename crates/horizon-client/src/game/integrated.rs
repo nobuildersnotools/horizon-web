@@ -65,6 +65,9 @@ pub(super) struct Integrated {
     tasks: Sender<Task>,
     /// The world's name (`level.dat`'s `LevelName`), for the pause menu.
     pub world_name: String,
+    /// World Options asked for and not answered yet (`ask`).
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    pub world_options: Option<Receiver<ServerOptions>>,
 }
 impl Integrated {
     pub fn smoothed_tick_ms(&self) -> f32 {
@@ -106,6 +109,20 @@ impl Integrated {
             }))
             .ok()?;
         horizon_os::sync::recv_reply(&rx, Duration::from_secs(10)).ok()
+    }
+    /// `call` without waiting: the answer comes on the receiver. The page's
+    /// build without shared memory runs its server as a green thread, which
+    /// gets to the task only once the page is back in the browser.
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    pub fn ask<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut Game<'_>) -> T + Send + 'static,
+    ) -> Receiver<T> {
+        let (tx, rx) = sync_channel(1);
+        let _ = self.tasks.send(Box::new(move |g| {
+            let _ = tx.send(f(g));
+        }));
+        rx
     }
     /// `IntegratedServer.halt(true)`: returns once the world is saved and let go.
     pub fn stop(mut self) -> Result<()> {
@@ -307,6 +324,8 @@ impl Game<'_> {
             thread: Some(thread),
             tasks,
             world_name: String::new(),
+            #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+            world_options: None,
         };
         self.integrated_starting = Some(Starting {
             handle,

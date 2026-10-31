@@ -6,7 +6,7 @@
 //! server also takes browsers' WebSockets on its port, and on the web the
 //! client reaches servers through one.
 use crate::{Error, Result, buf::Reader, crypto::Cfb8, frame};
-use horizon_os::time::{Duration, Instant};
+use horizon_os::time::Duration;
 use std::{
     io::{Read, Write},
     net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
@@ -71,20 +71,26 @@ impl Pipe {
 }
 impl Read for Pipe {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        let deadline = self.timeout.lock().unwrap().map(|t| Instant::now() + t);
-        let mut state = self.end.incoming.state.lock().unwrap();
-        while state.0.is_empty() && !state.1 {
-            state = match deadline {
-                None => self.end.incoming.ready.wait(state).unwrap(),
-                Some(deadline) => {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        return Err(std::io::ErrorKind::TimedOut.into());
-                    }
-                    self.end.incoming.ready.wait_timeout(state, left).unwrap().0
+        let timeout = *self.timeout.lock().unwrap();
+        let incoming = &self.end.incoming;
+        let state = horizon_os::sync::lock(&incoming.state).unwrap();
+        let empty = |s: &mut (std::collections::VecDeque<u8>, bool)| s.0.is_empty() && !s.1;
+        let mut state = match timeout {
+            None => horizon_os::sync::wait_while(&incoming.state, &incoming.ready, state, empty),
+            Some(timeout) => {
+                let (state, timed_out) = horizon_os::sync::wait_timeout_while(
+                    &incoming.state,
+                    &incoming.ready,
+                    state,
+                    timeout,
+                    empty,
+                );
+                if timed_out {
+                    return Err(std::io::ErrorKind::TimedOut.into());
                 }
-            };
-        }
+                state
+            }
+        };
         let n = out.len().min(state.0.len());
         for (o, b) in out.iter_mut().zip(state.0.drain(..n)) {
             *o = b;
@@ -505,6 +511,7 @@ impl ConnWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_os::time::Instant;
     use std::net::TcpListener;
 
     #[test]

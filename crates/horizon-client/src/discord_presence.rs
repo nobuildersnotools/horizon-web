@@ -153,10 +153,13 @@ pub fn stop() {
     let mut shared = lock();
     shared.stop = true;
     thread.unpark();
-    let _ =
-        horizon_os::sync::wait_timeout_while(&STOPPED, shared, Duration::from_millis(300), |s| {
-            !s.stopped
-        });
+    let _ = horizon_os::sync::wait_timeout_while(
+        &SHARED,
+        &STOPPED,
+        shared,
+        Duration::from_millis(300),
+        |s| !s.stopped,
+    );
 }
 
 fn lock() -> std::sync::MutexGuard<'static, Shared> {

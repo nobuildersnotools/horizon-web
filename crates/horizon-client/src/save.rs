@@ -2362,7 +2362,7 @@ impl SaveDir {
         let thread = horizon_os::thread::Builder::new()
             .name("horizon-region-writer".into())
             .spawn(move || {
-                for (kind, batch) in receive {
+                while let Ok((kind, batch)) = horizon_os::sync::recv(&receive) {
                     let cache = match kind {
                         Folder::Region => &regions,
                         Folder::Entities => &entity_regions,
@@ -2409,17 +2409,19 @@ impl SaveDir {
     }
     /// Wait until every queued write is on disk.
     pub fn flush(&self) -> Result<()> {
-        let mut count = self
+        let count = self
             .outstanding
             .count
             .lock()
             .map_err(|_| "writer poisoned")?;
-        while *count > 0 {
-            count = self
-                .outstanding
-                .done
-                .wait(count)
-                .map_err(|_| "writer poisoned")?;
+        drop(horizon_os::sync::wait_while(
+            &self.outstanding.count,
+            &self.outstanding.done,
+            count,
+            |count| *count > 0,
+        ));
+        if self.outstanding.count.is_poisoned() {
+            return Err("writer poisoned".into());
         }
         self.write_result()
     }

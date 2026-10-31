@@ -15096,6 +15096,10 @@ impl ApplicationHandler for Game<'_> {
             }
             return;
         }
+        // The page's build without shared memory asks its server without
+        // waiting: a screen waiting for the answer opens with it.
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+        self.poll_world_options();
         if let Err(error) = self.resume_world_entry() {
             self.error = Some(error);
             event_loop.exit();

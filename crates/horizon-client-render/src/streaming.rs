@@ -273,10 +273,13 @@ impl Mailbox {
     #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     fn recv_timeout(&self, timeout: horizon_os::time::Duration) -> Option<Done> {
         let done = self.done.lock().unwrap();
-        let (mut done, _) =
-            horizon_os::sync::wait_timeout_while(&self.arrived, done, timeout, |done| {
-                done.is_empty()
-            });
+        let (mut done, _) = horizon_os::sync::wait_timeout_while(
+            &self.done,
+            &self.arrived,
+            done,
+            timeout,
+            |done| done.is_empty(),
+        );
         done.pop_front()
     }
 }
@@ -1291,7 +1294,8 @@ impl Streaming {
         // Decorate chunks whose 3x3 proto neighbourhood is available, in
         // vanilla's order: decoration is order dependent where write regions
         // overlap (see `DecorationOrder`).
-        let workers = self.threads.len();
+        // Without threads the frame's pump is the one worker.
+        let workers = self.threads.len().max(1);
         if self.decorates && self.order_area != Some((self.center, self.radius)) {
             let (decorated, chunks) = (&self.decorated, &world.chunks);
             // The render distance is the server view distance in singleplayer.

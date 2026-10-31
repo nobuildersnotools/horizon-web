@@ -47,12 +47,65 @@ on: `brave --enable-unsafe-webgpu --enable-features=Vulkan http://localhost:8080
 rebuilds in about a minute while you work. `THREADS=0 web/build.sh` builds with
 stable Rust and no threads.
 
+### Packages for players: web folder and offline file
+
+Like Eaglercraft, the game ships two ways:
+
+```sh
+web/package.py              # both, into web/out (builds threaded and single-threaded first)
+web/package.py folder       # web/out/horizon-web/: upload to any static host
+web/package.py offline      # web/out/horizon-offline.html: one file, opened from the disk
+web/package.py offline --sounds all --languages   # with the music and every language
+```
+
+- **`horizon-web/`** works on any static host (GitHub Pages, Netlify, a plain
+  web server). Hosts that can't send the isolation headers get them from the
+  service worker, which reloads the page once on the first visit; where even
+  that fails (no service worker), the page runs the single-threaded build in
+  `pkg-st/`. Files the game reads later are fetched from `fs/res/` when read.
+- **`horizon-offline.html`** holds the single-threaded build and the resources
+  as base64 (a `file://` page can't fetch or be cross-origin isolated). Single
+  player runs there on green threads (below), which need WebAssembly stack
+  switching (JSPI: Chrome and Edge 137+). By default
+  it holds every sound but the music and music discs, and English only:
+  `--sounds none|effects|all` and `--languages` change that. The files it holds
+  for later are handed to the game's filesystem when read
+  (`globalThis.horizonHeldFile`, asked by `horizon_fetch_sync`). Saves go to the
+  browser's storage for `file://` pages, shared by every offline file.
+
+`--no-build` packages what `web/dist` and `web/dist-st` hold; `PROFILE=fast`
+passes through to the builds.
+
+### Without shared memory: green threads
+
+The single-threaded build can't start Web Workers on the game's memory. Single
+player still needs its server thread, which talks to the window through a
+connection in memory with a thread at each end. There those threads are green
+threads on the page's own (`horizon-os`'s `fibers.rs`). Each runs on a stack of
+its own, entered through `WebAssembly.promising`. When it waits in
+`horizon_os::thread::sleep` or a `horizon_os::sync` helper, it suspends through
+a `WebAssembly.Suspending` import until a timer resumes it, and the page draws
+meanwhile. Rust keeps part of each stack in linear memory: the build exports
+`__stack_pointer`, and the scheduler switches it with the green thread.
+
+std's own waits (`recv()`, `Condvar::wait`, `park`) return at once without
+threads, so a loop on them would hold the page forever. Only the threads listed
+in `fibers.rs`, whose waits all go through `horizon_os`, start as green threads;
+the others fail as before and the game does their work on the page.
+`globalThis.horizonFibers` in the console shows each green thread and what it
+waits for. The window can't wait for its server there (`Integrated::call` looks once):
+World Options asks with `Integrated::ask` and opens when the answer comes
+(`poll_world_options`); work it only hands over (applying options) runs as is.
+Open to LAN says "Unable to host local game": sharing a world needs the
+threaded build's sockets.
+
 ### Browsers
 
 The game needs WebGPU, and the threaded build a cross-origin isolated page
 (`web/serve.py` sends the headers; any host must send
 `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp`):
+`Cross-Origin-Embedder-Policy: require-corp`, or serve the packaged web folder,
+whose service worker adds them):
 
 | Browser | Platforms |
 |---|---|

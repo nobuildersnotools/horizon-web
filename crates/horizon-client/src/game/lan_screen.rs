@@ -475,9 +475,13 @@ impl Game<'_> {
         o.rules = Some(RulesScreen::new(&rules));
     }
     pub(super) fn open_world_options(&mut self) {
-        let hint = horizon_client::lan::available_port();
-        let mut port = EditBox::new(0.0, 0.0, 150.0, 20.0);
-        port.max_length = 5;
+        // The page can't wait for its green server thread: the screen opens
+        // with the answer (`poll_world_options`).
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+        if let Some(server) = self.integrated.as_mut() {
+            server.world_options = Some(server.ask(|g| g.server_options()));
+            return;
+        }
         // The world is the server thread's when there is one.
         let state = match &self.integrated {
             Some(server) => match server.call(|g| g.server_options()) {
@@ -486,6 +490,29 @@ impl Game<'_> {
             },
             None => self.local_server_options(),
         };
+        self.show_world_options(state);
+    }
+    /// The World Options screen asked for, once its server answers.
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    pub(super) fn poll_world_options(&mut self) {
+        let Some(server) = self.integrated.as_mut() else {
+            return;
+        };
+        let Some(state) = server
+            .world_options
+            .as_ref()
+            .and_then(|r| r.try_recv().ok())
+        else {
+            return;
+        };
+        server.world_options = None;
+        self.show_world_options(state);
+    }
+    /// The World Options screen, over the world's options as they stand.
+    fn show_world_options(&mut self, state: ServerOptions) {
+        let hint = horizon_client::lan::available_port();
+        let mut port = EditBox::new(0.0, 0.0, 150.0, 20.0);
+        port.max_length = 5;
         if let Some(p) = state.port {
             port.set_value(&p.to_string());
         }
