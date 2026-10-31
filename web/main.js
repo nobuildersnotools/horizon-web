@@ -8,23 +8,15 @@ import "./audio.js"; // before the game's glue, which keeps the AudioContext it 
 const ROOT = ".local/horizon-client/26.3";
 const status = document.getElementById("status");
 
-const BROWSERS = `It runs in:
-Chrome and Edge 113 or later on Windows, macOS and ChromeOS
-Chrome 121 or later on Android
-Safari 26 on macOS, iOS and iPadOS
-Firefox 141 or later on Windows
-On Linux, Chrome, Edge and Brave need WebGPU switched on:
---enable-unsafe-webgpu --enable-features=Vulkan`;
-
 // Whether this browser can draw the game; says why not on the page.
 async function webgpu() {
     if (!navigator.gpu) {
-        status.textContent = `Horizon needs WebGPU, which this browser doesn't offer.\n\n${BROWSERS}`;
+        status.textContent = `Horizon needs WebGPU, which this browser doesn't offer.`;
         return false;
     }
     if (!(await navigator.gpu.requestAdapter().catch(() => null))) {
         status.textContent = "Horizon needs WebGPU, and this browser offers it but found no GPU to use " +
-            `(it may be switched off, or the graphics driver not supported).\n\n${BROWSERS}`;
+            `(it may be switched off, or the graphics driver not supported).`;
         return false;
     }
     return true;

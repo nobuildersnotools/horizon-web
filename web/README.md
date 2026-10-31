@@ -107,16 +107,8 @@ The game needs WebGPU, and the threaded build a cross-origin isolated page
 `Cross-Origin-Embedder-Policy: require-corp`, or serve the packaged web folder,
 whose service worker adds them):
 
-| Browser | Platforms |
-|---|---|
-| Chrome, Edge 113+ | Windows, macOS, ChromeOS |
-| Chrome 121+ | Android |
-| Safari 26 | macOS, iOS, iPadOS |
-| Firefox 141+ | Windows |
-| Chrome, Edge, Brave | Linux, with `--enable-unsafe-webgpu --enable-features=Vulkan` |
-
 A browser without WebGPU, or with no GPU it can use, gets a message saying so
-and this list instead of the game.
+instead of the game.
 
 The address passes the game its command-line arguments:
 <http://localhost:8080/?args=--world%20Test%20--creative> opens (or creates) the
