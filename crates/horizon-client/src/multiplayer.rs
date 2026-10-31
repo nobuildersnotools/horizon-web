@@ -137,7 +137,7 @@ pub enum Screen {
 pub enum Outcome {
     None,
     Back,
-    Connect(String),
+    Connect { address: String, lan: bool },
 }
 /// A button: x, y, width, label, enabled, id.
 pub type ButtonSpec = (f32, f32, f32, String, bool, u8);
@@ -305,8 +305,12 @@ pub fn save_server_icon(saves: &Path, address: &str, png: &[u8]) {
     }
 }
 
-/// Horizon's official survival server: a name and an address like any entry.
-pub const OFFICIAL_SERVER: (&str, &str) = ("Horizon Official", "horizon.bunchy7s.dev");
+/// Horizon's official survival server: a name and an address like any entry. The address is
+/// `horizon_telemetry::server_status::OFFICIAL_ADDRESS`, the one place it is kept.
+pub const OFFICIAL_SERVER: (&str, &str) = (
+    "Horizon Official",
+    horizon_telemetry::server_status::OFFICIAL_ADDRESS,
+);
 /// Beside servers.dat once the official server was offered, so a player who
 /// deletes it never gets it back. The launcher writes the same file.
 const OFFICIAL_MARKER: &str = "horizon_official_server.txt";
@@ -373,15 +377,15 @@ fn pin_featured(file: &Path) -> Vec<ServerEntry> {
     list
 }
 
-/// The address of list row `index`: the saved servers, then the LAN games.
-fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option<String> {
+/// The address and kind of list row `index`: saved servers, then discovered LAN games.
+fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option<(String, bool)> {
     match servers.get(index) {
-        Some(s) => Some(s.ip.clone()),
+        Some(s) => Some((s.ip.clone(), false)),
         None => lan
             .games()
             .into_iter()
             .nth(index - servers.len())
-            .map(|g| g.address),
+            .map(|g| (g.address, true)),
     }
 }
 
@@ -1224,7 +1228,10 @@ impl Screen {
     pub fn confirm(&self) -> Outcome {
         match self {
             Self::Direct { address } if servers::parse_address(address).is_some() => {
-                Outcome::Connect(direct_address(address))
+                Outcome::Connect {
+                    address: direct_address(address),
+                    lan: false,
+                }
             }
             _ => Outcome::None,
         }
@@ -1248,8 +1255,9 @@ impl Screen {
                 },
                 Some(40),
             ) => {
-                if let Some(address) = selected.and_then(|i| entry_address(servers, lan, i)) {
-                    return Outcome::Connect(address);
+                if let Some((address, lan)) = selected.and_then(|i| entry_address(servers, lan, i))
+                {
+                    return Outcome::Connect { address, lan };
                 }
             }
             (Self::List { .. }, Some(41)) => {
@@ -1362,7 +1370,10 @@ impl Screen {
                     let (rx, ry) = ((x - left - 2.0).floor(), (y - row_top - 2.0).floor());
                     if over_right_half(rx, ry) {
                         *selected = Some(k);
-                        return Outcome::Connect(servers[k].ip.clone());
+                        return Outcome::Connect {
+                            address: servers[k].ip.clone(),
+                            lan: false,
+                        };
                     }
                     let to = if k > PINNED && over_top_left(rx, ry) {
                         Some(k - 1)
@@ -1390,10 +1401,10 @@ impl Screen {
                     None => None,
                 };
                 if let Some(index) = index
-                    && let Some(address) = entry_address(servers, lan, index)
+                    && let Some((address, lan)) = entry_address(servers, lan, index)
                 {
                     if *selected == Some(index) {
-                        return Outcome::Connect(address);
+                        return Outcome::Connect { address, lan };
                     }
                     *selected = Some(index);
                 }
@@ -1439,7 +1450,10 @@ impl Screen {
             ) => *self = Self::list(saves),
             (Self::Disconnected { retry, .. }, Some(55)) => *retry = None,
             (Self::Direct { address }, Some(52)) => {
-                return Outcome::Connect(direct_address(address));
+                return Outcome::Connect {
+                    address: direct_address(address),
+                    lan: false,
+                };
             }
             (Self::Friend { code, relay, .. }, Some(56)) if cfg!(target_arch = "wasm32") => {
                 if let Some(code) = shared_code(code) {
@@ -1451,14 +1465,20 @@ impl Screen {
                             (!relay.is_empty()).then_some(relay),
                         );
                     }
-                    return Outcome::Connect(format!("{}{code}", crate::net::SHARED));
+                    return Outcome::Connect {
+                        address: format!("{}{code}", crate::net::SHARED),
+                        lan: false,
+                    };
                 }
             }
             (Self::Friend { code, relay, .. }, Some(56)) => {
                 if horizon_friends::invite::parse(code).is_some() {
                     crate::net::save_friends_relay(relay.trim());
                     let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-                    return Outcome::Connect(format!("{}{code}", crate::net::FRIEND));
+                    return Outcome::Connect {
+                        address: format!("{}{code}", crate::net::FRIEND),
+                        lan: false,
+                    };
                 }
             }
             (Self::Edit { .. } | Self::Friend { .. }, None) => {
@@ -1668,6 +1688,43 @@ pub fn wrap(text: &str, width: f32, atlas: &HudAtlas) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_discovered_entries_get_lan_authentication() {
+        let address = "127.0.0.1:25565";
+        let mut screen = Screen::List {
+            servers: vec![ServerEntry::new("Saved", address)],
+            selected: Some(0),
+            pings: Arc::default(),
+            icons: Arc::default(),
+            lan: Scanner::for_tests(vec![crate::lan::discovery::LanGame {
+                motd: "LAN".into(),
+                address: address.into(),
+            }]),
+            scroll: Default::default(),
+        };
+        for (index, expected_lan) in [(0, false), (1, true)] {
+            if let Screen::List { selected, .. } = &mut screen {
+                *selected = Some(index);
+            }
+            let Outcome::Connect {
+                address: actual,
+                lan,
+            } = screen.click(Some(40), 0.0, 0.0, (640.0, 480.0), Path::new(""))
+            else {
+                panic!("join did not connect")
+            };
+            assert_eq!(actual, address);
+            assert_eq!(lan, expected_lan);
+        }
+        let direct = Screen::Direct {
+            address: address.into(),
+        };
+        assert!(matches!(
+            direct.confirm(),
+            Outcome::Connect { lan: false, .. }
+        ));
+    }
 
     #[test]
     fn direct_connection_joins_a_pasted_invite_and_keeps_host_names() {
@@ -2006,7 +2063,10 @@ mod tests {
         );
         // The right half joins at once.
         match screen.click(None, ix + 20.0, iy + 2.0 * ROW_HEIGHT + 10.0, size, &saves) {
-            Outcome::Connect(address) => assert_eq!(address, list[2].ip),
+            Outcome::Connect { address, lan } => {
+                assert_eq!(address, list[2].ip);
+                assert!(!lan);
+            }
             _ => panic!("the join arrow connects"),
         }
         let _ = horizon_os::fs::remove_dir_all(&dir);
