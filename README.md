@@ -28,6 +28,8 @@ Horizon is Minecraft: Java Edition 26.3 rewritten in Rust: a native game that re
 
 > Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft. Horizon contains no Minecraft code, assets or data: you need your own legally obtained copy of Minecraft: Java Edition 26.3.
 
+> **This is a fork with a browser port.** It is based on [horizon-rust/horizon](https://github.com/horizon-rust/horizon) and adds an experimental build of the client for the web: WebAssembly drawing through WebGPU, with threads as Web Workers. Everything else below is upstream's README. The port is described in [Horizon in the browser](#horizon-in-the-browser), and the badges, release links and launcher downloads point at upstream.
+
 ## Download
 
 Horizon is installed through **the Horizon launcher**. Get it from [playhorizon.dev](https://playhorizon.dev) (the Download button picks your system) or from [the launcher releases](https://github.com/horizon-rust/horizon/releases?q=launcher-v&expanded=true), for Linux x86-64, macOS on Apple Silicon or Windows x64. The launcher installs the game and keeps it up to date with each new build (Horizon ships on one channel, the Nightly), prepares its files from your copy of Minecraft (your own install, or downloaded from Mojang for your account), and updates itself.
@@ -66,6 +68,15 @@ Screenshots, captured in the Rust client itself with vanilla assets and no mods 
     <td width="50%"><img src="docs/media/nether.webp" alt="A crimson forest in the Nether with a zombified piglin"></td>
   </tr>
 </table>
+
+## Horizon in the browser
+
+The `web` branch compiles the client for `wasm32-unknown-unknown` and runs it in a WebGPU-capable browser (Chrome and Edge have it). It reaches the title screen, opens single-player worlds, joins offline-mode Horizon and Eaglercraft-compatible servers over a WebSocket, and plays sound. It is experimental, and like the native game it needs resources prepared from your own copy of Minecraft, which are never published: build it yourself rather than expecting a hosted demo. Build steps, design and what's missing: [web/README.md](web/README.md).
+
+```sh
+web/build.sh
+python3 web/serve.py   # http://localhost:8080
+```
 
 ## Host a server
 
@@ -176,4 +187,4 @@ Third-party credits and licenses: [Third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## Author
 
-Made by [Ludovic Marie](https://lu4ovic.com) ([@ludovic111](https://github.com/ludovic111)).
+Horizon is made by [Ludovic Marie](https://lu4ovic.com) ([@ludovic111](https://github.com/ludovic111)) and its contributors. The browser port is by [@bedrock3359](https://github.com/bedrock3359).

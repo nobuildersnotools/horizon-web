@@ -24,7 +24,7 @@ README's *Build from source*), and once:
 rustup target add wasm32-unknown-unknown
 rustup toolchain install nightly-2026-10-14 --component rust-src   # threads: std rebuilt with atomics
 cargo install wasm-bindgen-cli --version 0.2.129   # the version in Cargo.lock
-sudo pacman -S binaryen       # wasm-opt, for the release build (or your system's binaryen package)
+# and binaryen (wasm-opt, for the release build) from your package manager: pacman -S binaryen, apt install binaryen, brew install binaryen
 ```
 
 Sounds come with the prepared resources when your Minecraft install has them
