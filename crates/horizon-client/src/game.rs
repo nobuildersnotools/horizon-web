@@ -2087,7 +2087,7 @@ struct Game<'a> {
     /// When `resourcepacks/` was last looked at for the open pack screen, and what it held
     /// (`watch_pack_folder`).
     pack_folder: Option<(
-        std::time::Instant,
+        horizon_os::time::Instant,
         Vec<(String, u64, Option<std::time::SystemTime>)>,
     )>,
     /// A pack reload staged on a worker (`LoadingOverlay`): the frame draws
@@ -2320,7 +2320,7 @@ struct Game<'a> {
     loading_progress: f32,
     /// `CreateWorldScreen.openCreateWorldScreen`'s data read, on a worker,
     /// while the title says `createWorld.preparing`.
-    creation_job: Option<std::thread::JoinHandle<std::result::Result<(), String>>>,
+    creation_job: Option<horizon_os::thread::JoinHandle<std::result::Result<(), String>>>,
     /// When `loading_progress` last eased (the server thread's load, 50 ms a step).
     loading_progress_at: Option<horizon_os::time::Instant>,
     /// The world spawn search's origin chunk and fallback height, once known.
@@ -2674,7 +2674,7 @@ struct Game<'a> {
     /// The game tests read so far, by id (the test instance registry).
     test_defs: std::cell::RefCell<HashMap<String, Option<test_instances::TestDef>>>,
     /// `GameTestBlockHighlightRenderer.markers`: block, text, removal time.
-    test_highlights: HashMap<(i32, i32, i32), (String, std::time::Instant)>,
+    test_highlights: HashMap<(i32, i32, i32), (String, horizon_os::time::Instant)>,
     /// `GameTestTicker.SINGLETON`: the game tests running on this server.
     game_tests: game_tests::GameTests,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
@@ -17930,7 +17930,7 @@ impl Game<'_> {
                     )
                 })
                 .unwrap_or_default();
-            self.creation_job = std::thread::Builder::new()
+            self.creation_job = horizon_os::thread::Builder::new()
                 .name("world-creation".into())
                 .spawn(move || {
                     horizon_client::vanillagen::shared_data_with(&dir, &overrides, registry)
@@ -17943,7 +17943,7 @@ impl Game<'_> {
         if !self
             .creation_job
             .as_ref()
-            .is_none_or(std::thread::JoinHandle::is_finished)
+            .is_none_or(horizon_os::thread::JoinHandle::is_finished)
         {
             return;
         }
@@ -18215,12 +18215,12 @@ fn launch_world(options: &Options) -> Option<&str> {
 /// A step of the resource load: on its own scoped thread, or, when the
 /// settings allow a single worker, run where it is joined.
 enum Step<'scope, T> {
-    Thread(std::thread::ScopedJoinHandle<'scope, T>),
+    Thread(horizon_os::thread::ScopedJoinHandle<'scope, T>),
     Later(Box<dyn FnOnce() -> T + Send + 'scope>),
 }
 impl<'scope, T: Send + 'scope> Step<'scope, T> {
     fn spawn(
-        scope: &'scope std::thread::Scope<'scope, '_>,
+        scope: &'scope horizon_os::thread::Scope<'scope, '_>,
         parallel: bool,
         f: impl FnOnce() -> T + Send + 'scope,
     ) -> Self {
@@ -18278,7 +18278,7 @@ fn load_core(
     progress.set(1);
     let registry = assets.registry;
     let (render, gameplay, visibility, biomes, environment, collision) =
-        std::thread::scope(|scope| {
+        horizon_os::thread::scope(|scope| {
             let assets = &assets;
             let render = Step::spawn(scope, parallel, move || {
                 // A server reads no block sprites' pixels, which only the
@@ -18363,7 +18363,7 @@ fn gameplay_tables(
             .any(|s| !s.name.starts_with("minecraft:")),
     );
     progress.set(2);
-    let (light, motion) = std::thread::scope(|scope| {
+    let (light, motion) = horizon_os::thread::scope(|scope| {
         let light = Step::spawn(scope, parallel, || {
             LightTables::load(root, assets.registry, &facts).map_err(|e| e.to_string())
         });
@@ -18430,7 +18430,7 @@ fn load_resources(
         }
     };
     let (core, loaded_gui) = loop {
-        let (ui, core) = std::thread::scope(|scope| {
+        let (ui, core) = horizon_os::thread::scope(|scope| {
             let core = Step::spawn(scope, parallel, || {
                 load_core(&root, headless, parallel, progress)
             });
@@ -18675,7 +18675,7 @@ fn load_world_rest(
         result.map_err(|e| e.to_string())
     }
     let (items, behaviours, block_entity_render, animate, mobs, transformers) = if threads > 1 {
-        std::thread::scope(|scope| {
+        horizon_os::thread::scope(|scope| {
             let items = scope.spawn(|| text(load_items()));
             let behaviours = scope.spawn(|| text(load_behaviours()));
             let block_entity_render = scope.spawn(|| text(load_block_entity_render()));

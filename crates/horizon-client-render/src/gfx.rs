@@ -4052,8 +4052,10 @@ impl Renderer {
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         surface.configure(device, config);
-        let memory = pollster::block_on(memory.pop());
-        if let Some(e) = memory.or(pollster::block_on(validation.pop())) {
+        // The page can't wait for the browser's answer: there `horizon_os::block_on` takes only a
+        // ready one, and the browser reports the error itself.
+        let memory = horizon_os::block_on(memory.pop()).flatten();
+        if let Some(e) = memory.or(horizon_os::block_on(validation.pop()).flatten()) {
             return Err(e.to_string());
         }
         if device_lost.load(std::sync::atomic::Ordering::Relaxed) {
