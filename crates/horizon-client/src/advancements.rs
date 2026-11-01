@@ -3,6 +3,7 @@
 //! (`EntityPredicate`, `ItemPredicate`, `LocationPredicate`, the loot
 //! conditions advancements use).
 use horizon_os::fs::PathExt;
+use horizon_world::lazy_json::LazyJson;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -31,7 +32,9 @@ pub struct Display {
 pub struct Criterion {
     pub name: String,
     pub trigger: String,
-    pub conditions: Value,
+    /// Read on first test: ~1,300 recipe advancements' criteria, most never
+    /// tested in a game, took ~4 MB as `Value`s.
+    pub conditions: LazyJson,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Rewards {
@@ -155,7 +158,8 @@ impl Tree {
             .into_iter()
             .flatten()
         {
-            match self.list[ai].criteria[ci].conditions["recipes"].as_str() {
+            // `read`: the index alone keeps none of the criteria read.
+            match self.list[ai].criteria[ci].conditions.read()["recipes"].as_str() {
                 Some(r) => self
                     .by_recipe
                     .entry(r.to_owned())
@@ -209,7 +213,8 @@ impl InventoryIndex {
             return index;
         };
         for &(ai, ci) in list {
-            let items = &tree.list[ai].criteria[ci].conditions["items"];
+            let conditions = tree.list[ai].criteria[ci].conditions.read();
+            let items = &conditions["items"];
             // `id_matches`: only a string or a list limits the items.
             let limited = items.as_array().and_then(|a| {
                 a.iter()
@@ -267,7 +272,7 @@ fn parse(id: &str, v: &Value) -> Option<Advancement> {
         .map(|(name, c)| Criterion {
             name: name.clone(),
             trigger: c["trigger"].as_str().unwrap_or("").to_owned(),
-            conditions: c["conditions"].clone(),
+            conditions: LazyJson::new(&c["conditions"]),
         })
         .collect();
     let requirements = match v["requirements"].as_array() {
@@ -1607,7 +1612,7 @@ mod tests {
                 criteria: vec![Criterion {
                     name: "c".into(),
                     trigger: "minecraft:inventory_changed".into(),
-                    conditions,
+                    conditions: LazyJson::new(&conditions),
                 }],
                 requirements: vec![vec!["c".into()]],
                 rewards: Rewards::default(),
@@ -1656,7 +1661,7 @@ mod tests {
                 criteria: vec![Criterion {
                     name: "c".into(),
                     trigger: "minecraft:recipe_unlocked".into(),
-                    conditions,
+                    conditions: LazyJson::new(&conditions),
                 }],
                 requirements: vec![vec!["c".into()]],
                 rewards: Rewards::default(),

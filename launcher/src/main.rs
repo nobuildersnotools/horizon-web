@@ -353,6 +353,8 @@ struct Launcher {
     world_packs: datapacks_page::WorldPacks,
     export: Option<export_page::ExportPanel>,
     launch: Option<launch_page::LaunchPanel>,
+    /// The memory row on Home.
+    memory_slider: launch_page::MemorySlider,
     importing: import_page::Importing,
     console: console_page::Console,
     /// What the window did when the game started (`while_playing.rs`).
@@ -568,6 +570,7 @@ impl Launcher {
             world_packs: datapacks_page::WorldPacks::default(),
             export: None,
             launch: None,
+            memory_slider: Default::default(),
             importing: Default::default(),
             console: Default::default(),
             aside: while_playing::Aside::new(window.window_handle()),
@@ -969,6 +972,7 @@ impl Launcher {
                             .unwrap_or_default();
                         cmd.envs(self.client_vars.iter().map(|(k, v)| (k, v)));
                         let launch = instance.map(|i| i.launch).unwrap_or_default();
+                        horizon_launcher::launch::limit_memory(&mut cmd, &launch);
                         let cmd = horizon_launcher::launch::wrap(cmd, &launch);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
@@ -2150,6 +2154,23 @@ fn plate(t: &Theme) -> Div {
     blocks::panel(t)
 }
 
+fn tab_action(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    t: &Theme,
+) -> Stateful<Div> {
+    let label: SharedString = label.into();
+    shell::action(id, shell::Action::Raised, t).child(shell::label(tr(&label).to_string()))
+}
+
+/// Floating text with no background
+fn quiet_note(text_: impl Into<SharedString>, t: &Theme) -> Div {
+    plate(t)
+        .px(px(12.))
+        .py(px(8.))
+        .child(text(theme::CAPTION).text_color(t.muted).child(text_.into()))
+}
+
 /// Something went wrong: a dot in the danger colour, then what happened.
 fn notice(text_: String, t: &Theme) -> Div {
     plate(t)
@@ -2634,7 +2655,7 @@ impl Launcher {
                 .absolute()
                 .top(px(theme::night::PLAY + 6.))
                 .left_0()
-                .w(px(300.))
+                .w(px(340.))
                 .p(px(6.))
                 .rounded(px(theme::night::RADIUS_CONTROL))
                 .border_1()
@@ -2660,6 +2681,7 @@ impl Launcher {
                         .flex()
                         .items_center()
                         .justify_between()
+                        .gap(px(12.))
                         .h(px(32.))
                         .px(px(10.))
                         .rounded(px(theme::RADIUS))
@@ -2668,14 +2690,15 @@ impl Launcher {
                         .text_color(t.ink)
                         .cursor_pointer()
                         .hover(move |s| s.bg(t.plate_soft))
-                        .child(tag.clone())
+                        .child(div().min_w_0().truncate().child(tag.clone()))
                         .child(
                             div()
                                 .flex()
+                                .flex_none()
                                 .items_center()
                                 .gap(px(8.))
                                 .when(latest, |d| {
-                                    d.child(caps(tr("follows updates")).text_color(t.muted))
+                                    d.child(caps(tr("auto-update")).flex_none().text_color(t.muted))
                                 })
                                 .when(selected, |d| {
                                     d.child(div().size(px(6.)).rounded_full().bg(t.accent))
@@ -2722,6 +2745,7 @@ impl Launcher {
             .or_else(|| java.is_some().then(String::new))
         else {
             // No hero without a version: the page starts below the top bar like the others.
+            let memory = self.memory_row(cx);
             return div()
                 .flex()
                 .flex_col()
@@ -2739,7 +2763,8 @@ impl Launcher {
                             cx.notify();
                         }),
                     ),
-                ));
+                ))
+                .children(memory);
         };
         let prepared = backend::is_prepared(&tag);
         // Prepared without sounds (#1035): Prepare again is the fix, so it stands out.
@@ -2870,7 +2895,8 @@ impl Launcher {
             .flex_col()
             .children(self.instance_row(1, cx))
             .children(self.export_panel(cx))
-            .children(self.launch_panel(cx));
+            .children(self.launch_panel(cx))
+            .children(self.memory_row(cx));
         rows = match &java {
             Some(java) => rows.child(index_row(
                 2,

@@ -204,10 +204,8 @@ fn os_version() -> Option<String> {
 #[cfg(target_os = "linux")]
 fn cpu() -> Option<String> {
     let info = horizon_os::fs::read_to_string("/proc/cpuinfo").ok()?;
-    // x86 names the CPU per core; ARM boards name the machine once.
-    key_value(&info, "model name", ':')
-        .or_else(|| key_value(&info, "Model", ':'))
-        .map(str::to_owned)
+    // x86 names the CPU per core; arm64 only gives the core's implementer and part.
+    horizon_telemetry::system::linux_cpu_name(&info)
 }
 
 #[cfg(target_os = "linux")]
@@ -229,12 +227,12 @@ fn key_value<'a>(text: &'a str, key: &str, sep: char) -> Option<&'a str> {
 
 #[cfg(target_os = "windows")]
 fn os_version() -> Option<String> {
-    output("cmd", &["/C", "ver"])
+    horizon_telemetry::system::windows_version()
 }
 
 #[cfg(target_os = "windows")]
 fn cpu() -> Option<String> {
-    std::env::var("PROCESSOR_IDENTIFIER").ok()
+    horizon_telemetry::system::windows_cpu()
 }
 
 #[cfg(target_os = "windows")]
@@ -282,5 +280,17 @@ mod tests {
             assert!(rss_bytes(horizon_os::process::id()).unwrap() > 1 << 20);
             assert!(cpu_seconds(horizon_os::process::id()).unwrap() >= 0.0);
         }
+    }
+
+    /// `hardware.cpu` is the brand name, not the family and model `PROCESSOR_IDENTIFIER` holds.
+    #[cfg(windows)]
+    #[test]
+    fn windows_reports_the_cpu_brand() {
+        let cpu = Hardware::detect().cpu.expect("a CPU name");
+        assert!(
+            !cpu.is_empty() && !cpu.contains(" Family ") && !cpu.contains("Stepping"),
+            "family and model, not a name: {cpu:?}"
+        );
+        assert_eq!(cpu, cpu.trim());
     }
 }

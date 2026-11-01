@@ -3,8 +3,8 @@ use super::event_loop::EventLoopCtl;
 use super::{Game, Screen};
 use horizon_client::{Result, items::ItemStack};
 use horizon_core::geometry::Vec3;
-use serde_json::{Value, json};
 use horizon_os::time::{Duration, Instant};
+use serde_json::{Value, json};
 use std::sync::mpsc::Sender;
 use winit::{event::MouseButton, keyboard::KeyCode};
 
@@ -107,10 +107,28 @@ impl Game<'_> {
             let _ = flight.reply.send(summary.to_string());
         }
     }
+    /// The frame summary, with Horizon's own passes' median GPU times while they are timed.
+    fn summary_with_passes(&self) -> Value {
+        let mut summary = self.frame_stats.summary();
+        let passes = self
+            .renderer
+            .as_ref()
+            .map(|r| r.own_pass_times())
+            .unwrap_or_default();
+        if !passes.is_empty() {
+            summary["gpu_passes"] = Value::Object(
+                passes
+                    .into_iter()
+                    .map(|(name, ms)| (name, json!(ms)))
+                    .collect(),
+            );
+        }
+        summary
+    }
     pub(super) fn poll_control(&mut self, event_loop: &dyn EventLoopCtl) {
         if let Some((deadline, reply)) = self.pending_bench.take() {
             if Instant::now() >= deadline {
-                let _ = reply.send(self.frame_stats.summary().to_string());
+                let _ = reply.send(self.summary_with_passes().to_string());
             } else {
                 self.pending_bench = Some((deadline, reply));
             }
@@ -163,6 +181,10 @@ impl Game<'_> {
                     self.mod_browser_text(None, true);
                     return Ok(());
                 }
+                Screen::Social => {
+                    self.social_backspace();
+                    return Ok(());
+                }
                 _ => {}
             }
         }
@@ -185,6 +207,7 @@ impl Game<'_> {
         match self.screen {
             Screen::Chat => self.chat_type(text),
             Screen::CommandBlock => self.command_block_type(text),
+            Screen::Social => self.social_type(text),
             Screen::BlockEditor => self.block_editor_type(text),
             Screen::DebugOptions => self.debug_options_type(text),
             Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
@@ -310,6 +333,15 @@ impl Game<'_> {
                 }
                 Ok(Some(json!({ "ok": true, "cull": r.section_cull() })))
             }
+            "gpu-passes" => {
+                match words.get(1).copied() {
+                    None => {}
+                    Some("on") => self.gpu_passes = true,
+                    Some("off") => self.gpu_passes = false,
+                    Some(other) => return Err(format!("unknown gpu pass mode {other}").into()),
+                }
+                Ok(Some(json!({ "ok": true, "gpu_passes": self.gpu_passes })))
+            }
             "section-sides" => {
                 let r = self.renderer.as_mut().ok_or("no renderer")?;
                 match words.get(1).copied() {
@@ -372,6 +404,13 @@ impl Game<'_> {
                         "key action must be down, up, tap or repeat, not {action}"
                     )
                     .into());
+                }
+                // ConfirmScreen.keyPressed: Escape answers no, nothing else goes past it.
+                if self.command_prompt.is_some() {
+                    if key == KeyCode::Escape && arg(2)? != "up" {
+                        self.answer_command_prompt(false);
+                    }
+                    return ok();
                 }
                 // A server's dialog takes the keys, in configuration too.
                 if self.dialog_open() {
@@ -818,7 +857,7 @@ impl Game<'_> {
                 })))
             }
             "stats" => {
-                let summary = self.frame_stats.summary();
+                let summary = self.summary_with_passes();
                 if words.get(1) == Some(&"reset") {
                     self.frame_stats.reset();
                 }
@@ -1023,6 +1062,7 @@ impl Game<'_> {
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
             Screen::Friends => "friends",
+            Screen::Social => "social",
             Screen::ServerLinks => "server-links",
             Screen::ConfirmLink => "confirm-link",
             Screen::DialogWarning => "dialog-warning",
@@ -1030,6 +1070,7 @@ impl Game<'_> {
             Screen::BlockEditor => "block-editor",
             Screen::Win => "win",
             Screen::DebugOptions => "debug-options",
+            Screen::Mod => "mod",
         }
     }
 
@@ -1142,7 +1183,7 @@ impl Game<'_> {
             "distance": self.settings.horizon.lod_distance,
             "effective_distance": self.lod_distance(),
             "terrain_distance": self.terrain_distance(),
-            "source": if self.lod.is_none() { "none" } else if self.integrated.is_some() { "integrated" } else { "local" },
+            "source": if self.lod.is_none() { "none" } else if self.integrated.is_some() { "integrated" } else if self.server_far_terrain().is_some() { "server" } else { "local" },
             "source_attempted": self.lod_source_attempted,
             "active_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().0),
             "cached_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().1),
@@ -1222,6 +1263,12 @@ impl Game<'_> {
         let (target, sampled) = self.lod.as_ref().map_or((0, 0), |lod| lod.progress());
         status["lod"]["target_tiles"] = target.into();
         status["lod"]["sampled_target_tiles"] = sampled.into();
+        let (wanted, refined) = self
+            .lod
+            .as_ref()
+            .map_or((0, 0), |lod| lod.detail_progress());
+        status["lod"]["detail_target_columns"] = wanted.into();
+        status["lod"]["refined_target_columns"] = refined.into();
         status["pending_uploads"] = self.pending_uploads.len().into();
         status["destroying"] = json!(destroying);
         status["physical_keys"] = json!(physical_keys);

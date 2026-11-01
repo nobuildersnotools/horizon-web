@@ -6,8 +6,8 @@
 //! come through [`read`], so a mod's change reaches each of them, and stacks
 //! are saved and sent against the changed defaults as against vanilla's.
 
-use serde_json::{Map, Value};
 use horizon_os::fs;
+use serde_json::{Map, Value};
 use std::{collections::BTreeMap, io, path::Path};
 
 /// Hook point for native mods (docs/native-mods.md, listed in `native-hooks.json`

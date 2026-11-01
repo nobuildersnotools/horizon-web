@@ -7,8 +7,8 @@
 use super::hub::{HostEvent, Hub, TickCtx};
 use crate::collisions::SceneCollisions;
 use horizon_anticheat::{Check, Config, Strikes};
-use horizon_os::time::Instant;
 use horizon_core::geometry::{Aabb, Vec3};
+use horizon_os::time::Instant;
 use horizon_world::nbt::{JavaString, Tag};
 use std::io::Write;
 
@@ -158,7 +158,7 @@ impl Hub {
         };
         if ac.config.runs(Check::Prediction) {
             let g = &mut self.guests[i];
-            let (input, sprinting) = (g.input, g.sprinting);
+            let (input, sprinting) = (g.input, g.anticheat.sprinting);
             g.anticheat
                 .record
                 .get_or_insert_default()
