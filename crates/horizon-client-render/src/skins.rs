@@ -894,7 +894,7 @@ impl Downloader {
         let file = self
             .resource_root
             .join(format!("assets/{namespace}/textures/{path}.png"));
-        let image = std::fs::read(file)
+        let image = horizon_os::fs::read(file)
             .ok()
             .and_then(|b| crate::hud::decode_bytes(&b).ok())
             .and_then(|(w, h, rgba)| resample_64(w, h, &rgba));
@@ -1190,22 +1190,22 @@ mod tests {
             (out, rgba)
         };
         let dir = std::env::temp_dir().join(format!("horizon-offline-skin-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("steve.png");
         for (h, model, slim) in [(64, "slim", true), (32, "classic", false), (64, "", false)] {
             let (bytes, rgba) = png(64, h);
-            std::fs::write(&file, bytes).unwrap();
+            horizon_os::fs::write(&file, bytes).unwrap();
             let (skin, is_slim) = super::read_offline_skin(&file, model).unwrap();
             assert_eq!(skin, super::process_legacy_skin(64, h, &rgba).unwrap());
             assert_eq!(skin.len(), 64 * 64 * 4);
             assert_eq!(is_slim, slim);
         }
-        std::fs::write(&file, png(32, 32).0).unwrap();
+        horizon_os::fs::write(&file, png(32, 32).0).unwrap();
         assert!(super::read_offline_skin(&file, "slim").is_err());
-        std::fs::write(&file, b"not a png").unwrap();
+        horizon_os::fs::write(&file, b"not a png").unwrap();
         assert!(super::read_offline_skin(&file, "slim").is_err());
         assert!(super::read_offline_skin(&dir.join("missing.png"), "").is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 
     /// `MinecraftProfileTexture.getMetadata("model")`: `slim` marks a slim

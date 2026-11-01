@@ -130,7 +130,7 @@ pub fn values_path(pack: &Path) -> PathBuf {
 /// The value of each of `options` saved for the pack at `pack`, else its default; a value
 /// out of the option's range is brought into it.
 pub fn load_values(pack: &Path, options: &[PackOption]) -> Vec<f64> {
-    let text = std::fs::read_to_string(values_path(pack)).unwrap_or_default();
+    let text = horizon_os::fs::read_to_string(values_path(pack)).unwrap_or_default();
     let saved: std::collections::HashMap<&str, f64> = text
         .lines()
         .filter_map(|l| l.split_once('='))
@@ -157,12 +157,12 @@ fn save_values(pack: &Path, options: &[PackOption], values: &[f64]) -> std::io::
         .collect();
     let path = values_path(pack);
     if text.is_empty() {
-        match std::fs::remove_file(&path) {
+        match horizon_os::fs::remove_file(&path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
         }
     } else {
-        std::fs::write(path, text)
+        horizon_os::fs::write(path, text)
     }
 }
 
@@ -311,19 +311,19 @@ mod tests {
 
         let dir =
             std::env::temp_dir().join(format!("horizon-shader-values-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let _ = horizon_os::fs::remove_dir_all(&dir);
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let pack = dir.join("p.hshader");
         let options = [option("a", float), option("b", choice)];
         // Only what differs from the defaults is written; out of range comes back clamped.
         save_values(&pack, &options, &[1.0, 2.0]).unwrap();
-        let text = std::fs::read_to_string(values_path(&pack)).unwrap();
+        let text = horizon_os::fs::read_to_string(values_path(&pack)).unwrap();
         assert_eq!(text, "b=2\n");
-        std::fs::write(values_path(&pack), "a=9\nb=1\nzzz=4\n").unwrap();
+        horizon_os::fs::write(values_path(&pack), "a=9\nb=1\nzzz=4\n").unwrap();
         assert_eq!(load_values(&pack, &options), [2.0, 1.0]);
         save_values(&pack, &options, &[1.0, 0.0]).unwrap();
         assert!(!values_path(&pack).exists());
         assert_eq!(load_values(&pack, &options), [1.0, 0.0]);
-        std::fs::remove_dir_all(&dir).unwrap();
+        horizon_os::fs::remove_dir_all(&dir).unwrap();
     }
 }

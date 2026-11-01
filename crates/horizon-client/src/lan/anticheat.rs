@@ -60,7 +60,7 @@ impl Anticheat {
     fn strike(&mut self, uuid: u128, check: Check) -> (u32, bool) {
         let path = std::path::Path::new(&self.config.strikes);
         let strikes = self.strikes.get_or_insert_with(|| {
-            std::fs::read(path)
+            horizon_os::fs::read(path)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or_default()
@@ -70,7 +70,7 @@ impl Anticheat {
         if !self.config.strikes.is_empty()
             && let Ok(json) = serde_json::to_vec_pretty(strikes)
         {
-            let _ = std::fs::write(path, json);
+            let _ = horizon_os::fs::write(path, json);
         }
         kick
     }

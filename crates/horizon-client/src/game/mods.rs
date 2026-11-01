@@ -197,7 +197,7 @@ fn not_built(dir: &std::path::Path, built: &str, rows: &[Installed]) -> Vec<Inst
             .as_array()
             .is_some_and(|mods| mods.iter().any(|m| m["id"] == id))
     };
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+    let mut paths: Vec<PathBuf> = horizon_os::fs::read_dir(dir)
         .map(|d| d.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
     paths.retain(|p| p.extension().is_some_and(|e| e == "hnmod"));
@@ -271,7 +271,7 @@ impl Game<'_> {
         self.list_native_mods();
         let built = std::env::current_exe()
             .ok()
-            .and_then(|exe| std::fs::read_to_string(exe.with_file_name(BUILD_INFO)).ok())
+            .and_then(|exe| horizon_os::fs::read_to_string(exe.with_file_name(BUILD_INFO)).ok())
             .unwrap_or_default();
         let native_dir = Self::options_path().with_file_name(mod_list::NATIVE_DIR);
         let unbuilt = not_built(&native_dir, &built, &self.settings.mods.installed);
@@ -323,7 +323,7 @@ mod tests {
         let mixin = format!(
             "[mod]\nid = \"{id}\"\nversion = \"0.3.0\"\n[compatibility]\nhorizon_revision = \"{horizon}\"\n"
         );
-        let file = std::fs::File::create(dir.join(format!("{id}.hnmod"))).unwrap();
+        let file = horizon_os::fs::File::create(dir.join(format!("{id}.hnmod"))).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file("horizon-native.json", options).unwrap();
@@ -337,13 +337,13 @@ mod tests {
     #[test]
     fn native_mods_installed_but_not_built_get_a_row_saying_so() {
         let dir = std::env::temp_dir().join(format!("horizon-not-built-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let _ = horizon_os::fs::remove_dir_all(&dir);
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         for id in ["veinminer", "zoom", "minimap"] {
             hnmod(&dir, id);
         }
-        std::fs::write(dir.join("notes.txt"), "not a mod").unwrap();
-        std::fs::write(dir.join("broken.hnmod"), "not a zip").unwrap();
+        horizon_os::fs::write(dir.join("notes.txt"), "not a mod").unwrap();
+        horizon_os::fs::write(dir.join("broken.hnmod"), "not a zip").unwrap();
         // A release: none is built in; the page lists them, sorted, instead of "No mods".
         let rows = not_built(&dir, "", &[]);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
@@ -363,6 +363,6 @@ mod tests {
         assert_eq!(rows[0].id, "veinminer");
         // No folder: no rows.
         assert!(not_built(&dir.join("missing"), "", &[]).is_empty());
-        std::fs::remove_dir_all(&dir).unwrap();
+        horizon_os::fs::remove_dir_all(&dir).unwrap();
     }
 }

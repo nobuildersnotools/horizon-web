@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap};
 /// The values the player chose for pack `name`'s options (`shaderpacks/<name>.txt`).
 fn chosen_shader_options(name: &str) -> BTreeMap<String, String> {
     let file = Game::shader_packs_dir().join(horizon_shaders::chosen_file(name));
-    std::fs::read_to_string(file)
+    horizon_os::fs::read_to_string(file)
         .map(|text| horizon_shaders::parse_chosen(&text))
         .unwrap_or_default()
 }
@@ -56,12 +56,12 @@ pub(super) fn read_shader_options(
 pub(super) fn write_shader_options(options: &ShaderOptions) {
     let file = Game::shader_packs_dir().join(horizon_shaders::chosen_file(&options.pack));
     let saved = if options.chosen.is_empty() {
-        std::fs::remove_file(&file).or_else(|e| match e.kind() {
+        horizon_os::fs::remove_file(&file).or_else(|e| match e.kind() {
             std::io::ErrorKind::NotFound => Ok(()),
             _ => Err(e),
         })
     } else {
-        std::fs::write(&file, horizon_shaders::chosen_text(&options.chosen))
+        horizon_os::fs::write(&file, horizon_shaders::chosen_text(&options.chosen))
     };
     if let Err(e) = saved {
         log::warn!("shader pack {}: {}: {e}", options.pack, file.display());

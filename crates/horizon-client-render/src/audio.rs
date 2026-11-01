@@ -767,7 +767,7 @@ fn default_output_name() -> Option<String> {
 fn card_fingerprint() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
-        std::fs::read_to_string("/proc/asound/cards").ok()
+        horizon_os::fs::read_to_string("/proc/asound/cards").ok()
     }
     #[cfg(target_os = "macos")]
     {

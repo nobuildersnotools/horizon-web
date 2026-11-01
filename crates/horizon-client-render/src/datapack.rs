@@ -152,7 +152,8 @@ pub fn discover(world: &Path) -> Vec<DataPack> {
 /// `pack.mcmeta`, a feature pack (`PackSource.FEATURE`). Off until a world
 /// selects them.
 pub fn feature_packs(resources: &Path) -> Vec<DataPack> {
-    let Ok(entries) = std::fs::read_dir(resources.join("data").join("minecraft").join("datapacks"))
+    let Ok(entries) =
+        horizon_os::fs::read_dir(resources.join("data").join("minecraft").join("datapacks"))
     else {
         return Vec::new();
     };
@@ -258,14 +259,18 @@ pub fn temp_folder() -> std::io::Result<PathBuf> {
 /// `dir`; false when `path` is no pack.
 pub fn copy_pack(path: &Path, dir: &Path) -> bool {
     fn copy_dir(from: &Path, at: &Path) {
-        let _ = std::fs::create_dir_all(at);
-        for entry in std::fs::read_dir(from).into_iter().flatten().flatten() {
+        let _ = horizon_os::fs::create_dir_all(at);
+        for entry in horizon_os::fs::read_dir(from)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let path = entry.path();
             let to = at.join(entry.file_name());
             if path.is_dir() {
                 copy_dir(&path, &to);
             } else {
-                let _ = std::fs::copy(&path, &to);
+                let _ = horizon_os::fs::copy(&path, &to);
             }
         }
     }
@@ -279,8 +284,8 @@ pub fn copy_pack(path: &Path, dir: &Path) -> bool {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
             && {
-                let _ = std::fs::create_dir_all(dir);
-                std::fs::copy(path, dir.join(name())).is_ok()
+                let _ = horizon_os::fs::create_dir_all(dir);
+                horizon_os::fs::copy(path, dir.join(name())).is_ok()
             };
     }
     if !path.is_dir() {
@@ -290,7 +295,7 @@ pub fn copy_pack(path: &Path, dir: &Path) -> bool {
         copy_dir(path, &dir.join(name()));
         return true;
     }
-    let own: Vec<PathBuf> = std::fs::read_dir(path)
+    let own: Vec<PathBuf> = horizon_os::fs::read_dir(path)
         .into_iter()
         .flatten()
         .flatten()
@@ -355,7 +360,7 @@ pub fn for_recreate(world: &Path) -> (Option<PathBuf>, Vec<String>) {
     // it asks for (`for_recreate`'s selection only seeds the new world's
     // `datapacks.json`).
     let mut selected = enabled_ids(world, &packs, &[]);
-    let vanilla_off = std::fs::read(world.join("datapacks.json"))
+    let vanilla_off = horizon_os::fs::read(world.join("datapacks.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .and_then(|v| v["disabled"].as_array().cloned())
@@ -370,7 +375,7 @@ pub fn for_recreate(world: &Path) -> (Option<PathBuf>, Vec<String>) {
         if copy(&world.join("datapacks"), &dir).is_ok() {
             Some(dir)
         } else {
-            let _ = std::fs::remove_dir_all(&dir);
+            let _ = horizon_os::fs::remove_dir_all(&dir);
             None
         }
     });

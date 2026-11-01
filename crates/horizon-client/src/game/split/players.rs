@@ -155,7 +155,7 @@ impl Split<'_> {
         let mut settings = if options.exists() {
             horizon_client::settings::Settings::load(&options)
         } else {
-            std::fs::create_dir_all(&profile)?;
+            horizon_os::fs::create_dir_all(&profile)?;
             self.host.settings.save(&options);
             self.host.settings.clone()
         };
@@ -275,7 +275,7 @@ impl Split<'_> {
         }
         let res = self.res.ok_or("no resources")?;
         let host = &mut self.host;
-        std::fs::create_dir_all(options_file.parent().ok_or("bad options path")?)?;
+        horizon_os::fs::create_dir_all(options_file.parent().ok_or("bad options path")?)?;
         let mut options = host.options.clone();
         options.world = None;
         options.server = None;

@@ -526,7 +526,7 @@ impl VanillaTerrain {
     /// start nobody visited has no file for.
     pub fn set_reference_file(&self, path: std::path::PathBuf) {
         let mut referenced = self.referenced.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(list) = std::fs::read(&path)
+        if let Some(list) = horizon_os::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice::<Vec<(String, i32, i32)>>(&b).ok())
         {
@@ -555,15 +555,15 @@ impl VanillaTerrain {
         let mut list: Vec<_> = referenced.iter().collect();
         list.sort();
         if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+            let _ = horizon_os::fs::create_dir_all(dir);
         }
         // Written beside the file and renamed over it: a crash half way must
         // not leave truncated JSON, which loads as no references at all.
         let tmp = path.with_extension("json.tmp");
         let saved = serde_json::to_vec(&list)
             .map_err(std::io::Error::from)
-            .and_then(|b| std::fs::write(&tmp, b))
-            .and_then(|()| std::fs::rename(&tmp, path));
+            .and_then(|b| horizon_os::fs::write(&tmp, b))
+            .and_then(|()| horizon_os::fs::rename(&tmp, path));
         if let Err(e) = saved {
             log::warn!("Horizon: could not save {}: {e}", path.display());
         }
