@@ -862,6 +862,8 @@ pub struct HudBatch {
     pub end_portal: EndPortalFill,
     /// `options.glintStrength` for the glint pass (`GlintAlpha`).
     pub glint_alpha: f32,
+    /// A native mod's glint colour (`[1.0; 3]` is vanilla's).
+    pub glint_tint: [f32; 3],
     /// A resource pack text shader's `GameTime`: the day's fraction
     /// (`gameTime % 24000` and the partial tick, over 24000).
     pub game_time: f32,
@@ -919,6 +921,7 @@ impl HudBatch {
             blends: Vec::new(),
             end_portal: EndPortalFill::default(),
             glint_alpha: 0.75,
+            glint_tint: [1.0; 3],
             game_time: 0.0,
             blur_at: 0,
             inline_profiles: Vec::new(),
@@ -1594,13 +1597,14 @@ struct HudUniform {
     end_portal: [[f32; 4]; 3],
 }
 impl HudUniform {
-    fn new(size: [f32; 4], fill: EndPortalFill) -> Self {
+    fn new(size: [f32; 4], fill: EndPortalFill, tint: [f32; 3]) -> Self {
         Self {
             size,
             end_portal: [
                 fill.sprites[0],
                 fill.sprites[1],
-                [fill.game_time, 0.0, 0.0, 0.0],
+                // yzw: the glint's tint.
+                [fill.game_time, tint[0], tint[1], tint[2]],
             ],
         }
     }
@@ -1647,7 +1651,11 @@ impl HudRenderer {
         });
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("HUD size"),
-            contents: bytemuck::bytes_of(&HudUniform::new([1.0; 4], EndPortalFill::default())),
+            contents: bytemuck::bytes_of(&HudUniform::new(
+                [1.0; 4],
+                EndPortalFill::default(),
+                [1.0; 3],
+            )),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1996,6 +2004,7 @@ impl HudRenderer {
                     batch.glint_alpha,
                 ],
                 batch.end_portal,
+                batch.glint_tint,
             )),
         );
         if let Some(pack_text) = &self.pack_text {
@@ -2898,6 +2907,7 @@ mod tests {
                 blends: Vec::new(),
                 end_portal: EndPortalFill::default(),
                 glint_alpha: 0.75,
+                glint_tint: [1.0; 3],
                 game_time: 0.0,
                 blur_at: 0,
                 inline_profiles: Vec::new(),

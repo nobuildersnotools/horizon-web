@@ -254,6 +254,9 @@ struct Globals {
     sunrise_fan: [[f32; 4]; 2 * sunrise_fan::TRIANGLES],
     /// x: `Options.textureFiltering` (0 none, 1 RGSS, 2 anisotropic); y: the sprite arrays' width.
     filtering: [f32; 4],
+    /// Native mods' tints (`Frame::mod_tints`): the hurt overlay's colour and strength, then the
+    /// enchantment glint's colour.
+    mod_tints: [[f32; 4]; 2],
 }
 pub type SectionKey = (i32, i32, i32);
 /// The water mirror's targets: the world as a camera mirrored about the water plane sees
@@ -393,6 +396,9 @@ pub struct Frame<'a> {
     /// `GlintAlpha` (accessibility Glint Strength); the entity shader uses it
     /// for held/world items, independent of what the HUD batch last drew.
     pub glint_alpha: f32,
+    /// Native mods' tints for `Globals::mod_tints`: the hurt overlay `[r, g, b, strength]`
+    /// (vanilla's is `overlay::HURT_TINT`), then the glint's colour `[r, g, b, _]`.
+    pub mod_tints: [[f32; 4]; 2],
     /// The glint scroll clock (`Glint::scroll_ticks`): entity.wgsl's
     /// `ARMOR_ENTITY_GLINT_TEXTURING` phase.
     pub glint_ticks: f32,
@@ -4946,6 +4952,7 @@ impl Renderer {
                 0.0,
                 0.0,
             ],
+            mod_tints: frame.mod_tints,
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));

@@ -3770,6 +3770,9 @@ impl Game<'_> {
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                 {
                     m.health = 0.0;
+                    let (id, at) = (m.id, m.position);
+                    let kind = format!("minecraft:{}", m.kind.id.trim_start_matches("minecraft:"));
+                    self.native_mob_died(id, &kind, [at.x, at.y, at.z]);
                 }
                 // LivingEntity.handleEntityEvent 3 on this player: its death
                 // sound, which Player.playSound plays for this client alone
@@ -5593,6 +5596,9 @@ impl Game<'_> {
             analog: None,
         }
         .with_stick(stick.filter(|_| playing));
+        if playing {
+            self.native_movement_keys(&mut keys.sprint, &mut keys.shift);
+        }
         // On a server (not this game's own server thread), the stick moves as the keys it sets do
         // (`KeyboardInput.tick`: 8 directions, full speed). The server only hears those keys
         // (`ServerboundPlayerInputPacket`), and an anticheat that predicts from them pulls back
@@ -8068,6 +8074,13 @@ impl Game<'_> {
         } else if let Some((i, distance)) = self.mob_hit()
             && self.before_block(distance)
         {
+            self.native_attack_reach(distance);
+            let (id, at) = (self.mobs[i].id, self.mobs[i].position);
+            let kind = format!(
+                "minecraft:{}",
+                self.mobs[i].kind.id.trim_start_matches("minecraft:")
+            );
+            self.native_player_attacked(id, &kind, [at.x, at.y, at.z]);
             self.send(S::Attack(play::Attack {
                 id: self.mobs[i].id as i32,
             }));

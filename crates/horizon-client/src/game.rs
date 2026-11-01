@@ -6814,6 +6814,11 @@ impl Game<'_> {
         self.sync_player_body();
         // Read before `player` borrows `self` mutably.
         let dialog = self.dialog_open();
+        let (mut sprint_key, mut sneak_key) = (
+            self.keys.contains(&KeyCode::ControlLeft),
+            self.keys.contains(&KeyCode::ShiftLeft),
+        );
+        self.native_movement_keys(&mut sprint_key, &mut sneak_key);
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -6837,8 +6842,8 @@ impl Game<'_> {
             left: held(KeyCode::KeyA),
             right: held(KeyCode::KeyD),
             jump: held(KeyCode::Space),
-            shift: held(KeyCode::ShiftLeft),
-            sprint: held(KeyCode::ControlLeft),
+            shift: playing && sneak_key,
+            sprint: playing && sprint_key,
             analog: None,
         }
         .with_stick(stick.filter(|_| playing));
@@ -7411,7 +7416,11 @@ impl Game<'_> {
         {
             self.tutorial.mouse(xo, yo);
             let zoom = self.zoom_turn_scale();
-            self.turn_player(xo * zoom, yo * zoom);
+            let mut claimed = false;
+            self.native_turn(xo * zoom, yo * zoom, &mut claimed);
+            if !claimed {
+                self.turn_player(xo * zoom, yo * zoom);
+            }
         }
     }
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
@@ -10919,6 +10928,12 @@ impl Game<'_> {
             return false;
         }
         self.native_attack_reach(distance);
+        let (id, at) = (self.mobs[index].id, self.mobs[index].position);
+        let kind = format!(
+            "minecraft:{}",
+            self.mobs[index].kind.id.trim_start_matches("minecraft:")
+        );
+        self.native_player_attacked(id, &kind, [at.x, at.y, at.z]);
         self.attack_mob(index);
         // Minecraft.startAttack swings after the attack.
         self.swing_arm();
@@ -11193,7 +11208,7 @@ impl Game<'_> {
             "first_quarter",
             "waxing_gibbous",
         ];
-        let phase = phases[(self.world.day_time / 24000).rem_euclid(8) as usize];
+        let phase = phases[(self.seen_day_time() / 24000).rem_euclid(8) as usize];
         body(
             &format!("environment/celestial/moon/{phase}"),
             sky.moon_angle,
@@ -13175,7 +13190,7 @@ impl Game<'_> {
                     time_held: ticks_used,
                     ticks_since_hit: self.kinetic_hit_ticks(a),
                 });
-            let pose = match &*stack.item {
+            let mut pose = match &*stack.item {
                 _ if let Some(pose) = spear => pose,
                 "minecraft:bow" if using => ItemPose::Bow { ticks_used },
                 "minecraft:crossbow" => {
@@ -13223,6 +13238,7 @@ impl Game<'_> {
                 }
                 _ => ItemPose::Swing,
             };
+            self.native_item_pose(hand, &stack, using, attack, &mut pose);
             let mut m = to_world
                 * horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
             self.native_hand_pose(hand, &stack, using, &mut m);
@@ -13349,7 +13365,7 @@ impl Game<'_> {
         alpha: f64,
     ) -> Vec<horizon_client::weather::Vertex> {
         use horizon_client::weather;
-        let (intensity, _) = self.world.weather.levels(alpha as f32);
+        let (intensity, _) = self.seen_weather(alpha as f32);
         if intensity <= 0.0 {
             return Vec::new();
         }
@@ -14575,12 +14591,8 @@ impl Game<'_> {
         );
         // visual/water_fog_color: no dimension sets it, its default is #050533.
         let water_fog = blend(|b| Some(b.water_fog), [0.0; 3]);
-        let mut sky = environment.sample(self.world.day_time, Some(biome_sky), Some(biome_fog));
-        let (rain, thunder) = if self.dim == Dim::Overworld {
-            self.world.weather.levels(alpha as f32)
-        } else {
-            (0.0, 0.0)
-        };
+        let mut sky = environment.sample(self.seen_day_time(), Some(biome_sky), Some(biome_fog));
+        let (rain, thunder) = self.seen_weather(alpha as f32);
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         self.end_flash_sky(&mut sky, alpha);
         if self.flash > 0 && !self.settings.file.bool("hideLightningFlashes") {
@@ -14598,7 +14610,7 @@ impl Game<'_> {
         lines.extend(g.lines);
         let on_top = g.on_top;
         let colored_lights = if self.title.is_none() {
-            self.native_frame_visuals(camera, &mut lines)
+            self.native_frame_visuals(camera, alpha as f32, &mut lines)
         } else {
             Vec::new()
         };
@@ -14822,7 +14834,22 @@ impl Game<'_> {
         let entity_spans = std::mem::take(self.entity_spans.get_mut());
         let glowing = std::mem::take(self.glowing_vertices.get_mut());
         let shadow_only = std::mem::take(self.shadow_only_vertices.get_mut());
+        // Native mods' hurt and glint colours (`native_hit_color`, `native_glint_color`).
+        let mut hurt = horizon_client::overlay::HURT_TINT;
+        self.native_hit_color(&mut hurt);
+        let mut glint = [1.0f32; 3];
+        self.native_glint_color(&mut glint);
+        let tint = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        };
+        let (hurt, glint) = (hurt.map(tint), glint.map(tint));
+        hud.glint_tint = glint;
         let frame = Frame {
+            mod_tints: [hurt, [glint[0], glint[1], glint[2], 1.0]],
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
@@ -18907,6 +18934,10 @@ fn hwnd(window: &Window) -> Option<isize> {
 
 fn loading_frame(hud: &HudBatch) -> Frame<'_> {
     Frame {
+        mod_tints: [
+            horizon_client::overlay::HURT_TINT,
+            horizon_client::overlay::GLINT_TINT,
+        ],
         weather: &[],
         weather_time: horizon_client::weather::Time::new(0, 0.0),
         camera: glam::DVec3::new(0.5, 100.0, 0.5),

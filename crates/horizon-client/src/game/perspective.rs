@@ -246,10 +246,17 @@ impl Game<'_> {
         // another player.
         let (entity, descending) = match self.camera_mob() {
             Some(m) => (super::remote_camera::mob_camera_entity(m), false),
-            None => (
-                self.player_camera_entity()?,
-                self.player.as_ref()?.shift_key_down,
-            ),
+            None => {
+                let mut entity = self.player_camera_entity()?;
+                // A native mod's own camera turn (freelook): the view only.
+                let (mut yaw, mut pitch) = (entity.y_rot, entity.x_rot);
+                self.native_camera_rotation(partial, &mut yaw, &mut pitch);
+                if (yaw, pitch) != (entity.y_rot, entity.x_rot) {
+                    (entity.y_rot, entity.y_rot_o) = (yaw, yaw);
+                    (entity.x_rot, entity.x_rot_o) = (pitch, pitch);
+                }
+                (entity, self.player.as_ref()?.shift_key_down)
+            }
         };
         let mut view = self.view;
         let kind = match self.camera_type {
