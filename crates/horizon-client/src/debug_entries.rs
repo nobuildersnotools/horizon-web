@@ -221,7 +221,7 @@ impl DebugEntries {
             file: Some(file.clone()),
             ..Self::default()
         };
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        let Ok(text) = horizon_os::fs::read_to_string(&file) else {
             return entries;
         };
         match Self::parse(&text) {
@@ -288,7 +288,7 @@ impl DebugEntries {
                 json.insert("custom".into(), custom.into());
             }
         }
-        if let Err(e) = std::fs::write(file, serde_json::Value::Object(json).to_string()) {
+        if let Err(e) = horizon_os::fs::write(file, serde_json::Value::Object(json).to_string()) {
             log::error!("Failed to save debug profile file {}: {e}", file.display());
         }
     }
@@ -439,13 +439,14 @@ mod tests {
     fn the_file_keeps_a_profile_or_the_statuses() {
         let dir =
             std::env::temp_dir().join(format!("horizon-debug-profile-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let mut e = DebugEntries::load(&dir);
         assert!(e.is_using_profile(Profile::Default));
         e.load_profile(Profile::Performance);
-        let saved: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("debug-profile.json")).unwrap())
-                .unwrap();
+        let saved: serde_json::Value = serde_json::from_str(
+            &horizon_os::fs::read_to_string(dir.join("debug-profile.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(saved["profile"], "performance");
         assert!(DebugEntries::load(&dir).is_using_profile(Profile::Performance));
         e.set_status("biome", Status::AlwaysOn);
@@ -454,9 +455,9 @@ mod tests {
         assert_eq!(loaded.status("fps"), Status::AlwaysOn);
         assert!(!loaded.is_using_profile(Profile::Performance));
         // A broken file is reset to the default profile.
-        std::fs::write(dir.join("debug-profile.json"), "{\"profile\":\"nope\"}").unwrap();
+        horizon_os::fs::write(dir.join("debug-profile.json"), "{\"profile\":\"nope\"}").unwrap();
         assert!(DebugEntries::load(&dir).is_using_profile(Profile::Default));
-        std::fs::remove_dir_all(&dir).unwrap();
+        horizon_os::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

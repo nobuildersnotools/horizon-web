@@ -17,7 +17,7 @@ pub fn load(root: &Path, sprites: &mut Sprites) {
     names.sort();
     for name in names {
         let file = crate::atlas_sources::texture_path(root, &name, "textures");
-        if std::fs::metadata(file).is_ok_and(|m| m.len() <= 1 << 20) {
+        if horizon_os::fs::metadata(file).is_ok_and(|m| m.len() <= 1 << 20) {
             let _ = sprites.insert(root, &name);
         }
     }

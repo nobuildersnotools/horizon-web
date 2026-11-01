@@ -526,7 +526,7 @@ impl Options {
             o.resources = std::path::absolute(&o.resources)?;
             o.report = o.report.map(std::path::absolute).transpose()?;
             o.control = o.control.map(std::path::absolute).transpose()?;
-            std::fs::create_dir_all(&dir)
+            horizon_os::fs::create_dir_all(&dir)
                 .and_then(|()| std::env::set_current_dir(&dir))
                 .map_err(|e| format!("game folder {}: {e}", dir.display()))?;
         }
@@ -2088,7 +2088,7 @@ struct Game<'a> {
     /// (`watch_pack_folder`).
     pack_folder: Option<(
         std::time::Instant,
-        Vec<(String, u64, Option<std::time::SystemTime>)>,
+        Vec<(String, u64, Option<horizon_os::time::SystemTime>)>,
     )>,
     /// A pack reload staged on a worker (`LoadingOverlay`): the frame draws
     /// its progress until `drive_pack_reload` applies it.
@@ -11303,7 +11303,7 @@ impl Game<'_> {
         // writes the file itself, and its `disabled` must not be lost.
         if let Some(o) = create.filter(|o| o.pack_dir.is_none()) {
             let world = std::env::current_dir()?.join("saves").join(folder);
-            if let Err(e) = std::fs::create_dir_all(&world) {
+            if let Err(e) = horizon_os::fs::create_dir_all(&world) {
                 log::warn!("Horizon: data packs for {folder}: {}: {e}", world.display());
             } else {
                 let disabled: Vec<String> =
@@ -11314,7 +11314,7 @@ impl Game<'_> {
                         .collect();
                 let json = serde_json::json!({"enabled": o.data_packs, "disabled": disabled});
                 let file = world.join("datapacks.json");
-                if let Err(e) = std::fs::write(&file, json.to_string()) {
+                if let Err(e) = horizon_os::fs::write(&file, json.to_string()) {
                     log::warn!("Horizon: data packs for {folder}: {}: {e}", file.display());
                 }
             }
@@ -18350,7 +18350,8 @@ fn gameplay_tables(
     progress: &Progress,
 ) -> std::result::Result<GameplayTables, String> {
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
-        std::fs::File::open(root.join("block-behaviours.json")).map_err(|e| e.to_string())?,
+        horizon_os::fs::File::open(root.join("block-behaviours.json"))
+            .map_err(|e| e.to_string())?,
     ))
     .map_err(|e| e.to_string())?;
     let (facts, gameplay_projection) =
@@ -20642,7 +20643,7 @@ mod tests {
             "horizon-integrated-player-save-{}",
             std::process::id()
         ));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
 
         // Initial world creation writes `level.dat` before the player spawns.
         let mut level = Level {
@@ -20691,7 +20692,7 @@ mod tests {
             vec![(0, "minecraft:diamond_pickaxe".into(), 1, 0)]
         );
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 }
 

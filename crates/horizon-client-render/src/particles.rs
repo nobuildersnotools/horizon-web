@@ -1147,7 +1147,7 @@ impl ParticleEngine {
     /// and a native mod's (`assets/<namespace>/particles/<name>.json`).
     fn load_sprites(&mut self, root: &Path) {
         let assets = root.join("assets");
-        if let Ok(namespaces) = std::fs::read_dir(&assets) {
+        if let Ok(namespaces) = horizon_os::fs::read_dir(&assets) {
             for namespace in namespaces.flatten() {
                 let ns = namespace.file_name().to_string_lossy().into_owned();
                 if ns == "minecraft" || !namespace.path().is_dir() {
@@ -1184,7 +1184,7 @@ impl ParticleEngine {
     /// A namespace's particle JSONs that vanilla has no type for: each becomes
     /// one sprite set under `<ns>:<file name>`.
     fn load_mod_sprites(&mut self, ns: &str, dir: &Path) {
-        let Ok(files) = std::fs::read_dir(dir) else {
+        let Ok(files) = horizon_os::fs::read_dir(dir) else {
             return;
         };
         for file in files.flatten() {
@@ -1199,7 +1199,7 @@ impl ParticleEngine {
             if ParticleType::from_name(&key).is_some() {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&path) else {
+            let Ok(bytes) = horizon_os::fs::read(&path) else {
                 continue;
             };
             let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
@@ -4321,8 +4321,8 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("horizon-mod-particles-{}", std::process::id()));
         let particles = dir.join("assets/mymod/particles");
-        std::fs::create_dir_all(&particles).unwrap();
-        std::fs::write(
+        horizon_os::fs::create_dir_all(&particles).unwrap();
+        horizon_os::fs::write(
             particles.join("spark.json"),
             br#"{"textures":["mymod:spark/1","mymod:spark/2"]}"#,
         )
@@ -4355,7 +4355,7 @@ mod tests {
                 )
                 .is_none()
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = horizon_os::fs::remove_dir_all(&dir);
     }
 
     #[test]

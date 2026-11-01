@@ -38,7 +38,7 @@ pub(super) fn load(root: &Path, defaults: &Path) -> Option<Arc<CoreProgram>> {
     if root == defaults {
         return None;
     }
-    let read = |base: &Path, path: &str| std::fs::read_to_string(base.join(path)).ok();
+    let read = |base: &Path, path: &str| horizon_os::fs::read_to_string(base.join(path)).ok();
     let own =
         |path: &str| read(root, path).filter(|text| read(defaults, path).as_ref() != Some(text));
     let (own_vertex, own_fragment) = (own(VERTEX), own(FRAGMENT));
