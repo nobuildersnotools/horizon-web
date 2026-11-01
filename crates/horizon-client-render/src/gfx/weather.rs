@@ -223,10 +223,13 @@ struct HorizonWeatherOut {
 
 /// The shader of a native pack's weather stage `source`.
 fn native_source(source: &str) -> String {
-    format!(
-        "{source}\n// Horizon's weather (entity.wgsl)\n{}{NATIVE_ENTRIES}",
-        super::wgsl_prefix::prefixed(&super::entity_shader(), "horizon_entity_")
-    )
+    let entity = super::wgsl_prefix::prefixed(&super::entity_shader(), "horizon_entity_");
+    // entity_shader's directive must open the module, before the pack's declarations.
+    let (directive, entity) = match entity.split_once('\n') {
+        Some((first, rest)) if first.starts_with("diagnostic(") => (format!("{first}\n"), rest),
+        _ => (String::new(), entity.as_str()),
+    };
+    format!("{directive}{source}\n// Horizon's weather (entity.wgsl)\n{entity}{NATIVE_ENTRIES}")
 }
 
 /// A native pack's weather pipeline: its `stage` (with the option values `constants`), then

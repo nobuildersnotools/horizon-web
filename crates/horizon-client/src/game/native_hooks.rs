@@ -903,6 +903,46 @@ pub(crate) struct NativePlayer {
     pub(crate) dimension: &'static str,
 }
 
+/// A line a mod draws in the world (`native_lines`): ends in world
+/// coordinates, ARGB, width in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NativeLine {
+    pub(crate) start: [f64; 3],
+    pub(crate) end: [f64; 3],
+    pub(crate) argb: u32,
+    pub(crate) width: f32,
+}
+
+/// A mob or another player as a client mod reads it (`native_entity`):
+/// its box at the frame's partial tick, where its eyes are and where it
+/// looks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NativeEntity {
+    /// `Entity.getId`.
+    pub(crate) id: u32,
+    pub(crate) player: bool,
+    pub(crate) min: [f64; 3],
+    pub(crate) max: [f64; 3],
+    pub(crate) eye_y: f64,
+    /// Its head's yaw and pitch, in Minecraft's degrees.
+    pub(crate) yaw: f32,
+    pub(crate) pitch: f32,
+}
+
+/// An active effect as a client mod reads it (`native_effect`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeEffect {
+    /// Vanilla's without its namespace (`speed`, `poison`), a mod's
+    /// `<ns>:<path>`; `mob_effect/<id>` is its icon sprite.
+    pub(crate) id: &'static str,
+    /// 0 is level I.
+    pub(crate) amplifier: i32,
+    /// Ticks left; -1 for none.
+    pub(crate) duration: i32,
+    /// `MobEffect.isBeneficial`.
+    pub(crate) beneficial: bool,
+}
+
 /// The world's clock as a client mod reads it (`native_clock`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NativeClock {
@@ -1352,6 +1392,143 @@ impl Game<'_> {
         canceled: &mut bool,
     ) {
         let _ = (hand, stack, partial, swing, equip, canceled);
+    }
+    /// The damage tilt in this frame (`GameRenderer.bobHurt`'s
+    /// `damageTiltStrength`, 0 to 1, the Damage Tilt option): lower it to
+    /// tilt the camera less when the player is hurt; 0 is none. Client-side,
+    /// read while a world is shown. Bundles need "hooks":
+    /// @API:incari_client_hooks@.
+    pub(super) fn native_hurt_tilt(&self, strength: &mut f64) {
+        let _ = strength;
+    }
+    /// How far below its place the first-person fire overlay is drawn
+    /// (`ScreenEffectRenderer.renderFire`), in flame heights: 0 is vanilla's,
+    /// 0.25 shows only its top three quarters. Asked while the player burns.
+    /// Client-side.
+    pub(super) fn native_fire_overlay(&self, lower: &mut f32) {
+        let _ = lower;
+    }
+    /// The player hit a mob `distance` blocks from their eye, along the
+    /// crosshair (`Minecraft.startAttack`'s hit result): the reach of a hit.
+    /// Client-side, before the attack is made.
+    pub(super) fn native_attack_reach(&mut self, distance: f64) {
+        let _ = distance;
+    }
+    /// The first-person pose of `hand`'s item `stack` (`using` it, as a
+    /// shield held up), after `ItemInHandRenderer` placed it: multiply
+    /// `pose` on the right to move or scale the item in its own space
+    /// (`pose * Mat4::from_scale(..)` draws it smaller). It moves only the
+    /// drawn item: reach, hits and blocking are unchanged. Client-side.
+    pub(super) fn native_hand_pose(
+        &self,
+        hand: horizon_client::first_person::Hand,
+        stack: &ItemStack,
+        using: bool,
+        pose: &mut glam::Mat4,
+    ) {
+        let _ = (hand, stack, using, pose);
+    }
+    /// The mouse turned the view `dx`, `dy` (0.15 degrees each, after
+    /// sensitivity and invert; positive is right and down) while playing.
+    /// Set `claimed` to keep it from the player, who then doesn't turn: a
+    /// mod's own camera (freelook, with `native_camera_rotation`). Keys, a
+    /// controller and agents still turn the player. Client-side.
+    pub(super) fn native_turn(&mut self, dx: f64, dy: f64, claimed: &mut bool) {
+        let _ = (dx, dy, claimed);
+    }
+    /// The rotation the player's camera draws from in this frame, `partial`
+    /// ticks past the last tick: Minecraft's yaw and pitch in degrees,
+    /// arriving as the player's. Set them to look another way without
+    /// turning the player (the server, movement and aiming keep the
+    /// player's); in third person the camera orbits to match. Billboards
+    /// and the fog's in-water check still follow the player. Client-side.
+    pub(super) fn native_camera_rotation(&self, partial: f32, yaw: &mut f32, pitch: &mut f32) {
+        let _ = (partial, yaw, pitch);
+    }
+    /// The rain and thunder levels (0 to 1) the player sees in this frame,
+    /// `partial` ticks past the last tick: the sky, the rain and snow, their
+    /// fog, splashes and sound. They arrive as the world's (0 outside the
+    /// Overworld). The world's own weather, which mobs, crops, lightning and
+    /// `native_weather` read, is unchanged. Client-side.
+    pub(super) fn native_seen_weather(&self, partial: f32, rain: &mut f32, thunder: &mut f32) {
+        let _ = (partial, rain, thunder);
+    }
+    /// The time of day in ticks the player sees: the sky, the sun and moon
+    /// and the moon's phase, the light. Arrives as the world's; the world's
+    /// own clock and `native_day_time` are unchanged. Client-side.
+    pub(super) fn native_seen_day_time(&self, day_time: &mut i64) {
+        let _ = day_time;
+    }
+    /// Lines to draw in the world in this frame, `partial` ticks past the
+    /// last tick: depth-tested, as F3+B's hitboxes. Horizon keeps the ones
+    /// within 128 blocks of the player, 0.5 to 4 pixels wide, at most 1024.
+    /// Called only while a world is visible. Client-side.
+    pub(super) fn native_lines(&self, partial: f32, lines: &mut Vec<NativeLine>) {
+        let _ = (partial, lines);
+    }
+    /// The server's scoreboard sidebar was drawn at `bounds` (`[x, y, w,
+    /// h]` in GUI pixels, vanilla's place) on a `screen` (`[w, h]` GUI
+    /// pixels): set `scale` (0.25 to 4, about its top right corner) and
+    /// then `offset` (GUI pixels) to move it. Called only while a sidebar
+    /// shows. Client-side.
+    pub(super) fn native_sidebar_place(
+        &self,
+        screen: [f32; 2],
+        bounds: [f32; 4],
+        offset: &mut [f32; 2],
+        scale: &mut f32,
+    ) {
+        let _ = (screen, bounds, offset, scale);
+    }
+    /// The colour hurt mobs and players flash in this frame, `[r, g, b,
+    /// strength]` from 0 to 1: it arrives as vanilla's red at 0.3. One
+    /// colour for every entity. Client-side.
+    pub(super) fn native_hit_color(&self, color: &mut [f32; 4]) {
+        let _ = color;
+    }
+    /// The enchantment glint's colour in this frame, `[r, g, b]` from 0 to
+    /// 1, on items in the world, in hand, in the GUI and on armour; white is
+    /// vanilla's. Its speed and strength stay the game's options.
+    /// Client-side.
+    pub(super) fn native_glint_color(&self, tint: &mut [f32; 3]) {
+        let _ = tint;
+    }
+    /// Which first-person pose `hand`'s item `stack` takes, before it's
+    /// placed (`ItemInHandRenderer.renderArmWithItem`'s choice): `using` it,
+    /// `swing` the attack swing's progress. Set `pose` to draw it another
+    /// way (an old block-hit, a swing while using); drawing only.
+    /// Client-side.
+    pub(super) fn native_item_pose(
+        &self,
+        hand: horizon_client::first_person::Hand,
+        stack: &ItemStack,
+        using: bool,
+        swing: f32,
+        pose: &mut horizon_client::first_person::ItemPose,
+    ) {
+        let _ = (hand, stack, using, swing, pose);
+    }
+    /// Each tick the game takes input, whether the sprint and sneak keys
+    /// count as held (`KeyboardInput.tick`, and the input the server
+    /// hears): they arrive as the mappings' own state, Toggle options
+    /// included. Set them for a mod's own latch or "always sprint". Whether
+    /// the player can sprint stays the game's call. Client-side.
+    pub(super) fn native_movement_keys(&self, sprint: &mut bool, sneak: &mut bool) {
+        let _ = (sprint, sneak);
+    }
+    /// The player attacked the mob `entity` of type `kind`
+    /// (`minecraft:zombie`) at `pos`: the click that sends the attack on a
+    /// server, the blow in the window's own world. It only hears.
+    /// Client-side.
+    pub(super) fn native_player_attacked(&mut self, entity: u32, kind: &str, pos: [f64; 3]) {
+        let _ = (entity, kind, pos);
+    }
+    /// The server says the mob `entity` of type `kind` at `pos` died
+    /// (`EntityEvent` DEATH): its death animation starts. Any mob's, not
+    /// only the player's victims: a mod keeps the ids it attacked. It only
+    /// hears. Client-side.
+    pub(super) fn native_mob_died(&mut self, entity: u32, kind: &str, pos: [f64; 3]) {
+        let _ = (entity, kind, pos);
     }
 
     /// The values native mods hand their shader packs in this frame,
@@ -3394,6 +3571,260 @@ impl Game<'_> {
     /// Attack and use clicks in the last second.
     pub(super) fn native_clicks(&mut self) -> (u32, u32) {
         self.mouse_reading().0
+    }
+    /// The attack cooldown, 0 just after a swing to 1 charged
+    /// (`Player.getAttackStrengthScale(0.5)`), for a mod's own indicator.
+    /// API @API:incari_client_hooks@.
+    pub(super) fn native_attack_strength(&self) -> f32 {
+        self.attack_strength_scale()
+    }
+    /// The player's food level (0 to 20) and saturation, in a world.
+    pub(super) fn native_food(&self) -> Option<(i32, f32)> {
+        let food = &self.player.as_ref()?.health.food;
+        Some((food.food, food.saturation))
+    }
+    /// The player's active effect `index`, in the order the game keeps
+    /// them; None past the last. By index, so a HUD reads them without
+    /// allocating.
+    pub(super) fn native_effect(&self, index: usize) -> Option<NativeEffect> {
+        let e = self.potions.effects.list.get(index)?;
+        let def = horizon_client_core::potions::effect(e.id);
+        Some(NativeEffect {
+            id: e.id,
+            amplifier: e.amplifier,
+            duration: e.duration,
+            beneficial: def
+                .is_some_and(|d| d.category == horizon_client_core::potions::Category::Beneficial),
+        })
+    }
+    /// The stack the player wears or holds in `slot`: `head`, `chest`,
+    /// `legs`, `feet`, `mainhand` or `offhand`.
+    pub(super) fn native_equipped(&self, slot: &str) -> Option<&ItemStack> {
+        match slot {
+            "head" => self.armor[0].as_ref(),
+            "chest" => self.armor[1].as_ref(),
+            "legs" => self.armor[2].as_ref(),
+            "feet" => self.armor[3].as_ref(),
+            "mainhand" => self.stack_in(self.selected),
+            "offhand" => self.offhand.as_ref(),
+            _ => None,
+        }
+    }
+    /// The most wear item `item` takes (`DataComponents.MAX_DAMAGE`), 0 for
+    /// one that doesn't wear or an unknown item.
+    pub(super) fn native_max_damage(&self, item: &str) -> u32 {
+        self.items().get(item).map_or(0, |i| i.max_damage)
+    }
+    /// How many of item `item` the player carries: the inventory, the off
+    /// hand and the armour slots.
+    pub(super) fn native_item_count(&self, item: &str) -> u32 {
+        self.inventory
+            .iter()
+            .chain(self.armor.iter())
+            .chain(std::iter::once(&self.offhand))
+            .flatten()
+            .filter(|s| &*s.item == item)
+            .map(|s| s.count)
+            .sum()
+    }
+    /// How much of `stack`'s cooldown is left, 0 to 1 (`ItemCooldowns`):
+    /// a shield an axe disabled, an ender pearl just thrown.
+    pub(super) fn native_item_cooldown(&self, stack: &ItemStack) -> f32 {
+        let info = self.items().get(&stack.item);
+        let group =
+            horizon_client::cooldowns::group(stack, info.and_then(|i| i.use_cooldown.as_ref()));
+        self.cooldowns.percent(&group, self.clock.fraction() as f32)
+    }
+    /// A particle of type `kind` (`minecraft:crit`, `witch`, a mod's
+    /// `mymod:spark`) at `at` moving `velocity`, for this window only: false
+    /// on a server, for a type that needs more than its name (block, dust),
+    /// a value that isn't finite, or a point over 32 blocks away.
+    pub(super) fn native_spawn_particle(
+        &mut self,
+        kind: &str,
+        at: [f64; 3],
+        velocity: [f64; 3],
+    ) -> bool {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        if !self.native_window() || at.iter().chain(&velocity).any(|v| !v.is_finite()) {
+            return false;
+        }
+        let Some(p) = self.native_player() else {
+            return false;
+        };
+        if (at[0] - p.x).powi(2) + (at[1] - p.y).powi(2) + (at[2] - p.z).powi(2) > 1024.0 {
+            return false;
+        }
+        let options = match ParticleType::from_name(kind) {
+            Some(ty) => ParticleOptions::simple(ty),
+            None if kind.contains(':') && !kind.starts_with("minecraft:") => {
+                ParticleOptions::named(kind)
+            }
+            None => return false,
+        };
+        self.particles.add(&options, at, velocity);
+        true
+    }
+    /// `stack`'s icon with its components (glint, potion colour, a head's
+    /// skin), top left at `at`, 16 GUI pixels; with `decorations`, its count
+    /// and wear bar too, as in a slot.
+    pub(super) fn native_stack(
+        &self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        at: [f32; 2],
+        decorations: bool,
+    ) {
+        self.draw_item_model(batch, stack, at[0], at[1]);
+        if decorations {
+            self.draw_item_decorations(batch, stack, at[0], at[1], None);
+        }
+    }
+    /// The weather the player sees (`native_seen_weather`): the world's,
+    /// as a mod changes it, each 0 to 1.
+    pub(super) fn seen_weather(&self, partial: f32) -> (f32, f32) {
+        let (mut rain, mut thunder) = if self.dim == super::Dim::Overworld {
+            self.world.weather.levels(partial)
+        } else {
+            (0.0, 0.0)
+        };
+        self.native_seen_weather(partial, &mut rain, &mut thunder);
+        let level = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        (level(rain), level(thunder))
+    }
+    /// The time of day the player sees (`native_seen_day_time`).
+    pub(super) fn seen_day_time(&self) -> i64 {
+        let mut day_time = self.world.day_time;
+        self.native_seen_day_time(&mut day_time);
+        day_time
+    }
+    /// Mob or other player `index` of those the window knows, at `partial`
+    /// ticks past the last tick (none past the last; removed or invisible
+    /// ones come back none too, so a mod walks every index up to
+    /// `native_entity_count`). By index, so a mod reads them each frame
+    /// without allocating.
+    pub(super) fn native_entity(&self, index: usize, partial: f32) -> Option<NativeEntity> {
+        let m = self.mobs.get(index)?;
+        if m.removed || m.invisible || m.has_effect("minecraft:invisibility") {
+            return None;
+        }
+        let lerp = |a: f64, b: f64| a + f64::from(partial) * (b - a);
+        let lerpf = |a: f32, b: f32| a + partial * (b - a);
+        let at = [
+            lerp(m.previous.x, m.position.x),
+            lerp(m.previous.y, m.position.y),
+            lerp(m.previous.z, m.position.z),
+        ];
+        let half = f64::from(m.width()) / 2.0;
+        Some(NativeEntity {
+            id: m.id,
+            player: m.kind.id.trim_start_matches("minecraft:") == "player",
+            min: [at[0] - half, at[1], at[2] - half],
+            max: [at[0] + half, at[1] + f64::from(m.height()), at[2] + half],
+            eye_y: at[1] + m.eye_height(),
+            yaw: lerpf(m.previous_head_yaw, m.head_yaw),
+            pitch: lerpf(m.previous_head_pitch, m.head_pitch),
+        })
+    }
+    /// How many entries `native_entity` walks.
+    pub(super) fn native_entity_count(&self) -> usize {
+        self.mobs.len()
+    }
+    /// The id of the mob or player the crosshair is on, within reach.
+    pub(super) fn native_targeted_entity(&self) -> Option<u32> {
+        self.mob_hit().map(|(i, _)| self.mobs[i].id)
+    }
+    /// Where `at` (world coordinates) shows on the HUD, in GUI pixels from
+    /// the top left; none behind the camera. From the last frame's camera,
+    /// as the locator bar is: a frame late, without view bobbing.
+    pub(super) fn native_project(&self, at: [f64; 3]) -> Option<[f32; 2]> {
+        let (camera, yaw, pitch, fov) = self.locator_camera?;
+        let config = &self.renderer.as_ref()?.config;
+        let (w, h) = (config.width.max(1), config.height.max(1));
+        let scale = HudBatch::new([w, h]).scale;
+        let view = horizon_client::gfx::View::screen(yaw, pitch, fov, w as f32 / h as f32, 1024.0);
+        let rel = glam::Vec4::new(
+            (at[0] - camera[0]) as f32,
+            (at[1] - camera[1]) as f32,
+            (at[2] - camera[2]) as f32,
+            1.0,
+        );
+        let clip = view.view_proj(glam::Mat4::IDENTITY) * rel;
+        if !clip.w.is_finite() || clip.w <= 0.0 {
+            return None;
+        }
+        let (x, y) = (clip.x / clip.w, clip.y / clip.w);
+        Some([
+            (x * 0.5 + 0.5) * w as f32 / scale,
+            (0.5 - y * 0.5) * h as f32 / scale,
+        ])
+    }
+    /// The view F5 cycles: 0 first person, 1 behind, 2 in front.
+    pub(super) fn native_camera_type(&self) -> u8 {
+        match self.camera_type {
+            super::perspective::CameraType::FirstPerson => 0,
+            super::perspective::CameraType::ThirdPersonBack => 1,
+            super::perspective::CameraType::ThirdPersonFront => 2,
+        }
+    }
+    /// Sets the view as F5 would: 0 first person, 1 behind, 2 in front.
+    pub(super) fn native_set_camera_type(&mut self, kind: u8) {
+        use super::perspective::CameraType as C;
+        let previous = self.camera_type;
+        self.camera_type = match kind {
+            1 => C::ThirdPersonBack,
+            2 => C::ThirdPersonFront,
+            _ => C::FirstPerson,
+        };
+        if previous.first_person() != self.camera_type.first_person() {
+            self.check_entity_post_effect(self.camera_type.first_person());
+        }
+    }
+    /// Whether the built-in Programmer Art pack (pre-1.14 textures) is on.
+    pub(super) fn native_programmer_art(&self) -> bool {
+        self.settings
+            .resource_packs
+            .iter()
+            .any(|id| id == "programmer_art")
+    }
+    /// Turns the Programmer Art pack on (on top of the others) or off, as
+    /// the Resource Packs screen would: kept in options.txt, and the
+    /// resources reloaded under the loading overlay. Nothing when it's
+    /// already so.
+    pub(super) fn native_set_programmer_art(&mut self, on: bool) {
+        if self.native_programmer_art() == on {
+            return;
+        }
+        self.settings
+            .resource_packs
+            .retain(|id| id != "programmer_art");
+        if on {
+            self.settings.resource_packs.push("programmer_art".into());
+        }
+        self.refresh_pack_lists();
+        self.settings.save(&Self::options_path());
+        self.reload_packs();
+    }
+    /// Lights the world fully, as Horizon's Fullbright extra does, while
+    /// `on`; off leaves it to that extra. Not kept: a mod sets it each frame.
+    pub(super) fn native_set_fullbright(&mut self, on: bool) {
+        let on = on || self.settings.extras.fullbright;
+        if let Some(r) = self.renderer.as_mut() {
+            r.fullbright = on;
+        }
+    }
+    /// The chat's backdrop opacity (0 to 1) while `opacity` is some; none
+    /// gives it back to Text Background Opacity. Not kept: options.txt is
+    /// untouched, and a mod sets it each frame.
+    pub(super) fn native_set_chat_background(&mut self, opacity: Option<f64>) {
+        let own = f64::from(self.settings.text_background_opacity);
+        self.ui.chat.options.background_opacity = opacity.map_or(own, |o| o.clamp(0.0, 1.0));
     }
     /// A vanilla mapping (`key.forward`, `key.jump`, `key.attack`…): whether
     /// it is held, and its key's label as Controls shows it.

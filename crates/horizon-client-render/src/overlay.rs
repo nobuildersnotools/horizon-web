@@ -58,6 +58,17 @@ pub fn wgsl_constants() -> String {
     )
 }
 
+/// `HURT_TEXEL` as a native mod's hurt tint reads it: the colour, and how much it covers
+/// (`1 - alpha`).
+pub const HURT_TINT: [f32; 4] = [
+    HURT_TEXEL[0] as f32 / 255.0,
+    HURT_TEXEL[1] as f32 / 255.0,
+    HURT_TEXEL[2] as f32 / 255.0,
+    1.0 - HURT_TEXEL[3] as f32 / 255.0,
+];
+/// The glint as vanilla draws it: untinted.
+pub const GLINT_TINT: [f32; 4] = [1.0; 4];
+
 #[cfg(test)]
 mod tests {
     use super::*;

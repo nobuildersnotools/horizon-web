@@ -310,8 +310,8 @@ impl RegionStorageUpgrader {
         self.upgrade_tag(&mut root.tag, CURRENT);
         changed |= version < CURRENT;
         if changed || self.builder.recreate_region_files {
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let timestamp = horizon_os::time::SystemTime::now()
+                .duration_since(horizon_os::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as u32);
             let out = ChunkRecord::from_nbt(&root, Compression::Zlib, timestamp, limits)?;
             let target = if self.builder.recreate_region_files {
@@ -520,7 +520,7 @@ fn work(
     erase_cache: bool,
     recreate: bool,
 ) {
-    let started = std::time::Instant::now();
+    let started = horizon_os::time::Instant::now();
     upgrade_levels(
         base,
         levels,

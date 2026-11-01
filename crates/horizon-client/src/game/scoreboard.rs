@@ -728,7 +728,40 @@ impl Game<'_> {
             self.settings.text_background(0.3),
             self.settings.text_background(0.4),
         );
+        let start = batch.vertices.len();
         hud_layout::paint(batch, &self.gui.atlas, &draws);
+        // A native mod may move and scale it (`native_sidebar_place`).
+        let drawn = &batch.vertices[start..];
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for v in drawn {
+            (x0, y0) = (x0.min(v.pos[0]), y0.min(v.pos[1]));
+            (x1, y1) = (x1.max(v.pos[0]), y1.max(v.pos[1]));
+        }
+        if drawn.is_empty() {
+            return;
+        }
+        let (mut offset, mut scale) = ([0.0f32; 2], 1.0f32);
+        self.native_sidebar_place(
+            [batch.width, batch.height],
+            [x0, y0, x1 - x0, y1 - y0],
+            &mut offset,
+            &mut scale,
+        );
+        let scale = if scale.is_finite() {
+            scale.clamp(0.25, 4.0)
+        } else {
+            1.0
+        };
+        if scale != 1.0 {
+            // About its top right: it grows inward from the screen's edge.
+            batch.scale_since(start, x1, y0, scale, scale);
+        }
+        if offset.iter().all(|v| v.is_finite()) && offset != [0.0; 2] {
+            for v in &mut batch.vertices[start..] {
+                v.pos[0] += offset[0];
+                v.pos[1] += offset[1];
+            }
+        }
     }
 }
 

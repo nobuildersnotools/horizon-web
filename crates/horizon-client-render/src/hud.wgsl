@@ -39,7 +39,8 @@ struct Out {
         let mask = textureSample(atlas, atlas_sampler, in.uv - vec2(2.0, 0.0)).a;
         if mask < 0.1 { discard; }
         let glint = hud.size.w * textureSample(glint_tex, glint_sampler, in.glint_uv);
-        return vec4(glint.rgb * glint.rgb, mask);
+        // end_portal[2].yzw: a native mod's glint colour (white is vanilla's).
+        return vec4(glint.rgb * glint.rgb * hud.end_portal[2].yzw, mask);
     }
     let c = textureSample(atlas, atlas_sampler, in.uv) * in.color;
     if c.a < 0.004 { discard; }

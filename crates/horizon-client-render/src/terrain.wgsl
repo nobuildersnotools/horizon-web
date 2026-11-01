@@ -1,5 +1,8 @@
 // Terrain, sky and outline shaders, ported from the pinned vanilla
 // terrain.vsh/fsh, fog.glsl and sample_lightmap.glsl.
+// `sprite` takes the UVs' derivatives inside its callers' branches, which WGSL's uniformity
+// analysis rejects (browsers enforce it; naga does not): they are the interpolated UVs' either way.
+diagnostic(off, derivative_uniformity);
 struct Globals {
     view_proj: mat4x4<f32>,
     fog_color: vec4<f32>,
@@ -34,6 +37,7 @@ struct Globals {
     // x: Options.textureFiltering (0 none, 1 RGSS, 2 anisotropic), y: the sprite arrays' width
     // in texels (vanilla's TextureSize).
     filtering: vec4<f32>,
+    mod_tints: array<vec4<f32>, 2>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;

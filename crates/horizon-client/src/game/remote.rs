@@ -1430,8 +1430,8 @@ impl Game<'_> {
         }
         // PlayerChatMessage.hasExpiredClient: MESSAGE_EXPIRES_AFTER_CLIENT is
         // the server's five minutes and two more.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = horizon_os::time::SystemTime::now()
+            .duration_since(horizon_os::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
         let expired = now
             > timestamp.saturating_add(
@@ -3770,6 +3770,9 @@ impl Game<'_> {
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                 {
                     m.health = 0.0;
+                    let (id, at) = (m.id, m.position);
+                    let kind = format!("minecraft:{}", m.kind.id.trim_start_matches("minecraft:"));
+                    self.native_mob_died(id, &kind, [at.x, at.y, at.z]);
                 }
                 // LivingEntity.handleEntityEvent 3 on this player: its death
                 // sound, which Player.playSound plays for this client alone
@@ -4290,8 +4293,8 @@ impl Game<'_> {
                     self.handle_chat_message_error(&p.chat_type, signature.as_ref());
                     return Ok(());
                 }
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let now = horizon_os::time::SystemTime::now()
+                    .duration_since(horizon_os::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis() as i64);
                 let incoming = secure_chat::Incoming {
                     sender: p.sender,
@@ -5593,6 +5596,9 @@ impl Game<'_> {
             analog: None,
         }
         .with_stick(stick.filter(|_| playing));
+        if playing {
+            self.native_movement_keys(&mut keys.sprint, &mut keys.shift);
+        }
         // On a server (not this game's own server thread), the stick moves as the keys it sets do
         // (`KeyboardInput.tick`: 8 directions, full speed). The server only hears those keys
         // (`ServerboundPlayerInputPacket`), and an anticheat that predicts from them pulls back
@@ -8068,6 +8074,13 @@ impl Game<'_> {
         } else if let Some((i, distance)) = self.mob_hit()
             && self.before_block(distance)
         {
+            self.native_attack_reach(distance);
+            let (id, at) = (self.mobs[i].id, self.mobs[i].position);
+            let kind = format!(
+                "minecraft:{}",
+                self.mobs[i].kind.id.trim_start_matches("minecraft:")
+            );
+            self.native_player_attacked(id, &kind, [at.x, at.y, at.z]);
             self.send(S::Attack(play::Attack {
                 id: self.mobs[i].id as i32,
             }));
@@ -9709,9 +9722,9 @@ fn snapshot_value(s: &play::AttributeSnapshot) -> f64 {
 
 /// `Util.getMillis` for the level load tracker's timeouts.
 fn client_millis() -> u64 {
-    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    static ORIGIN: std::sync::OnceLock<horizon_os::time::Instant> = std::sync::OnceLock::new();
     ORIGIN
-        .get_or_init(std::time::Instant::now)
+        .get_or_init(horizon_os::time::Instant::now)
         .elapsed()
         .as_millis() as u64
 }

@@ -14,6 +14,7 @@ impl Game<'_> {
     pub(super) fn native_frame_visuals(
         &self,
         camera: glam::DVec3,
+        partial: f32,
         lines: &mut Vec<gizmos::Line>,
     ) -> Vec<dynamic_light::Colored> {
         let Some(player) = self.native_player() else {
@@ -85,6 +86,29 @@ impl Game<'_> {
                 edges += 1;
             }
         }
+        // Mods' lines (hitboxes and the like): finite, near the player, a
+        // sane width, and at most 1024 a frame.
+        let mut mod_lines = Vec::new();
+        self.native_lines(partial, &mut mod_lines);
+        let near = |at: [f64; 3]| {
+            at.iter().all(|v| v.is_finite())
+                && (at[0] - player.x).powi(2)
+                    + (at[1] - player.y).powi(2)
+                    + (at[2] - player.z).powi(2)
+                    <= 128.0 * 128.0
+        };
+        lines.extend(
+            mod_lines
+                .into_iter()
+                .filter(|l| near(l.start) && near(l.end) && (0.5..=4.0).contains(&l.width))
+                .take(1024)
+                .map(|l| gizmos::Line {
+                    start: l.start,
+                    end: l.end,
+                    color: l.argb,
+                    width: l.width,
+                }),
+        );
         let sources = lights.into_iter().take(8).filter(|l| {
             close(l.at)
                 && l.rgb <= 0xffffff

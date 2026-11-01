@@ -2087,7 +2087,7 @@ struct Game<'a> {
     /// When `resourcepacks/` was last looked at for the open pack screen, and what it held
     /// (`watch_pack_folder`).
     pack_folder: Option<(
-        std::time::Instant,
+        horizon_os::time::Instant,
         Vec<(String, u64, Option<horizon_os::time::SystemTime>)>,
     )>,
     /// A pack reload staged on a worker (`LoadingOverlay`): the frame draws
@@ -2320,7 +2320,7 @@ struct Game<'a> {
     loading_progress: f32,
     /// `CreateWorldScreen.openCreateWorldScreen`'s data read, on a worker,
     /// while the title says `createWorld.preparing`.
-    creation_job: Option<std::thread::JoinHandle<std::result::Result<(), String>>>,
+    creation_job: Option<horizon_os::thread::JoinHandle<std::result::Result<(), String>>>,
     /// When `loading_progress` last eased (the server thread's load, 50 ms a step).
     loading_progress_at: Option<horizon_os::time::Instant>,
     /// The world spawn search's origin chunk and fallback height, once known.
@@ -2674,7 +2674,7 @@ struct Game<'a> {
     /// The game tests read so far, by id (the test instance registry).
     test_defs: std::cell::RefCell<HashMap<String, Option<test_instances::TestDef>>>,
     /// `GameTestBlockHighlightRenderer.markers`: block, text, removal time.
-    test_highlights: HashMap<(i32, i32, i32), (String, std::time::Instant)>,
+    test_highlights: HashMap<(i32, i32, i32), (String, horizon_os::time::Instant)>,
     /// `GameTestTicker.SINGLETON`: the game tests running on this server.
     game_tests: game_tests::GameTests,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
@@ -6814,6 +6814,11 @@ impl Game<'_> {
         self.sync_player_body();
         // Read before `player` borrows `self` mutably.
         let dialog = self.dialog_open();
+        let (mut sprint_key, mut sneak_key) = (
+            self.keys.contains(&KeyCode::ControlLeft),
+            self.keys.contains(&KeyCode::ShiftLeft),
+        );
+        self.native_movement_keys(&mut sprint_key, &mut sneak_key);
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -6837,8 +6842,8 @@ impl Game<'_> {
             left: held(KeyCode::KeyA),
             right: held(KeyCode::KeyD),
             jump: held(KeyCode::Space),
-            shift: held(KeyCode::ShiftLeft),
-            sprint: held(KeyCode::ControlLeft),
+            shift: playing && sneak_key,
+            sprint: playing && sprint_key,
             analog: None,
         }
         .with_stick(stick.filter(|_| playing));
@@ -7411,7 +7416,11 @@ impl Game<'_> {
         {
             self.tutorial.mouse(xo, yo);
             let zoom = self.zoom_turn_scale();
-            self.turn_player(xo * zoom, yo * zoom);
+            let mut claimed = false;
+            self.native_turn(xo * zoom, yo * zoom, &mut claimed);
+            if !claimed {
+                self.turn_player(xo * zoom, yo * zoom);
+            }
         }
     }
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
@@ -10918,6 +10927,13 @@ impl Game<'_> {
         if !self.before_block(distance) {
             return false;
         }
+        self.native_attack_reach(distance);
+        let (id, at) = (self.mobs[index].id, self.mobs[index].position);
+        let kind = format!(
+            "minecraft:{}",
+            self.mobs[index].kind.id.trim_start_matches("minecraft:")
+        );
+        self.native_player_attacked(id, &kind, [at.x, at.y, at.z]);
         self.attack_mob(index);
         // Minecraft.startAttack swings after the attack.
         self.swing_arm();
@@ -11192,7 +11208,7 @@ impl Game<'_> {
             "first_quarter",
             "waxing_gibbous",
         ];
-        let phase = phases[(self.world.day_time / 24000).rem_euclid(8) as usize];
+        let phase = phases[(self.seen_day_time() / 24000).rem_euclid(8) as usize];
         body(
             &format!("environment/celestial/moon/{phase}"),
             sky.moon_angle,
@@ -13174,7 +13190,7 @@ impl Game<'_> {
                     time_held: ticks_used,
                     ticks_since_hit: self.kinetic_hit_ticks(a),
                 });
-            let pose = match &*stack.item {
+            let mut pose = match &*stack.item {
                 _ if let Some(pose) = spear => pose,
                 "minecraft:bow" if using => ItemPose::Bow { ticks_used },
                 "minecraft:crossbow" => {
@@ -13222,8 +13238,10 @@ impl Game<'_> {
                 }
                 _ => ItemPose::Swing,
             };
-            let m = to_world
+            self.native_item_pose(hand, &stack, using, attack, &mut pose);
+            let mut m = to_world
                 * horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
+            self.native_hand_pose(hand, &stack, using, &mut m);
             // Seeded by the player id plus the context ordinal.
             let (context, seed) = if left {
                 (
@@ -13347,7 +13365,7 @@ impl Game<'_> {
         alpha: f64,
     ) -> Vec<horizon_client::weather::Vertex> {
         use horizon_client::weather;
-        let (intensity, _) = self.world.weather.levels(alpha as f32);
+        let (intensity, _) = self.seen_weather(alpha as f32);
         if intensity <= 0.0 {
             return Vec::new();
         }
@@ -14573,12 +14591,8 @@ impl Game<'_> {
         );
         // visual/water_fog_color: no dimension sets it, its default is #050533.
         let water_fog = blend(|b| Some(b.water_fog), [0.0; 3]);
-        let mut sky = environment.sample(self.world.day_time, Some(biome_sky), Some(biome_fog));
-        let (rain, thunder) = if self.dim == Dim::Overworld {
-            self.world.weather.levels(alpha as f32)
-        } else {
-            (0.0, 0.0)
-        };
+        let mut sky = environment.sample(self.seen_day_time(), Some(biome_sky), Some(biome_fog));
+        let (rain, thunder) = self.seen_weather(alpha as f32);
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         self.end_flash_sky(&mut sky, alpha);
         if self.flash > 0 && !self.settings.file.bool("hideLightningFlashes") {
@@ -14596,7 +14610,7 @@ impl Game<'_> {
         lines.extend(g.lines);
         let on_top = g.on_top;
         let colored_lights = if self.title.is_none() {
-            self.native_frame_visuals(camera, &mut lines)
+            self.native_frame_visuals(camera, alpha as f32, &mut lines)
         } else {
             Vec::new()
         };
@@ -14820,7 +14834,22 @@ impl Game<'_> {
         let entity_spans = std::mem::take(self.entity_spans.get_mut());
         let glowing = std::mem::take(self.glowing_vertices.get_mut());
         let shadow_only = std::mem::take(self.shadow_only_vertices.get_mut());
+        // Native mods' hurt and glint colours (`native_hit_color`, `native_glint_color`).
+        let mut hurt = horizon_client::overlay::HURT_TINT;
+        self.native_hit_color(&mut hurt);
+        let mut glint = [1.0f32; 3];
+        self.native_glint_color(&mut glint);
+        let tint = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        };
+        let (hurt, glint) = (hurt.map(tint), glint.map(tint));
+        hud.glint_tint = glint;
         let frame = Frame {
+            mod_tints: [hurt, [glint[0], glint[1], glint[2], 1.0]],
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
@@ -17930,7 +17959,7 @@ impl Game<'_> {
                     )
                 })
                 .unwrap_or_default();
-            self.creation_job = std::thread::Builder::new()
+            self.creation_job = horizon_os::thread::Builder::new()
                 .name("world-creation".into())
                 .spawn(move || {
                     horizon_client::vanillagen::shared_data_with(&dir, &overrides, registry)
@@ -17943,7 +17972,7 @@ impl Game<'_> {
         if !self
             .creation_job
             .as_ref()
-            .is_none_or(std::thread::JoinHandle::is_finished)
+            .is_none_or(horizon_os::thread::JoinHandle::is_finished)
         {
             return;
         }
@@ -18215,12 +18244,12 @@ fn launch_world(options: &Options) -> Option<&str> {
 /// A step of the resource load: on its own scoped thread, or, when the
 /// settings allow a single worker, run where it is joined.
 enum Step<'scope, T> {
-    Thread(std::thread::ScopedJoinHandle<'scope, T>),
+    Thread(horizon_os::thread::ScopedJoinHandle<'scope, T>),
     Later(Box<dyn FnOnce() -> T + Send + 'scope>),
 }
 impl<'scope, T: Send + 'scope> Step<'scope, T> {
     fn spawn(
-        scope: &'scope std::thread::Scope<'scope, '_>,
+        scope: &'scope horizon_os::thread::Scope<'scope, '_>,
         parallel: bool,
         f: impl FnOnce() -> T + Send + 'scope,
     ) -> Self {
@@ -18278,7 +18307,7 @@ fn load_core(
     progress.set(1);
     let registry = assets.registry;
     let (render, gameplay, visibility, biomes, environment, collision) =
-        std::thread::scope(|scope| {
+        horizon_os::thread::scope(|scope| {
             let assets = &assets;
             let render = Step::spawn(scope, parallel, move || {
                 // A server reads no block sprites' pixels, which only the
@@ -18364,7 +18393,7 @@ fn gameplay_tables(
             .any(|s| !s.name.starts_with("minecraft:")),
     );
     progress.set(2);
-    let (light, motion) = std::thread::scope(|scope| {
+    let (light, motion) = horizon_os::thread::scope(|scope| {
         let light = Step::spawn(scope, parallel, || {
             LightTables::load(root, assets.registry, &facts).map_err(|e| e.to_string())
         });
@@ -18431,7 +18460,7 @@ fn load_resources(
         }
     };
     let (core, loaded_gui) = loop {
-        let (ui, core) = std::thread::scope(|scope| {
+        let (ui, core) = horizon_os::thread::scope(|scope| {
             let core = Step::spawn(scope, parallel, || {
                 load_core(&root, headless, parallel, progress)
             });
@@ -18676,7 +18705,7 @@ fn load_world_rest(
         result.map_err(|e| e.to_string())
     }
     let (items, behaviours, block_entity_render, animate, mobs, transformers) = if threads > 1 {
-        std::thread::scope(|scope| {
+        horizon_os::thread::scope(|scope| {
             let items = scope.spawn(|| text(load_items()));
             let behaviours = scope.spawn(|| text(load_behaviours()));
             let block_entity_render = scope.spawn(|| text(load_block_entity_render()));
@@ -18906,6 +18935,10 @@ fn hwnd(window: &Window) -> Option<isize> {
 
 fn loading_frame(hud: &HudBatch) -> Frame<'_> {
     Frame {
+        mod_tints: [
+            horizon_client::overlay::HURT_TINT,
+            horizon_client::overlay::GLINT_TINT,
+        ],
         weather: &[],
         weather_time: horizon_client::weather::Time::new(0, 0.0),
         camera: glam::DVec3::new(0.5, 100.0, 0.5),
