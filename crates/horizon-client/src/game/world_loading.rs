@@ -69,7 +69,7 @@ impl WorldRequest {
         }
         // Neither needs the world: they load beside it (the generator's decoration keeps one
         // core busy) and are done before it opens. A bundle both read loads once.
-        std::thread::scope(|scope| {
+        horizon_os::thread::scope(|scope| {
             let loot = scope.spawn(loot);
             let live_features = scope.spawn(live_features);
             let prepared = self.prepare_world(res, pack, options, settings, upgrade);

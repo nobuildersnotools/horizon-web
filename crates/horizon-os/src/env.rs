@@ -4,6 +4,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use std::env::{args, current_dir, current_exe, temp_dir};
+#[cfg(not(target_arch = "wasm32"))]
+pub use std::path::absolute;
 
 /// The arguments the page started the game with, after a program name as
 /// std's `args` has.
@@ -30,4 +32,11 @@ pub fn current_exe() -> std::io::Result<std::path::PathBuf> {
 #[cfg(target_arch = "wasm32")]
 pub fn temp_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("/tmp")
+}
+
+/// `std::path::absolute`, which the browser does not have: a relative path
+/// is under the virtual filesystem's root.
+#[cfg(target_arch = "wasm32")]
+pub fn absolute(path: impl AsRef<std::path::Path>) -> std::io::Result<std::path::PathBuf> {
+    Ok(std::path::Path::new("/").join(path))
 }

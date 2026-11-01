@@ -545,9 +545,9 @@ impl Options {
         }
         if let Some(dir) = o.game_dir.take() {
             // Paths given on the command line stay relative to where the game was started.
-            o.resources = std::path::absolute(&o.resources)?;
-            o.report = o.report.map(std::path::absolute).transpose()?;
-            o.control = o.control.map(std::path::absolute).transpose()?;
+            o.resources = horizon_os::env::absolute(&o.resources)?;
+            o.report = o.report.map(horizon_os::env::absolute).transpose()?;
+            o.control = o.control.map(horizon_os::env::absolute).transpose()?;
             horizon_os::fs::create_dir_all(&dir)
                 .and_then(|()| std::env::set_current_dir(&dir))
                 .map_err(|e| format!("game folder {}: {e}", dir.display()))?;
@@ -720,7 +720,7 @@ impl Options {
                             "--home" => {}
                             // ...and this player's own folder (logging::set_player_dir).
                             "--player-dir" => {}
-                            "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
+                            "--dev-mod" => o.dev_mods.push(horizon_os::env::absolute(&value)?),
                             "--benchmark" => {
                                 if horizon_client::benchmark::scenes(&value).is_none() {
                                     return Err(format!(
@@ -11719,7 +11719,7 @@ impl Game<'_> {
         // Only when `install` did not run (no Data Packs screen opened): it
         // writes the file itself, and its `disabled` must not be lost.
         if let Some(o) = create.filter(|o| o.pack_dir.is_none()) {
-            let world = std::env::current_dir()?.join("saves").join(folder);
+            let world = horizon_os::env::current_dir()?.join("saves").join(folder);
             if let Err(e) = horizon_os::fs::create_dir_all(&world) {
                 log::warn!("Horizon: data packs for {folder}: {}: {e}", world.display());
             } else {
@@ -18471,7 +18471,7 @@ impl<'a> Game<'a> {
             debug_keys: Default::default(),
             debug_charts: Default::default(),
             debug_entries: horizon_client::debug_entries::DebugEntries::load(
-                &std::env::current_dir().unwrap_or_default(),
+                &horizon_os::env::current_dir().unwrap_or_default(),
             ),
             debug_options: None,
             memory_meter: Default::default(),
@@ -20487,7 +20487,7 @@ fn missing_resources(root: &std::path::Path) -> Option<String> {
     if root.join("horizon-resources.json").fs_is_file() {
         return None;
     }
-    let shown = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+    let shown = horizon_os::env::absolute(root).unwrap_or_else(|_| root.to_path_buf());
     Some(format!(
         "Horizon's prepared game files are missing: no horizon-resources.json in {}\n\
          Horizon is started from its launcher: download it at {} (Download). It needs your \

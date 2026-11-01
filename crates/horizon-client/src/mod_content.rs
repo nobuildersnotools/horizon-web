@@ -2196,7 +2196,7 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
         }
     }
     // The overlay links to the base: a relative base would leave them dangling.
-    let base = &std::path::absolute(base)?;
+    let base = &horizon_os::env::absolute(base)?;
     let plan = Plan::new(base, mods)?;
     let overlay = Overlay::new(base, out)?;
     tables(base, &plan, &overlay)?;
@@ -2477,7 +2477,7 @@ fn stamp(base: &Path, mods: &[ContentMod]) -> Result<String> {
     };
     let mut parts = vec!["horizon mod content 1".to_owned()];
     parts.push(meta(&horizon_os::env::current_exe()?)?);
-    let base = std::path::absolute(base)?;
+    let base = horizon_os::env::absolute(base)?;
     parts.push(
         String::from_utf8_lossy(&fs::read(base.join("horizon-resources.json"))?).into_owned(),
     );

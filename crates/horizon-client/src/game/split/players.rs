@@ -37,7 +37,7 @@ impl Split<'_> {
 
     /// The splitscreen folder in the game folder: `profiles/<name>/` holds each profile.
     fn folder() -> Result<PathBuf> {
-        Ok(std::env::current_dir()?.join("splitscreen"))
+        Ok(horizon_os::env::current_dir()?.join("splitscreen"))
     }
 
     /// Add a player driven by `pad`: it picks a profile first, unless `name` is given (tests).

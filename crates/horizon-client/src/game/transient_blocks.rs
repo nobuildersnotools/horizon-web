@@ -4,10 +4,11 @@
 //! leave a gap between the entity going and the mesh catching up).
 use super::Game;
 use horizon_client::mesher::Vertex;
+use horizon_os::time::Instant;
 use horizon_world::registry::BlockStateId;
 use std::{
     collections::{HashMap, VecDeque},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// `TransientBlock.DEFAULT_TIME_TO_LIVE`, in seconds.

@@ -381,7 +381,7 @@ impl Game<'_> {
         // The window plays against the world's own biome table (its chunks
         // carry the packs' ids past the built-in list, `set_registries`
         // names them through it), as the server thread's copy does.
-        let world = std::env::current_dir()?.join("saves").join(folder);
+        let world = horizon_os::env::current_dir()?.join("saves").join(folder);
         let enabled_features = horizon_client::save::Level::read(&world)
             .map(|l| l.enabled_features)
             .unwrap_or_default();

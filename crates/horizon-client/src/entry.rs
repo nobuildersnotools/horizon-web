@@ -12,7 +12,7 @@ pub fn main() {
         .any(|a| a == "--help" || a == "-h" || a == "--launch-api");
     // --home before the log opens in it.
     if let Some(dir) = game_args.clone().skip_while(|a| *a != "--home").nth(1) {
-        logging::set_game_home(std::path::absolute(dir).unwrap_or_else(|_| dir.into()));
+        logging::set_game_home(horizon_os::env::absolute(dir).unwrap_or_else(|_| dir.into()));
     }
     // The dedicated server logs in its own folder (--game-dir's), as vanilla's does; the game in its home.
     let (home, side, thread) = if args.iter().any(|a| a == "--dedicated") {
@@ -20,7 +20,7 @@ pub fn main() {
             .clone()
             .skip_while(|a| *a != "--game-dir" && *a != "--gameDir")
             .nth(1)
-            .and_then(|dir| std::path::absolute(dir).ok())
+            .and_then(|dir| horizon_os::env::absolute(dir).ok())
             .unwrap_or_else(|| ".".into());
         (folder, "server", "Server thread")
     } else {
@@ -31,7 +31,7 @@ pub fn main() {
             .skip_while(|a| *a != "--player-dir")
             .nth(1)
         {
-            logging::set_player_dir(std::path::absolute(dir).unwrap_or_else(|_| dir.into()));
+            logging::set_player_dir(horizon_os::env::absolute(dir).unwrap_or_else(|_| dir.into()));
         }
         (logging::game_home(), "client", "Render thread")
     };

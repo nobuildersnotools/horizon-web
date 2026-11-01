@@ -33,7 +33,8 @@ pub struct NoResources {
 
 impl NoResources {
     pub fn new(looked_in: &std::path::Path) -> Self {
-        let shown = std::path::absolute(looked_in).unwrap_or_else(|_| looked_in.to_path_buf());
+        let shown =
+            horizon_os::env::absolute(looked_in).unwrap_or_else(|_| looked_in.to_path_buf());
         Self {
             looked_in: format!("No prepared game files in {}", shown.display()),
         }

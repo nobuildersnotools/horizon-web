@@ -6,11 +6,12 @@
 
 use super::chunks::ChunkEncoder;
 use crate::{biome::Biomes, fast_hash::FxHashMap, save::SaveDir};
+use horizon_os::time::Instant;
 use horizon_world::registry::BlockRegistry;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex, mpsc},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// Saved chunks being read at once, all players together.
