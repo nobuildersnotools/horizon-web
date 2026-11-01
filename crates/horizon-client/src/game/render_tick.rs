@@ -290,6 +290,13 @@ impl Game<'_> {
         let mut scope = self.scope_scale;
         let gui_overlays =
             hud_overlays::camera_overlays(size[0] as i32, size[1] as i32, &overlays, &mut scope);
+        let on_fire = self.camera_type.first_person()
+            && !self.spectator()
+            && self.player.as_ref().is_some_and(|p| p.fire_ticks > 0);
+        let mut fire_lower = 0.0;
+        if on_fire {
+            self.native_fire_overlay(&mut fire_lower);
+        }
         self.screen_fx.build(&ScreenInputs {
             sprites: &self.gui.atlas.sprites,
             flags: &self.gui.atlas.flags,
@@ -297,9 +304,8 @@ impl Game<'_> {
             partial,
             block_overlay,
             water,
-            on_fire: self.camera_type.first_person()
-                && !self.spectator()
-                && self.player.as_ref().is_some_and(|p| p.fire_ticks > 0),
+            on_fire,
+            fire_lower,
             gui_overlays: &gui_overlays,
         })
     }

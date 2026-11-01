@@ -1,0 +1,11 @@
+{
+  "hooks": [
+    {"name": "hurt_tilt", "target": "horizon_client::game::native_hooks::Game<'_>::native_hurt_tilt", "side": "client", "cancellable": false},
+    {"name": "fire_overlay", "target": "horizon_client::game::native_hooks::Game<'_>::native_fire_overlay", "side": "client", "cancellable": false},
+    {"name": "attack_reach", "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_reach", "side": "client", "cancellable": false},
+    {"name": "hand_pose", "target": "horizon_client::game::native_hooks::Game<'_>::native_hand_pose", "side": "client", "cancellable": false}
+  ],
+  "rust_summary": "client view hooks for PvP clients (`native_hurt_tilt`, `native_fire_overlay`,\n`native_attack_reach`, `native_hand_pose`), the player's state as client mods read it\n(`native_attack_strength`, `native_food`, `native_effect`, `native_equipped`, `native_max_damage`,\n`native_item_count`, `native_item_cooldown`) and two per-frame view settings\n(`native_set_fullbright`, `native_set_chat_background`).",
+  "doc_summary": "client view hooks and the player's state for PvP client mods: `native_hurt_tilt(strength)` lowers the hurt camera tilt, `native_fire_overlay(lower)` draws the first-person fire lower (in flame heights), `native_attack_reach(distance)` tells a hit's reach from the eye, and `native_hand_pose(hand, stack, using, pose)` moves or scales a first-person item in its own space (drawing only). Helpers read the attack cooldown (`native_attack_strength`), food and saturation (`native_food`), active effects by index (`native_effect`, no allocation), worn and held stacks (`native_equipped(\"head\"…\"offhand\")`, `native_max_damage`), carried counts (`native_item_count`) and item cooldowns (`native_item_cooldown`); `native_set_fullbright(on)` and `native_set_chat_background(opacity)` change the view for a frame without touching the options. Bundles need \"hooks\": @API:incari_client_hooks@.",
+  "comments": []
+}

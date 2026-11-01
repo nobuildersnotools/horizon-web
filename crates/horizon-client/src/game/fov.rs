@@ -154,7 +154,8 @@ impl Game<'_> {
                 self.avatar.interpolated_bob(partial),
             )),
         };
-        let tilt = self.settings.file.double("damageTiltStrength");
+        let mut tilt = self.settings.file.double("damageTiltStrength");
+        self.native_hurt_tilt(&mut tilt);
         glam::Mat4::from_cols_array(&bob_matrix(&state, tilt, self.settings.view_bobbing).m)
             * self.native_shake_matrix(partial)
     }

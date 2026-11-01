@@ -903,6 +903,20 @@ pub(crate) struct NativePlayer {
     pub(crate) dimension: &'static str,
 }
 
+/// An active effect as a client mod reads it (`native_effect`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeEffect {
+    /// Vanilla's without its namespace (`speed`, `poison`), a mod's
+    /// `<ns>:<path>`; `mob_effect/<id>` is its icon sprite.
+    pub(crate) id: &'static str,
+    /// 0 is level I.
+    pub(crate) amplifier: i32,
+    /// Ticks left; -1 for none.
+    pub(crate) duration: i32,
+    /// `MobEffect.isBeneficial`.
+    pub(crate) beneficial: bool,
+}
+
 /// The world's clock as a client mod reads it (`native_clock`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NativeClock {
@@ -1352,6 +1366,41 @@ impl Game<'_> {
         canceled: &mut bool,
     ) {
         let _ = (hand, stack, partial, swing, equip, canceled);
+    }
+    /// The damage tilt in this frame (`GameRenderer.bobHurt`'s
+    /// `damageTiltStrength`, 0 to 1, the Damage Tilt option): lower it to
+    /// tilt the camera less when the player is hurt; 0 is none. Client-side,
+    /// read while a world is shown. Bundles need "hooks":
+    /// @API:incari_client_hooks@.
+    pub(super) fn native_hurt_tilt(&self, strength: &mut f64) {
+        let _ = strength;
+    }
+    /// How far below its place the first-person fire overlay is drawn
+    /// (`ScreenEffectRenderer.renderFire`), in flame heights: 0 is vanilla's,
+    /// 0.25 shows only its top three quarters. Asked while the player burns.
+    /// Client-side.
+    pub(super) fn native_fire_overlay(&self, lower: &mut f32) {
+        let _ = lower;
+    }
+    /// The player hit a mob `distance` blocks from their eye, along the
+    /// crosshair (`Minecraft.startAttack`'s hit result): the reach of a hit.
+    /// Client-side, before the attack is made.
+    pub(super) fn native_attack_reach(&mut self, distance: f64) {
+        let _ = distance;
+    }
+    /// The first-person pose of `hand`'s item `stack` (`using` it, as a
+    /// shield held up), after `ItemInHandRenderer` placed it: multiply
+    /// `pose` on the right to move or scale the item in its own space
+    /// (`pose * Mat4::from_scale(..)` draws it smaller). It moves only the
+    /// drawn item: reach, hits and blocking are unchanged. Client-side.
+    pub(super) fn native_hand_pose(
+        &self,
+        hand: horizon_client::first_person::Hand,
+        stack: &ItemStack,
+        using: bool,
+        pose: &mut glam::Mat4,
+    ) {
+        let _ = (hand, stack, using, pose);
     }
 
     /// The values native mods hand their shader packs in this frame,
@@ -3394,6 +3443,84 @@ impl Game<'_> {
     /// Attack and use clicks in the last second.
     pub(super) fn native_clicks(&mut self) -> (u32, u32) {
         self.mouse_reading().0
+    }
+    /// The attack cooldown, 0 just after a swing to 1 charged
+    /// (`Player.getAttackStrengthScale(0.5)`), for a mod's own indicator.
+    /// API @API:incari_client_hooks@.
+    pub(super) fn native_attack_strength(&self) -> f32 {
+        self.attack_strength_scale()
+    }
+    /// The player's food level (0 to 20) and saturation, in a world.
+    pub(super) fn native_food(&self) -> Option<(i32, f32)> {
+        let food = &self.player.as_ref()?.health.food;
+        Some((food.food, food.saturation))
+    }
+    /// The player's active effect `index`, in the order the game keeps
+    /// them; None past the last. By index, so a HUD reads them without
+    /// allocating.
+    pub(super) fn native_effect(&self, index: usize) -> Option<NativeEffect> {
+        let e = self.potions.effects.list.get(index)?;
+        let def = horizon_client_core::potions::effect(e.id);
+        Some(NativeEffect {
+            id: e.id,
+            amplifier: e.amplifier,
+            duration: e.duration,
+            beneficial: def
+                .is_some_and(|d| d.category == horizon_client_core::potions::Category::Beneficial),
+        })
+    }
+    /// The stack the player wears or holds in `slot`: `head`, `chest`,
+    /// `legs`, `feet`, `mainhand` or `offhand`.
+    pub(super) fn native_equipped(&self, slot: &str) -> Option<&ItemStack> {
+        match slot {
+            "head" => self.armor[0].as_ref(),
+            "chest" => self.armor[1].as_ref(),
+            "legs" => self.armor[2].as_ref(),
+            "feet" => self.armor[3].as_ref(),
+            "mainhand" => self.stack_in(self.selected),
+            "offhand" => self.offhand.as_ref(),
+            _ => None,
+        }
+    }
+    /// The most wear item `item` takes (`DataComponents.MAX_DAMAGE`), 0 for
+    /// one that doesn't wear or an unknown item.
+    pub(super) fn native_max_damage(&self, item: &str) -> u32 {
+        self.items().get(item).map_or(0, |i| i.max_damage)
+    }
+    /// How many of item `item` the player carries: the inventory, the off
+    /// hand and the armour slots.
+    pub(super) fn native_item_count(&self, item: &str) -> u32 {
+        self.inventory
+            .iter()
+            .chain(self.armor.iter())
+            .chain(std::iter::once(&self.offhand))
+            .flatten()
+            .filter(|s| &*s.item == item)
+            .map(|s| s.count)
+            .sum()
+    }
+    /// How much of `stack`'s cooldown is left, 0 to 1 (`ItemCooldowns`):
+    /// a shield an axe disabled, an ender pearl just thrown.
+    pub(super) fn native_item_cooldown(&self, stack: &ItemStack) -> f32 {
+        let info = self.items().get(&stack.item);
+        let group =
+            horizon_client::cooldowns::group(stack, info.and_then(|i| i.use_cooldown.as_ref()));
+        self.cooldowns.percent(&group, self.clock.fraction() as f32)
+    }
+    /// Lights the world fully, as Horizon's Fullbright extra does, while
+    /// `on`; off leaves it to that extra. Not kept: a mod sets it each frame.
+    pub(super) fn native_set_fullbright(&mut self, on: bool) {
+        let on = on || self.settings.extras.fullbright;
+        if let Some(r) = self.renderer.as_mut() {
+            r.fullbright = on;
+        }
+    }
+    /// The chat's backdrop opacity (0 to 1) while `opacity` is some; none
+    /// gives it back to Text Background Opacity. Not kept: options.txt is
+    /// untouched, and a mod sets it each frame.
+    pub(super) fn native_set_chat_background(&mut self, opacity: Option<f64>) {
+        let own = f64::from(self.settings.text_background_opacity);
+        self.ui.chat.options.background_opacity = opacity.map_or(own, |o| o.clamp(0.0, 1.0));
     }
     /// A vanilla mapping (`key.forward`, `key.jump`, `key.attack`…): whether
     /// it is held, and its key's label as Controls shows it.

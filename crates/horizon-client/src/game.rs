@@ -10918,6 +10918,7 @@ impl Game<'_> {
         if !self.before_block(distance) {
             return false;
         }
+        self.native_attack_reach(distance);
         self.attack_mob(index);
         // Minecraft.startAttack swings after the attack.
         self.swing_arm();
@@ -13222,8 +13223,9 @@ impl Game<'_> {
                 }
                 _ => ItemPose::Swing,
             };
-            let m = to_world
+            let mut m = to_world
                 * horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
+            self.native_hand_pose(hand, &stack, using, &mut m);
             // Seeded by the player id plus the context ordinal.
             let (context, seed) = if left {
                 (
