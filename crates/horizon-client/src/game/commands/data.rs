@@ -28,6 +28,36 @@ fn set_key(tag: &mut Tag, key: &str, value: Tag) {
         c.insert(JavaString::from(key), value);
     }
 }
+/// `EntityType.loadEntityRecursive` snaps every entity of the stack,
+/// passengers included, to the position (`/summon`, `native_summon`).
+pub(in crate::game) fn place_summoned(tag: &mut Tag, pos: [f64; 3]) {
+    let p = pos.map(|v| Tag::Double(v.to_bits()));
+    set_key(tag, "Pos", Tag::List(p.to_vec()));
+    // Entity.load: an absent Fire reads as 0 (until the entity moves).
+    if tag.get("Fire").is_none() {
+        set_key(tag, "Fire", Tag::Short(0));
+    }
+    if tag.get("Rotation").is_none() {
+        set_key(
+            tag,
+            "Rotation",
+            Tag::List(vec![
+                Tag::Float(0.0f32.to_bits()),
+                Tag::Float(0.0f32.to_bits()),
+            ]),
+        );
+    }
+    if let Tag::Compound(c) = tag
+        && let Some(Tag::List(riders)) = c.get_mut(&"Passengers".into())
+    {
+        for r in riders {
+            if matches!(r, Tag::Compound(_)) {
+                place_summoned(r, pos);
+            }
+        }
+    }
+}
+
 impl Game<'_> {
     // ---- entity data ---------------------------------------------------
 
@@ -304,11 +334,9 @@ impl Game<'_> {
                     .block_entities
                     .get(&key)
                     .ok_or_else(|| err("commands.data.block.invalid", &[]))?;
-                // BlockEntity.saveWithFullMetadata: no chunk-only keepPacked.
-                let mut tag = save::encode_block_entity(key, e, &name);
-                if let Tag::Compound(c) = &mut tag {
-                    c.remove(&"keepPacked".into());
-                }
+                // BlockEntity.saveWithFullMetadata: no chunk-only keepPacked,
+                // and the lock the model does not hold.
+                let mut tag = save::block_entity_data(key, e, &name, self.world.block_lock(key));
                 self.restore_loot_table(key, &mut tag);
                 Ok(tag)
             }
@@ -323,6 +351,7 @@ impl Game<'_> {
                 if let Some((_, mut new)) = save::decode_block_entity(&tag) {
                     self.take_loot_table(key, &tag, &mut new);
                     self.world.block_entities.insert(key, new);
+                    self.world.set_block_lock(key, &tag);
                     self.update_spawner_display(key);
                     // BlockDataAccessor.setData: setChanged and sendBlockUpdated(3),
                     // even when the block state itself stays the same.
@@ -720,6 +749,8 @@ impl Game<'_> {
         // take the ids counted as this stack's.
         let mut waiting = std::mem::take(&mut self.world.loaded_entities);
         let before = self.next_entity;
+        let mut tag = tag;
+        crate::game::persist::mark_fresh(&mut tag);
         self.world.loaded_entities.push((key, vec![tag]));
         self.spawn_loaded_entities();
         waiting.append(&mut self.world.loaded_entities);
@@ -761,39 +792,15 @@ impl Game<'_> {
             return Err(err("argument.nbt.expected.compound", &[]));
         }
         set_key(&mut tag, "id", Tag::String(kind.into()));
-        // EntityType.loadEntityRecursive snaps every entity of the stack,
-        // passengers included, to the position.
-        fn place(tag: &mut Tag, pos: [f64; 3]) {
-            let p = pos.map(|v| Tag::Double(v.to_bits()));
-            set_key(tag, "Pos", Tag::List(p.to_vec()));
-            // Entity.load: an absent Fire reads as 0 (until the entity moves).
-            if tag.get("Fire").is_none() {
-                set_key(tag, "Fire", Tag::Short(0));
-            }
-            if tag.get("Rotation").is_none() {
-                set_key(
-                    tag,
-                    "Rotation",
-                    Tag::List(vec![
-                        Tag::Float(0.0f32.to_bits()),
-                        Tag::Float(0.0f32.to_bits()),
-                    ]),
-                );
-            }
-            if let Tag::Compound(c) = tag
-                && let Some(Tag::List(riders)) = c.get_mut(&"Passengers".into())
-            {
-                for r in riders {
-                    if matches!(r, Tag::Compound(_)) {
-                        place(r, pos);
-                    }
-                }
-            }
-        }
-        place(&mut tag, pos);
+        place_summoned(&mut tag, pos);
         let from = self.mobs.len();
+        let canceled = self.persist.joins_canceled;
         let target = self.spawn_entity_from_nbt(tag);
         self.native_mobs_joined(from, false);
+        // A mod kept the entity out: tryAddFreshEntityWithPassengers is false.
+        if target.is_none() && self.persist.joins_canceled != canceled {
+            return Err(err("commands.summon.failed.uuid", &[]));
+        }
         Ok(target)
     }
 }
