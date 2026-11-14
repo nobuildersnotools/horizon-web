@@ -209,6 +209,7 @@ impl Game<'_> {
                         r.tab_players.clear();
                         r.listed.clear();
                         r.signatures = Default::default();
+                        r.new_listener_chat();
                         r.custom_completions.clear();
                     }
                     self.ui.registries.custom_completions.clear();

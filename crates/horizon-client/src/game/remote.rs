@@ -515,6 +515,8 @@ enum Received {
 /// player's chat key must be signed by. Asked for once per connection to a server, off the game
 /// thread.
 pub(super) enum ServicesKeys {
+    /// Being fetched; the browser never asks (it has no HTTP client).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Pending,
     Ready(Vec<RsaPublicKey>),
     /// `canValidateProfileKeys()` is false: none could be had.
@@ -1138,8 +1140,15 @@ impl Game<'_> {
         let chat_tree = self.chat_tree_for(None);
         // Minecraft.services() has the keys wherever the game is played, single player's own
         // server included: its guests' chat keys are checked against them.
+        // The browser has no HTTP client to ask with: it plays as vanilla does when the request
+        // fails, without the keys, and says nothing each join.
+        #[cfg(target_arch = "wasm32")]
+        let services_keys = Arc::new(std::sync::Mutex::new(ServicesKeys::Missing));
+        #[cfg(not(target_arch = "wasm32"))]
         let services_keys = Arc::new(std::sync::Mutex::new(ServicesKeys::Pending));
+        #[cfg(not(target_arch = "wasm32"))]
         let slot = services_keys.clone();
+        #[cfg(not(target_arch = "wasm32"))]
         let _ = horizon_os::thread::Builder::new()
             .name("Services keys".into())
             .spawn(move || {
@@ -11245,6 +11254,15 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
 }
 
 impl Remote {
+    /// The chat state of the next ClientPacketListener after a reconfiguration: its own
+    /// `nextChatIndex` from 0, as the server's new listener counts (a proxy moving the player
+    /// to another backend restarts it), and its new PlayerInfo entries' chat sessions and
+    /// validators.
+    pub(super) fn new_listener_chat(&mut self) {
+        self.next_chat_index = 0;
+        self.chat_sessions.clear();
+        self.chat_validators.clear();
+    }
     /// The players listed in the tab list, by UUID, with their names.
     pub(super) fn tab_names(&self) -> HashMap<u128, String> {
         self.players
