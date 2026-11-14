@@ -36,9 +36,7 @@
 use super::Game;
 use horizon_client::{gamepad, items::ItemStack};
 use horizon_os::time::{Duration, Instant};
-use std::{
-    sync::Arc,
-};
+use std::sync::Arc;
 
 /// How long a request waits for the server's answer before the craft ends.
 const ANSWER_WAIT: Duration = Duration::from_secs(2);

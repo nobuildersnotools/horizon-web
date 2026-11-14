@@ -459,7 +459,7 @@ impl TimelineUi {
         // Base lane well
         let lane_rect = [start_x, y, track_w, bar_h];
         style::fill(batch, atlas, lane_rect, 0xFF14_171F);
-        style::ring(batch, atlas, lane_rect, style::ROW_RULE);
+        style::ring(batch, atlas, lane_rect, style::row_rule());
 
         let total_dur = self.duration_ms.max(1) as f32;
 

@@ -516,7 +516,7 @@ fn shader_source(
                 + section(TERRAIN, "struct Globals {", "// Sky (SkyRenderer)")),
             PREFIX
         ),
-        super::native_post::line_helpers(api)
+        super::native_post::line_helpers(api, false)
     )
 }
 
@@ -719,7 +719,7 @@ impl NativeShadow {
                 "horizon_shadow_fs_displaced",
             )
         });
-        if let Some(e) = pollster::block_on(scope.pop()) {
+        if let Some(e) = horizon_os::block_on(scope.pop()).flatten() {
             return Err(format!("shadow pass: {e}"));
         }
         Ok(Self {

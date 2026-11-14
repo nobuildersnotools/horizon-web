@@ -173,6 +173,19 @@ impl Builder {
         self.stack_size = Some(size);
         self
     }
+    /// `std::thread::Builder::spawn_scoped`: the page's scopes run in sequence
+    /// ([`crate::thread::scope`]), so `f` runs now.
+    pub fn spawn_scoped<'scope, 'env, F, T>(
+        self,
+        scope: &'scope crate::thread::Scope<'scope, 'env>,
+        f: F,
+    ) -> io::Result<crate::thread::ScopedJoinHandle<'scope, T>>
+    where
+        F: FnOnce() -> T + Send + 'scope,
+        T: Send + 'scope,
+    {
+        Ok(scope.spawn(f))
+    }
     pub fn spawn<F, T>(self, f: F) -> io::Result<JoinHandle<T>>
     where
         F: FnOnce() -> T + Send + 'static,

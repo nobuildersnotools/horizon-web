@@ -209,42 +209,35 @@ impl Game<'_> {
             self.native_player_bucket_entity(player, &name, id as i32, "minecraft:sulfur_cube");
         }
     }
+    /// The resident sulfur cubes whose adopted body (`adopted_body`, the
+    /// body `collectEquipmentChanges` last took) explodes, with its fuse:
+    /// their cached `explosionData`, which `primeWhenOnPoweredPosition` may
+    /// use this tick although the body has changed since.
+    pub(super) fn sulfur_cubes_adopted_explosive(&self) -> Vec<(u32, i32)> {
+        self.mobs
+            .iter()
+            .filter(|m| m.species() == Species::SulfurCube)
+            .filter_map(|m| Some((m.id, sulfur_cube::adopted_explosion(m)?.0)))
+            .collect()
+    }
     /// `SulfurCube.primeWhenOnPoweredPosition`: an explosive cube standing in
     /// or next to redstone power lights its fuse (`getBestOwnOrNeighbourSignal`;
     /// no block has an own signal, so the neighbour signal is all there is).
-    /// The resident sulfur cubes whose adopted body (`adopted_body`, the
-    /// body `collectEquipmentChanges` last took, so its `explosionData`)
-    /// explodes: those `primeWhenOnPoweredPosition` may prime this tick.
-    pub(super) fn sulfur_cubes_adopted_explosive(&self) -> Vec<u32> {
-        self.mobs
-            .iter()
-            .filter(|m| {
-                m.species() == Species::SulfurCube
-                    && m.extra
-                        .adopted_body
-                        .as_deref()
-                        .and_then(sulfur_cube::archetype_of)
-                        .is_some_and(|a| a.explosion.is_some())
-            })
-            .map(|m| m.id)
-            .collect()
-    }
-    /// `primeWhenOnPoweredPosition` for the cubes `primable` names (an
-    /// adopted explosive body when the tick started).
-    pub(super) fn sulfur_cube_power_priming(&mut self, primable: &[u32]) {
+    /// Only the cubes `primable` names (an adopted explosive body when the
+    /// tick started) can: `canExplode` and `primeTime` both read the cached
+    /// `explosionData`, so the fuse is that body's, not the live one's.
+    pub(super) fn sulfur_cube_power_priming(&mut self, primable: &[(u32, i32)]) {
         if !self.ui.rules.bool("tnt_explodes") {
             return;
         }
         for i in 0..self.mobs.len() {
             let m = &self.mobs[i];
-            if m.species() != Species::SulfurCube
-                || !primable.contains(&m.id)
-                || !sulfur_cube::archetype(m).is_some_and(|a| a.explosion.is_some())
-                || !m.alive()
-                || sulfur_cube::primed(m)
-            {
+            if m.species() != Species::SulfurCube || !m.alive() || sulfur_cube::primed(m) {
                 continue;
             }
+            let Some(&(_, fuse)) = primable.iter().find(|(id, _)| *id == m.id) else {
+                continue;
+            };
             let at = BlockPos::new(
                 m.position.x.floor() as i32,
                 m.position.y.floor() as i32,
@@ -253,7 +246,7 @@ impl Game<'_> {
             let signal =
                 self.with_level(|b, level, ticks| b.best_neighbor_signal(level, ticks, at));
             if signal != 0 {
-                sulfur_cube::prime(&mut self.mobs[i], false);
+                sulfur_cube::prime_with_fuse(&mut self.mobs[i], false, fuse);
             }
         }
     }
@@ -344,6 +337,32 @@ impl Game<'_> {
             }
         }
     }
+    /// `AbstractCubeMob.remove`'s `convertTo(getType(), SPLIT_ON_DEATH, TRIGGERED)` for its `i`th
+    /// child: a new cube of the parent's type (`EntityType.create`, no spawn yaw drawn) half the
+    /// parent's width apart (`(i % 2 - 0.5) * width / 2`, in floats), half a block up, carrying
+    /// `ConversionType.convertCommon`'s effects and flags.
+    pub(super) fn spawn_split_cube(&mut self, from: &Mob, i: i32) -> Option<u32> {
+        let offset = from.width() / 2.0;
+        let xd = ((i % 2) as f32 - 0.5) * offset;
+        let zd = ((i / 2) as f32 - 0.5) * offset;
+        let at = [
+            from.position.x + f64::from(xd),
+            from.position.y + 0.5,
+            from.position.z + f64::from(zd),
+        ];
+        let id = self.spawn_mob_internal(
+            &from.kind.id,
+            at,
+            from.persistent,
+            false,
+            false,
+            false,
+            super::creatures::SpawnYaw::Fixed(0.0),
+        )?;
+        let c = self.mobs.iter_mut().find(|c| c.id == id)?;
+        horizon_client::mobs::conversion::common(from, c, false);
+        Some(id)
+    }
     /// `AbstractCubeMob.remove`: a dead adult splits into two babies (none
     /// when it was primed).
     pub(super) fn split_sulfur_cube(&mut self, m: &Mob) {
@@ -351,25 +370,32 @@ impl Game<'_> {
         if size <= 1 {
             return;
         }
-        let offset = f64::from(m.width()) / 2.0;
+        // Each child's yaw comes from the dying cube's own random (its copy: the body goes now).
+        let mut own = m.random.clone();
         for i in 0..sulfur_cube::split_count(m) {
-            let xd = (f64::from(i % 2) - 0.5) * offset;
-            let zd = (f64::from(i / 2) - 0.5) * offset;
-            let at = [m.position.x + xd, m.position.y + 0.5, m.position.z + zd];
-            let yaw = self.world.random.next_float() * 360.0;
-            if let Some(id) = self.spawn_mob_raw(&m.kind.id, at, m.persistent)
+            if let Some(id) = self.spawn_split_cube(m, i)
                 && let Some(c) = self.mobs.iter_mut().find(|c| c.id == id)
             {
                 c.extra.age = -24000;
                 sulfur_cube::set_size(c, size / 2, true);
-                c.yaw = yaw;
-                c.body_yaw = yaw;
-                c.head_yaw = yaw;
+                snap_split_yaw(c, own.next_float() * 360.0);
             }
         }
     }
 }
 
+/// `setUpSplitCube`'s `snapTo(.., yaw, 0)` for a split cube's child: it faces `yaw` from its
+/// first frame.
+pub(super) fn snap_split_yaw(c: &mut Mob, yaw: f32) {
+    c.yaw = yaw;
+    c.previous_yaw = yaw;
+    // A client takes the body's from it (`LivingEntity.recreateFromPacket`); a cube has no head
+    // of its own to turn.
+    c.body_yaw = yaw;
+    c.previous_body_yaw = yaw;
+    c.head_yaw = yaw;
+    c.previous_head_yaw = yaw;
+}
 #[cfg(test)]
 mod tests {
     use super::*;

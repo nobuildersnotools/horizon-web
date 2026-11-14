@@ -249,7 +249,8 @@ void main() {
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut encoder = device.create_command_encoder(&Default::default());
     let _invalid_group = post.bind(&device, &queue, &mut encoder, &mut pass, [15, 1]);
-    let error = pollster::block_on(validation.pop())
+    let error = horizon_os::block_on(validation.pop())
+        .flatten()
         .expect("production material binding must reject a filtering sampler");
     assert!(
         error.to_string().to_ascii_lowercase().contains("filtering"),

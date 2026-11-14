@@ -8,15 +8,15 @@
 //! headers, a `prefix`/`name` split, pax extended headers (`x`, `g`) and GNU long names
 //! (`L`). Nothing is ever extracted outside the new world folder: an entry that does not
 //! sit under `world/`, or climbs above it, is skipped as vanilla's `startsWith` check does.
-use horizon_os::fs::PathExt;
 use super::client::WorldDownload;
+use horizon_os::fs::PathExt;
+use horizon_os::fs::{self, File};
+use horizon_os::time::Duration;
 use horizon_world::nbt::Tag;
 use sha1::{Digest, Sha1};
-use horizon_os::fs::{self, File};
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use horizon_os::time::Duration;
 
 /// `RealmsDownloadLatestWorldScreen.checkDownloadSize`'s `5368709120L`.
 pub const SIZE_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
@@ -199,7 +199,7 @@ fn fetch_to(link: &str, target: &Path, progress: &DownloadProgress) -> Result<()
         .unwrap_or(0);
     progress.begin_file(total);
     let mut reader = response.into_reader();
-    let mut file = File::create(target).map_err(DownloadError::failed)?;
+    let mut file = create_private(target).map_err(DownloadError::failed)?;
     let mut buffer = [0u8; 64 * 1024];
     loop {
         if progress.is_cancelled() {
@@ -243,10 +243,33 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn temp_path(prefix: &str, suffix: &str) -> PathBuf {
+/// A new file only this account can read, never one that was already there (another local user
+/// could plant one, or a link, at a name in the shared temp folder).
+pub(super) fn create_private(path: &Path) -> io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)
+}
+
+/// A name in the temp folder no one else can work out: the process, a counter and a per-process
+/// random key.
+pub(super) fn unguessable(prefix: &str, suffix: &str) -> PathBuf {
+    use std::hash::{BuildHasher, Hasher};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    horizon_os::env::temp_dir().join(format!("{prefix}-{}-{n}{suffix}", horizon_os::process::id()))
+    let mut key = std::collections::hash_map::RandomState::new().build_hasher();
+    key.write_u64(n);
+    horizon_os::env::temp_dir().join(format!(
+        "{prefix}-{}-{n}-{:016x}{suffix}",
+        horizon_os::process::id(),
+        key.finish()
+    ))
+}
+
+fn temp_path(prefix: &str, suffix: &str) -> PathBuf {
+    unguessable(prefix, suffix)
 }
 
 /// `FileDownload.untarGzipArchive`: the archive into `saves/<free name>`, then
@@ -257,19 +280,29 @@ pub fn extract_archive(
     saves: &Path,
     progress: &DownloadProgress,
 ) -> Result<PathBuf, DownloadError> {
+    if progress.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
+    extract_archive_inner(archive, name, saves, || {})
+}
+
+fn extract_archive_inner(
+    archive: &Path,
+    name: &str,
+    saves: &Path,
+    on_extracting: impl FnOnce(),
+) -> Result<PathBuf, DownloadError> {
     fs::create_dir_all(saves).map_err(DownloadError::failed)?;
     let folder = world_folder(saves, name);
     let world = saves.join(&folder);
     fs::create_dir_all(&world).map_err(DownloadError::failed)?;
     let file = File::open(archive).map_err(DownloadError::failed)?;
     let mut tar = TarReader::new(flate2::read::GzDecoder::new(BufReader::new(file)));
-    loop {
-        if progress.is_cancelled() {
-            return Err(DownloadError::Cancelled);
+    let mut on_extracting = Some(on_extracting);
+    while let Some(header) = tar.next().map_err(DownloadError::failed)? {
+        if let Some(on_extracting) = on_extracting.take() {
+            on_extracting();
         }
-        let Some(header) = tar.next().map_err(DownloadError::failed)? else {
-            break;
-        };
         let Some(relative) = under_world(&header.name) else {
             log::warn!(
                 "Realms: an archive entry outside world/ was skipped: {}",
@@ -627,7 +660,8 @@ fn pax_path_of(data: &[u8]) -> Option<String> {
     while !rest.is_empty() {
         let space = rest.iter().position(|byte| *byte == b' ')?;
         let length: usize = std::str::from_utf8(&rest[..space]).ok()?.parse().ok()?;
-        if length == 0 || length > rest.len() {
+        // The length counts its own digits, the space and the record: it must reach past them.
+        if length <= space + 1 || length > rest.len() {
             return None;
         }
         let record = &rest[space + 1..length];
@@ -645,12 +679,42 @@ fn pax_path_of(data: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pax_record_shorter_than_its_own_prefix_is_not_a_panic() {
+        assert_eq!(pax_path_of(b"1 x"), None);
+        assert_eq!(pax_path_of(b"2 x"), None);
+        assert_eq!(
+            pax_path_of(b"16 path=a/b.txt\n").as_deref(),
+            Some("a/b.txt")
+        );
+    }
+
+    #[test]
+    fn a_download_never_writes_into_a_file_that_was_there() {
+        let path = unguessable("horizon-realms-test", ".bin");
+        assert_ne!(path, unguessable("horizon-realms-test", ".bin"));
+        horizon_os::fs::write(&path, b"planted").unwrap();
+        assert!(create_private(&path).is_err());
+        horizon_os::fs::remove_file(&path).unwrap();
+        drop(create_private(&path).unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = horizon_os::fs::metadata(&path)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "{mode:o}");
+        }
+        horizon_os::fs::remove_file(&path).unwrap();
+    }
     use crate::realms::upload::{UploadProgress, pack_world};
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = horizon_os::env::temp_dir().join(format!(
             "realms-download-test-{}-{name}",
-            std::process::id()
+            horizon_os::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -749,6 +813,38 @@ mod tests {
         header[154] = 0;
         header[155] = b' ';
         gz.write_all(&header).unwrap();
+    }
+
+    #[test]
+    fn cancelling_after_extraction_starts_does_not_interrupt_the_archive() {
+        let dir = scratch("cancel-extracting");
+        let archive = dir.join("world.tar.gz");
+        one_entry_archive(&archive, "world/marker", b"complete");
+        let saves = dir.join("saves");
+        let progress = DownloadProgress::default();
+        let world = extract_archive_inner(&archive, "Friends", &saves, || progress.cancel())
+            .expect("cancellation after extraction starts must not interrupt it");
+
+        assert!(progress.is_cancelled());
+        assert_eq!(fs::read(world.join("marker")).unwrap(), b"complete");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_download_cancelled_before_extraction_does_not_create_a_world() {
+        let dir = scratch("cancel-before-extracting");
+        let archive = dir.join("world.tar.gz");
+        one_entry_archive(&archive, "world/marker", b"complete");
+        let saves = dir.join("saves");
+        let progress = DownloadProgress::default();
+        progress.cancel();
+
+        assert_eq!(
+            extract_archive(&archive, "Friends", &saves, &progress),
+            Err(DownloadError::Cancelled)
+        );
+        assert!(!saves.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn write_test_data(gz: &mut impl Write, data: &[u8]) {

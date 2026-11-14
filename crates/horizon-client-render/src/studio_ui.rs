@@ -311,7 +311,7 @@ impl StudioUi {
                     style::focus(batch, atlas, rect);
                 } else {
                     style::well(batch, atlas, rect);
-                    style::ring(batch, atlas, rect, style::ROW_RULE);
+                    style::ring(batch, atlas, rect, style::row_rule());
                 }
 
                 // Card Line 1: Recording Title (bold white)

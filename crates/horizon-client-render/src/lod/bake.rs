@@ -8,13 +8,13 @@
 //! game build, the world's data packs, the block and biome registries and the
 //! level's shape guards the folder; when any of them changes it is emptied.
 //! Reduced far detail's approximate samples are kept apart from full ones.
-use horizon_os::fs::PathExt;
 use super::{Column, Span, Surface};
 use crate::{chunk::LevelShape, fast_hash::FxHashMap};
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
+use horizon_os::fs;
+use horizon_os::fs::PathExt;
 use horizon_world::registry::BlockStateId;
 use sha2::{Digest, Sha256};
-use horizon_os::fs;
 use std::{
     io::{BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},

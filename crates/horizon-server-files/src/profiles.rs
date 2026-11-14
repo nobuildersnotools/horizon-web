@@ -80,6 +80,11 @@ pub fn find_by_id(discovery: &str, id: u128) -> Option<NameAndId> {
 /// line vanilla logs, after which it has no keys.
 pub fn fetch_profile_key_keys(discovery: &str) -> Result<Vec<RsaPublicKey>, &'static str> {
     const FAILED: &str = "Failed to request Minecraft Services public key";
+    // The page has no HTTP client for ureq (it reads std's clock, which panics there): the
+    // browser plays as vanilla does when the request fails, without the keys.
+    if cfg!(target_arch = "wasm32") {
+        return Err(FAILED);
+    }
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(15))
         .user_agent(&format!("Horizon/{}", horizon_core::release::VERSION))

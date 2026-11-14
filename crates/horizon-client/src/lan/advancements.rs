@@ -504,6 +504,69 @@ impl ServerAdvancements {
                 w.f32(r["experience"].as_f64().unwrap_or(0.0) as f32);
                 (cooking_category(kind, r), vec![&r["ingredient"]])
             }
+            // DyeRecipe.display: the target, then the dyes kept to those with
+            // the DYE component, shown as the demo of dyeing that target.
+            // Its placement is the target and the dye.
+            "minecraft:crafting_dye" => {
+                let Some(dye_component) = sync.id("minecraft:data_component_type", "minecraft:dye")
+                else {
+                    return Vec::new();
+                };
+                let (target, dye) = (&r["target"], &r["dye"]);
+                w.varint(
+                    sync.id("minecraft:recipe_display", "minecraft:crafting_shapeless")
+                        .unwrap_or(0),
+                );
+                w.varint(2);
+                w.varint(slot("minecraft:tag"));
+                holder_set(&mut w, target, &item);
+                w.varint(slot("minecraft:only_with_component"));
+                w.varint(slot("minecraft:tag"));
+                holder_set(&mut w, dye, &item);
+                w.varint(dye_component);
+                w.varint(slot("minecraft:dyed"));
+                w.varint(slot("minecraft:only_with_component"));
+                w.varint(slot("minecraft:tag"));
+                holder_set(&mut w, dye, &item);
+                w.varint(dye_component);
+                w.varint(slot("minecraft:tag"));
+                holder_set(&mut w, target, &item);
+                station(&mut w, "minecraft:crafting_table");
+                (
+                    crafting_category(r["category"].as_str().unwrap_or("")).name(),
+                    vec![target, dye],
+                )
+            }
+            // ImbueRecipe.display: four materials, the source kept to any
+            // potion, four materials again, and the potion-wrapped result.
+            // Its placement names the source in the middle cell.
+            "minecraft:crafting_imbue" => {
+                let (source, material) = (&r["source"], &r["material"]);
+                w.varint(
+                    sync.id("minecraft:recipe_display", "minecraft:crafting_shaped")
+                        .unwrap_or(0),
+                );
+                w.varint(3);
+                w.varint(3);
+                w.varint(9);
+                for cell in 0..9 {
+                    if cell == 4 {
+                        w.varint(slot("minecraft:with_any_potion"));
+                    }
+                    w.varint(slot("minecraft:tag"));
+                    holder_set(&mut w, if cell == 4 { source } else { material }, &item);
+                }
+                w.varint(slot("minecraft:with_any_potion"));
+                result(&mut w);
+                station(&mut w, "minecraft:crafting_table");
+                (
+                    crafting_category(r["category"].as_str().unwrap_or("")).name(),
+                    vec![
+                        material, material, material, material, source, material, material,
+                        material, material,
+                    ],
+                )
+            }
             _ => return Vec::new(),
         };
         self.entry_tail(&mut w, r, sync, category, &placed, flags);
@@ -756,7 +819,15 @@ mod tests {
         "minecraft:redstone_ore": {"protocol_id": 2},
         "minecraft:redstone": {"protocol_id": 3},
         "minecraft:furnace": {"protocol_id": 4},
-        "minecraft:blast_furnace": {"protocol_id": 5}
+        "minecraft:blast_furnace": {"protocol_id": 5},
+        "minecraft:leather_helmet": {"protocol_id": 6},
+        "minecraft:crafting_table": {"protocol_id": 7},
+        "minecraft:arrow": {"protocol_id": 8},
+        "minecraft:lingering_potion": {"protocol_id": 9},
+        "minecraft:tipped_arrow": {"protocol_id": 10}
+      }},
+      "minecraft:data_component_type": {"entries": {
+        "minecraft:dye": {"protocol_id": 46}
       }},
       "minecraft:slot_display": {"entries": {
         "minecraft:empty": {"protocol_id": 0},
@@ -797,15 +868,17 @@ mod tests {
 
     /// A resources dir with those registries and the given recipe files.
     fn resources(name: &str, recipes: &[(&str, &str)]) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("horizon-recipe-book-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-recipe-book-{name}-{}",
+            horizon_os::process::id()
+        ));
+        let _ = horizon_os::fs::remove_dir_all(&root);
         let dir = root.join("data/minecraft/recipe");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(root.join("registries.json"), REGISTRIES).unwrap();
-        std::fs::write(root.join("items.json"), "{}").unwrap();
+        horizon_os::fs::create_dir_all(&dir).unwrap();
+        horizon_os::fs::write(root.join("registries.json"), REGISTRIES).unwrap();
+        horizon_os::fs::write(root.join("items.json"), "{}").unwrap();
         for (id, json) in recipes {
-            std::fs::write(dir.join(format!("{id}.json")), json).unwrap();
+            horizon_os::fs::write(dir.join(format!("{id}.json")), json).unwrap();
         }
         root
     }
@@ -853,7 +926,7 @@ mod tests {
             }
             other => panic!("not an item list: {other:?}"),
         }
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     /// A recipe whose ingredient kind no loader knows stays out of the book:
@@ -918,7 +991,7 @@ mod tests {
             !add.entries.is_empty(),
             "{name}: the crafted recipe reaches the book after rejoining"
         );
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -936,13 +1009,13 @@ mod tests {
         let recipe = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:raw_copper"],"result":{"id":"minecraft:copper_ingot","count":2}}"#;
         let root = resources("content_namespace", &[("control", recipe)]);
         let dir = root.join("data/recipe_pilot/recipe");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("press.json"), recipe).unwrap();
+        horizon_os::fs::create_dir_all(&dir).unwrap();
+        horizon_os::fs::write(dir.join("press.json"), recipe).unwrap();
         for marker in [
             horizon_items::content_namespaces::MARKER,
             horizon_items::content_namespaces::MOD_IDS_MARKER,
         ] {
-            std::fs::write(root.join(marker), br#"["recipe_pilot"]"#).unwrap();
+            horizon_os::fs::write(root.join(marker), br#"["recipe_pilot"]"#).unwrap();
         }
         let (sync, e) = entry(&root, "recipe_pilot:press");
         assert_eq!(
@@ -959,7 +1032,106 @@ mod tests {
             other => panic!("not a shapeless content recipe: {other:?}"),
         }
         let _ = entry(&root, "minecraft:control");
-        std::fs::remove_dir_all(&root).unwrap();
+        horizon_os::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// DyeRecipe.display: the target, then the dyes kept to what carries the
+    /// DYE component, the demo of dyeing the target with one, a crafting
+    /// table; its placement is the target and the dye.
+    #[test]
+    fn a_dye_recipe_reaches_the_book_as_its_dyed_demo() {
+        let root = resources(
+            "dye_recipe",
+            &[(
+                "leather_helmet_dyed",
+                r##"{"type":"minecraft:crafting_dye","dye":"#minecraft:dyes",
+                "group":"dyed_armor","result":{"id":"minecraft:leather_helmet"},
+                "target":"minecraft:leather_helmet"}"##,
+            )],
+        );
+        let (sync, e) = entry(&root, "minecraft:leather_helmet_dyed");
+        let item = |n: &str| sync.id("minecraft:item", n).unwrap();
+        let leather = item("minecraft:leather_helmet");
+        let dye = SlotDisplay::OnlyWithComponent(
+            Box::new(SlotDisplay::Tag(HolderSet::Tag("minecraft:dyes".into()))),
+            sync.id("minecraft:data_component_type", "minecraft:dye")
+                .unwrap(),
+        );
+        assert_eq!(
+            e.display,
+            RecipeDisplay::Shapeless {
+                ingredients: vec![
+                    SlotDisplay::Tag(HolderSet::Items(vec![leather])),
+                    dye.clone(),
+                ],
+                result: SlotDisplay::Dyed {
+                    dye: Box::new(dye),
+                    target: Box::new(SlotDisplay::Tag(HolderSet::Items(vec![leather]))),
+                },
+                station: SlotDisplay::Item(item("minecraft:crafting_table")),
+            }
+        );
+        assert_eq!(
+            e.requirements,
+            Some(vec![
+                HolderSet::Items(vec![leather]),
+                HolderSet::Tag("minecraft:dyes".into()),
+            ])
+        );
+        let _ = horizon_os::fs::remove_dir_all(&root);
+    }
+
+    /// ImbueRecipe.display: a 3×3 of four materials, the source kept to any
+    /// potion, four materials again; the result is potion-wrapped, and the
+    /// source sits in the middle of the placement.
+    #[test]
+    fn an_imbue_recipe_reaches_the_book_with_any_potion() {
+        let root = resources(
+            "imbue_recipe",
+            &[(
+                "tipped_arrow",
+                r#"{"type":"minecraft:crafting_imbue","material":"minecraft:arrow",
+                "result":{"count":8,"id":"minecraft:tipped_arrow"},
+                "source":"minecraft:lingering_potion"}"#,
+            )],
+        );
+        let (sync, e) = entry(&root, "minecraft:tipped_arrow");
+        let item = |n: &str| sync.id("minecraft:item", n).unwrap();
+        let material = SlotDisplay::Tag(HolderSet::Items(vec![item("minecraft:arrow")]));
+        let source = SlotDisplay::Tag(HolderSet::Items(vec![item("minecraft:lingering_potion")]));
+        let mut cells = vec![material.clone(); 4];
+        cells.push(SlotDisplay::WithAnyPotion(Box::new(source.clone())));
+        cells.extend(std::iter::repeat_n(material, 4));
+        assert_eq!(
+            e.display,
+            RecipeDisplay::Shaped {
+                width: 3,
+                height: 3,
+                ingredients: cells,
+                result: SlotDisplay::WithAnyPotion(Box::new(SlotDisplay::ItemStack(Stack::new(
+                    item("minecraft:tipped_arrow"),
+                    8,
+                )))),
+                station: SlotDisplay::Item(item("minecraft:crafting_table")),
+            }
+        );
+        let arrow = HolderSet::Items(vec![item("minecraft:arrow")]);
+        let potion = HolderSet::Items(vec![item("minecraft:lingering_potion")]);
+        assert_eq!(
+            e.requirements,
+            Some(vec![
+                arrow.clone(),
+                arrow.clone(),
+                arrow.clone(),
+                arrow.clone(),
+                potion,
+                arrow.clone(),
+                arrow.clone(),
+                arrow.clone(),
+                arrow,
+            ])
+        );
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -987,7 +1159,7 @@ mod tests {
                 .book_entries("minecraft:mymod_kind", &sync, NOTIFY_AND_HIGHLIGHT)
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     /// The property sets and the stonecutter read a NeoForge shape's items
@@ -1039,7 +1211,7 @@ mod tests {
         assert!(len >= 2, "an item list, not empty ({len}) nor a tag");
         assert_eq!(len - 1, 1, "the compound's one item");
         assert_eq!(r.varint().unwrap(), raw);
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     /// The stonecutter's recipes go out in registration order (path, then
@@ -1086,7 +1258,7 @@ mod tests {
                 vec![item("minecraft:raw_copper")]
             ]
         );
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     /// A world's own load over the data its packs gave (`SyncData::load_over`, which keeps
@@ -1113,7 +1285,7 @@ mod tests {
         assert_ne!(full.recipes, vanilla.recipes, "the pack's recipe is sent");
         assert_eq!(over.recipes, full.recipes);
         assert_eq!(over.advancements.recipes, full.advancements.recipes);
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     /// `RecipeManager.getRecipeFromDisplay`, which
@@ -1153,7 +1325,7 @@ mod tests {
             None,
             "past the last display"
         );
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1205,7 +1377,7 @@ mod tests {
         assert_eq!(station, SlotDisplay::Item(item("minecraft:furnace")));
         assert_eq!(duration, 200);
         assert_eq!(experience, 0.7);
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     /// A recipe filter's `replace_input` (#5910) reaches the book swapped:
@@ -1256,7 +1428,7 @@ mod tests {
             SlotDisplay::Tag(HolderSet::Items(vec![item("minecraft:redstone")])),
             "the display shows the swapped input too"
         );
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1298,7 +1470,7 @@ mod tests {
         assert_eq!(station, SlotDisplay::Item(item("minecraft:blast_furnace")));
         assert_eq!(duration, 200);
         assert_eq!(experience, 0.7);
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     /// Every recipe the game has, as a Horizon server sends it to a Horizon

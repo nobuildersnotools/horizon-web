@@ -1,6 +1,7 @@
 [workspace]
 exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys"]
 members = [
+    "crates/horizon-addresses",
     "crates/horizon-core",
     "crates/horizon-os",
     "crates/horizon-dualsense",
@@ -28,7 +29,18 @@ members = [
     "crates/horizon-theme",
     "crates/horizon-prepare",
     "crates/horizon-telemetry",
+    "crates/horizon-system",
+    "crates/horizon-platform",
+    "crates/horizon-hooks",
+    "crates/horizon-game",
+    "crates/horizon-official",
+    "crates/horizon-heartbeat",
+    "crates/horizon-discord",
+    "crates/horizon-official-servers",
     "crates/horizon-bench",
+    "crates/horizon-perf-format",
+    "crates/horizon-perf",
+    "crates/horizon-perf-share",
     "crates/horizon-friends",
     "crates/horizon-relay",
     "crates/horizon-mods",
@@ -88,6 +100,9 @@ debug = "line-tables-only"
 [profile.dev.package.horizon-mod-api-gen]
 opt-level = 3
 [profile.dev.package.syn]
+opt-level = 3
+# The perf-format tests gzip over 512 MiB; unoptimized deflate took most of their time.
+[profile.dev.package.miniz_oxide]
 opt-level = 3
 [profile.dev.package.proc-macro2]
 opt-level = 3

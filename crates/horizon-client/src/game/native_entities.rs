@@ -191,7 +191,8 @@ pub(super) fn target_id(t: Target) -> Option<u32> {
         | Target::Rocket(id)
         | Target::Trident(id)
         | Target::Spawner(id)
-        | Target::Cloud(id) => Some(id),
+        | Target::Cloud(id)
+        | Target::Knot(id) => Some(id),
         Target::Player | Target::Guest(_) => None,
     }
 }
@@ -208,7 +209,7 @@ impl Game<'_> {
     /// client's copy of the world, for a position outside
     /// `/summon`'s bounds, a chunk that isn't loaded, a kind Horizon can't
     /// load, or one a mod kept out (`native_entity_join_level`). API
-    /// 59. Since API @API:npc_any_level@, `dimension` may be any level the
+    /// 59. Since API 535, `dimension` may be any level the
     /// server has loaded, which is put in place for the summon (`execute in
     /// <dimension> run summon`); a level not loaded is refused.
     pub(super) fn native_summon(
@@ -263,6 +264,47 @@ impl Game<'_> {
                     || self.cushions.iter().any(|c| c.id == id)
             })
         })
+    }
+    /// `native_summon` with the root's UUID chosen by the mod (the `UUID` an
+    /// entity's data holds): its id, and the entity answers to `uuid`
+    /// afterwards. None where `native_summon` is, and when an entity of any
+    /// loaded level or a server's player holds `uuid`, or a UUID of a
+    /// passenger in `nbt` is held by an entity of the level
+    /// (`ServerLevel.tryAddFreshEntityWithPassengers`: `/summon` fails with
+    /// "duplicate UUIDs"); nothing is spawned then. API
+    /// 633.
+    pub(super) fn native_summon_with_uuid(
+        &mut self,
+        dimension: &str,
+        kind: &str,
+        pos: [f64; 3],
+        mut nbt: Compound,
+        uuid: u128,
+    ) -> Option<u32> {
+        if self.native_entity_by_uuid(uuid).is_some() {
+            return None;
+        }
+        let words = horizon_client::lan::playerdata::uuid_ints(uuid);
+        nbt.insert("UUID".into(), Tag::IntArray(words.to_vec()));
+        if (self.serving.is_some() || self.options.dedicated.is_some())
+            && dimension != self.dim.id()
+        {
+            return self
+                .npc_in_level(dimension, |g| {
+                    g.native_summon_with_uuid(dimension, kind, pos, nbt, uuid)
+                })
+                .flatten();
+        }
+        let mut probe = nbt.clone();
+        probe.insert("id".into(), Tag::String(kind.into()));
+        let taken = self
+            .summon_tree_uuids(&Tag::Compound(probe))
+            .into_iter()
+            .any(|u| self.target_with_uuid(u).is_some());
+        if taken {
+            return None;
+        }
+        self.native_summon(dimension, kind, pos, nbt)
     }
     /// Moves entity `id`, one Horizon keeps without simulating (a display, a
     /// marker, an interaction), to `pos` facing `yaw` and `pitch` in degrees;
@@ -337,7 +379,7 @@ impl Game<'_> {
     /// Removes entity `id`, one Horizon keeps without simulating, as `/kill`
     /// does (it drops nothing and isn't saved). False for no such entity or
     /// another dimension. Mobs go with `native_remove_mob`. API
-    /// 59. Since API @API:remove_projectiles@ it also takes projectiles
+    /// 59. Since API 543 it also takes projectiles
     /// (arrows, tridents, snowballs, eggs, pearls, fireballs, wind charges,
     /// llama spit, shulker bullets, firework rockets) as `/kill` does, and a
     /// server player's fishing bobber (`Entity.discard`; the player in place's,
@@ -371,7 +413,7 @@ impl Game<'_> {
     /// hooks (`native_living_incoming_damage` and its versions) hear it. Whether it was hurt:
     /// false for an invulnerable, dead or creative target, another dimension, an entity that
     /// isn't living, an attacker that isn't there, or an amount that isn't a finite number.
-    /// API @API:hurt_entity@.
+    /// API 524.
     pub(super) fn native_hurt_entity(
         &mut self,
         dimension: &str,
@@ -435,6 +477,7 @@ enum Apart {
     Cushion(usize),
     Painting(usize),
     Frame(usize),
+    Other(usize),
     Dragon,
 }
 
@@ -546,6 +589,9 @@ impl Game<'_> {
         for (i, f) in self.item_frames.iter().enumerate() {
             offer(Slot::Apart(Apart::Frame(i)), f.id);
         }
+        for (i, o) in self.others.iter().enumerate() {
+            offer(Slot::Apart(Apart::Other(i)), o.id);
+        }
         if let Some(d) = &self.dragon {
             offer(Slot::Apart(Apart::Dragon), d.id);
         }
@@ -583,6 +629,10 @@ impl Game<'_> {
                 };
                 (kind.into(), block(f.pos))
             }
+            Slot::Apart(Apart::Other(i)) => {
+                let o = &self.others[i];
+                (o.kind.clone().into(), o.position)
+            }
             Slot::Apart(Apart::Dragon) => (
                 "minecraft:ender_dragon".into(),
                 self.dragon.as_ref().map_or(Vec3::ZERO, |d| d.position),
@@ -597,6 +647,7 @@ impl Game<'_> {
             Slot::Apart(Apart::Cushion(i)) => drop(self.cushions.remove(i)),
             Slot::Apart(Apart::Painting(i)) => drop(self.paintings.remove(i)),
             Slot::Apart(Apart::Frame(i)) => drop(self.item_frames.remove(i)),
+            Slot::Apart(Apart::Other(i)) => drop(self.others.remove(i)),
             Slot::Apart(Apart::Dragon) => self.dragon = None,
         }
     }
@@ -657,6 +708,7 @@ impl Game<'_> {
         self.cushions.iter().for_each(|c| seen(c.id));
         self.paintings.iter().for_each(|p| seen(p.id));
         self.item_frames.iter().for_each(|f| seen(f.id));
+        self.others.iter().for_each(|o| seen(o.id));
         if let Some(d) = &self.dragon {
             seen(d.id);
         }
@@ -772,3 +824,7 @@ mod tests {
         assert!(!position_ok([0.5, f64::NAN, 0.5]));
     }
 }
+
+#[cfg(test)]
+#[path = "native_summon_tests.rs"]
+mod native_summon_tests;

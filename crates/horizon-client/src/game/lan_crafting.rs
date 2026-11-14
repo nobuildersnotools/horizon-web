@@ -179,8 +179,19 @@ impl Game<'_> {
         let brewed = std::mem::take(&mut menu.brewed);
         let crafted = std::mem::take(&mut menu.crafted);
         let item_crafted = std::mem::take(&mut menu.item_crafted);
+        let crafted_counts = std::mem::take(&mut menu.crafted_counts);
         menu.drops.clear();
         store_player(menu, &mut host.hub.guests[gi]);
+        // `ItemStack.onCraftedBy`'s `Stats.ITEM_CRAFTED` count, before the
+        // recipe the take used.
+        if !crafted_counts.is_empty() {
+            let conn = host.hub.guests[gi].conn;
+            self.as_guest(host, conn, |g| {
+                for (item, count) in crafted_counts {
+                    g.award_stat("crafted", &item, count);
+                }
+            });
+        }
         if !brewed.is_empty() {
             let conn = host.hub.guests[gi].conn;
             self.as_guest(host, conn, |g| {
@@ -202,6 +213,8 @@ impl Game<'_> {
             self.as_guest(host, conn, |g| {
                 let player = g.native_acting_id();
                 for (recipe, stack) in &item_crafted {
+                    // ItemStack.onCraftedBy awards Stats.ITEM_CRAFTED.
+                    g.award_stat("crafted", &stack.item, stack.count as i32);
                     g.native_item_crafted(player, recipe, stack);
                 }
             });
@@ -345,7 +358,7 @@ impl Game<'_> {
         let furnace = matches!(kind, Kind::Furnace(_));
         // CrafterBlockEntity.containerData: the disabled slots, then triggered.
         let crafter_data = match self.world.block_entities.get(&pos) {
-            Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.triggered)),
+            Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.is_triggered())),
             _ => None,
         };
         if host.hub.guests[gi].spectator() {
@@ -635,14 +648,17 @@ impl Game<'_> {
         let (Ok(container), Ok(id)) = (reader.varint(), reader.string(512)) else {
             return;
         };
-        if reader.remaining() != 0 {
-            return;
-        }
+        // A trailing 1 asks for as many sets as the items allow.
+        let all = match reader.remaining() {
+            0 => false,
+            1 => reader.u8() == Ok(1),
+            _ => return,
+        };
         let result = if container == 0 && (g.menu.is_some() || g.creative()) {
             Err(TransferError::Unavailable)
         } else {
             self.lan_apply_recipe(host, gi, container, |menu, env| {
-                menu.transfer_recipe(env, &id)
+                menu.transfer_recipe(env, &id, all)
             })
             .unwrap_or(Err(TransferError::Unavailable))
         };
@@ -1203,6 +1219,9 @@ impl Game<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod stonecutter_stat_tests;
 
 #[cfg(test)]
 mod machine_recipe_placement_tests {

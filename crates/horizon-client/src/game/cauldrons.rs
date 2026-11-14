@@ -1,6 +1,13 @@
 //! Using an item on a cauldron (`CauldronInteraction`): what the click does, and doing it.
 use super::*;
 
+/// `CauldronInteractions.isUnderWater`: the *fluid* above the cauldron is in
+/// `FluidTags.WATER`. A waterlogged slab or stair, kelp, seagrass and a bubble
+/// column are water there even though the block is not named `water`.
+pub(super) fn is_under_water(facts: &BlockFacts, above: BlockStateId) -> bool {
+    facts.get(above).fluid == Fluid::Water
+}
+
 impl Game<'_> {
     /// What the cauldron at `pos` answers to `held` on a client, which only
     /// asks (`CauldronInteractions` acts `if (!level.isClientSide())`). A
@@ -69,12 +76,20 @@ impl Game<'_> {
             return Ok(false);
         }
         let removes_dye = cauldron::removes_dye(self.items(), &held.item);
+        // `Stats.ITEM_USED.get(itemInHand.getItem())`: the item the hand held
+        // before the interaction swaps it.
+        let used_item = held.item.clone();
         let result = cauldron::interact(&state, under_water, removes_dye, &mut Hand(self));
         if result.outcome == Outcome::Pass {
             return Ok(false);
         }
         if let Some(stat) = result.stat {
             self.award_custom_stat(stat, 1);
+        }
+        // The bottle and bucket interactions award `ITEM_USED` right after
+        // their cauldron statistic.
+        if result.item_used {
+            self.award_stat("used", &used_item, 1);
         }
         if let Some(block) = result.block
             && let Ok(new) = registry.resolve(&block)
@@ -95,6 +110,11 @@ impl Game<'_> {
                 1.0,
                 1.0,
             );
+        }
+        // `fillBucket`/`emptyBucket` and the bottle's two interactions end with
+        // `level.gameEvent(null, GameEvent.FLUID_PICKUP or FLUID_PLACE, pos)`.
+        if let Some(event) = result.fluid_event {
+            self.post_block_game_event(event, pos, None, None);
         }
         Ok(true)
     }

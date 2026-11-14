@@ -319,7 +319,7 @@ impl Game<'_> {
     }
     /// `native_fluid_insert`: up to `amount` millibuckets of `fluid`
     /// (`minecraft:water`, `minecraft:lava`, or since API
-    /// @API:mod_fluids@ a mod's own, `create:chocolate`) into the block at
+    /// 425 a mod's own, `create:chocolate`) into the block at
     /// `pos`, through its side `face`, in the level in place: a mod block's
     /// tanks first those with the same fluid, then empty ones, by the sides
     /// and tanks its table gave and every fillable tank that accepts the
@@ -731,8 +731,15 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "prepared resources in HORIZON_TEST_RESOURCES; run alone to isolate the mod registry"]
+    #[ignore = "prepared resources in HORIZON_TEST_RESOURCES"]
     fn the_standard_helpers_route_to_native_owned_storage() {
+        crate::mod_api::in_own_process(
+            "game::machines::native_fluids::tests::the_standard_helpers_route_to_native_owned_storage",
+            the_standard_helpers_route_to_native_owned_storage_in_own_process,
+        );
+    }
+
+    fn the_standard_helpers_route_to_native_owned_storage_in_own_process() {
         use crate::game::{Audio, Options, Progress, Settings, World, load_resources};
         use crate::mod_api::{
             self, CustomBlockFluidsEvent, CustomFluidDrainEvent, CustomFluidFillEvent,

@@ -168,23 +168,42 @@ impl Category {
         }
     }
     /// The category of a `minecraft:recipe_book_category` name; none for the
-    /// ones this book has no tab for (stonecutter, smithing, campfire).
+    /// ones this book has no tab for (stonecutter, smithing, campfire). Accepts
+    /// both modern and legacy/shortened category names.
     pub fn from_name(name: &str) -> Option<Self> {
         let name = name.strip_prefix("minecraft:").unwrap_or(name);
-        [
-            Self::CraftingBuilding,
-            Self::CraftingRedstone,
-            Self::CraftingEquipment,
-            Self::CraftingMisc,
-            Self::FurnaceFood,
-            Self::FurnaceBlocks,
-            Self::FurnaceMisc,
-            Self::BlastBlocks,
-            Self::BlastMisc,
-            Self::SmokerFood,
-        ]
-        .into_iter()
-        .find(|c| c.name() == name)
+        match name {
+            "crafting_building_blocks" | "building_blocks" | "crafting_building" | "building" => {
+                Some(Self::CraftingBuilding)
+            }
+            "crafting_redstone" | "redstone" => Some(Self::CraftingRedstone),
+            "crafting_equipment" | "equipment" => Some(Self::CraftingEquipment),
+            "crafting_misc" | "misc" => Some(Self::CraftingMisc),
+            "furnace_food" | "food" => Some(Self::FurnaceFood),
+            "furnace_blocks" | "blocks" => Some(Self::FurnaceBlocks),
+            "furnace_misc" => Some(Self::FurnaceMisc),
+            "blast_furnace_blocks" => Some(Self::BlastBlocks),
+            "blast_furnace_misc" => Some(Self::BlastMisc),
+            "smoker_food" => Some(Self::SmokerFood),
+            _ => None,
+        }
+    }
+    /// The category of a pinned `minecraft:recipe_book_category` protocol id;
+    /// none for the ones this book has no tab for (stonecutter, smithing, campfire).
+    pub fn from_id(id: i32) -> Option<Self> {
+        match id {
+            0 => Some(Self::CraftingBuilding),
+            1 => Some(Self::CraftingRedstone),
+            2 => Some(Self::CraftingEquipment),
+            3 => Some(Self::CraftingMisc),
+            4 => Some(Self::FurnaceFood),
+            5 => Some(Self::FurnaceBlocks),
+            6 => Some(Self::FurnaceMisc),
+            7 => Some(Self::BlastBlocks),
+            8 => Some(Self::BlastMisc),
+            9 => Some(Self::SmokerFood),
+            _ => None,
+        }
     }
 }
 /// A tab button: the search tab or one category.
@@ -611,14 +630,16 @@ impl Book {
                 .iter()
                 .any(|r| tooltip(r).iter().any(|l| l.to_lowercase().contains(text)))
         };
-        let Some((namespace, path)) = query.split_once(':') else {
-            return in_lines(&query);
-        };
-        let (namespace, path) = (namespace.trim(), path.trim());
         let id = |r: &&ItemStack| {
             let (ns, p) = r.item.split_once(':').unwrap_or(("minecraft", &r.item));
             (ns.to_lowercase(), p.to_lowercase())
         };
+        let Some((namespace, path)) = query.split_once(':') else {
+            // `FullTextSearchTree.searchPlainText`: the plain-text tree only,
+            // not the ids (#15321).
+            return in_lines(&query);
+        };
+        let (namespace, path) = (namespace.trim(), path.trim());
         results.iter().any(|r| id(r).0.contains(namespace))
             && (results.iter().any(|r| id(r).1.contains(path)) || in_lines(path))
     }
@@ -1016,11 +1037,22 @@ pub(crate) fn crafting_station(kind: &str) -> &'static str {
     }
 }
 impl RecipeIndex {
-    /// Reads vanilla and content namespaces' recipes under `root`, with
-    /// the world's packs' recipe files over them (`overlay`).
-    pub fn load(root: &std::path::Path, overlay: &PackOverlay) -> Self {
+    /// The index of the recipe files `sources` (`Recipes::sources`' shape:
+    /// a vanilla recipe by bare name, another as `<ns>:<name>`), numbered as
+    /// a server holding exactly these recipes numbers its displays.
+    pub fn load_from_sources(sources: &[(String, serde_json::Value)]) -> Self {
+        Self::from_source_refs(
+            sources
+                .iter()
+                .map(|(id, value)| (crate::crafting::qualified(id), value)),
+        )
+    }
+
+    fn from_source_refs<'a>(
+        sources: impl IntoIterator<Item = (String, &'a serde_json::Value)>,
+    ) -> Self {
         let mut recipes = std::collections::BTreeMap::new();
-        let mut insert = |id: String, v: &serde_json::Value| {
+        for (id, v) in sources {
             let kind = v["type"].as_str().unwrap_or_default();
             let special = kind.starts_with("minecraft:crafting_special_")
                 || kind == "minecraft:crafting_decorated_pot"
@@ -1053,7 +1085,25 @@ impl RecipeIndex {
                     result: horizon_world::loot::recipe_result_id(&v["result"]).map(str::to_owned),
                 },
             );
-        };
+        }
+        // RecipeManager.unpackRecipeInfo numbers the displays in registration
+        // order (path, then namespace), not in the order of the ids' text.
+        let mut order: Vec<_> = recipes
+            .iter_mut()
+            .map(|(id, r)| (crate::crafting::registration_key(id), r))
+            .collect();
+        order.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let mut next = 0;
+        for (_, r) in order {
+            r.first_display = next;
+            next += r.displays as i32;
+        }
+        Self { recipes }
+    }
+
+    /// Reads vanilla and content namespaces' recipes under `root`, with
+    /// the world's packs' recipe files over them (`overlay`).
+    pub fn load(root: &std::path::Path, overlay: &PackOverlay) -> Self {
         let dir = root.join("data/minecraft/recipe");
         // NeoForge's load conditions: the book lists only what loaded; a
         // recipe gated on an absent mod isn't in the manager either.
@@ -1105,24 +1155,17 @@ impl RecipeIndex {
             }
         }
         let filters = horizon_items::recipe_filters::RecipeFilters::load(root, overlay);
-        for (id, mut v) in sources {
-            if conditions_hold(&v) && filters.apply(&id, &mut v) {
-                insert(id, &v);
-            }
-        }
-        // RecipeManager.unpackRecipeInfo numbers the displays in registration
-        // order (path, then namespace), not in the order of the ids' text.
-        let mut order: Vec<_> = recipes
-            .iter_mut()
-            .map(|(id, r)| (crate::crafting::registration_key(id), r))
+        let sources: Vec<_> = sources
+            .into_iter()
+            .filter_map(|(id, mut value)| {
+                (conditions_hold(&value) && filters.apply(&id, &mut value)).then_some((id, value))
+            })
             .collect();
-        order.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        let mut next = 0;
-        for (_, r) in order {
-            r.first_display = next;
-            next += r.displays as i32;
-        }
-        Self { recipes }
+        Self::from_source_refs(
+            sources
+                .iter()
+                .map(|(id, value)| (crate::crafting::qualified(id), value)),
+        )
     }
     pub fn contains(&self, id: &str) -> bool {
         self.recipes.contains_key(id)
@@ -1361,10 +1404,12 @@ mod tests {
 
     #[test]
     fn mod_category_mapping_validates_ids_icons_and_conflicts() {
-        let root =
-            std::env::temp_dir().join(format!("horizon-book-categories-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-book-categories-{}",
+            horizon_os::process::id()
+        ));
+        horizon_os::fs::create_dir_all(&root).unwrap();
+        horizon_os::fs::write(
             root.join("items.json"),
             r#"{"minecraft:stone":{},"mymod:crusher":{},"minecraft:air":{}}"#,
         )
@@ -1433,7 +1478,7 @@ mod tests {
         assert!(mod_categories(Vec::new(), &recipes, &items).is_empty());
         let vanilla = Recipes::from_sources(&root, &items, &PackOverlay::NONE, Vec::new()).unwrap();
         assert!(mod_categories(vec![crusher], &vanilla, &items).is_empty());
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     fn ing(items: &[&str]) -> Ingredient {
@@ -1493,41 +1538,41 @@ mod tests {
     }
     #[test]
     fn content_namespace_recipes_have_display_ids() {
-        let root = std::env::temp_dir().join(format!(
+        let root = horizon_os::env::temp_dir().join(format!(
             "horizon-mod-recipe-index-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            horizon_os::process::id(),
+            horizon_os::time::SystemTime::now()
+                .duration_since(horizon_os::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
         let vanilla = root.join("data/minecraft/recipe");
         let content = root.join("data/recipe_pilot/recipe");
-        std::fs::create_dir_all(&vanilla).unwrap();
-        std::fs::create_dir_all(&content).unwrap();
+        horizon_os::fs::create_dir_all(&vanilla).unwrap();
+        horizon_os::fs::create_dir_all(&content).unwrap();
         for marker in [
             horizon_items::content_namespaces::MARKER,
             horizon_items::content_namespaces::MOD_IDS_MARKER,
         ] {
-            std::fs::write(root.join(marker), br#"["recipe_pilot"]"#).unwrap();
+            horizon_os::fs::write(root.join(marker), br#"["recipe_pilot"]"#).unwrap();
         }
-        std::fs::write(
+        horizon_os::fs::write(
             vanilla.join("control.json"),
             br#"{"type":"minecraft:crafting_shapeless","result":{"id":"minecraft:stick"}}"#,
         )
         .unwrap();
-        std::fs::write(
+        horizon_os::fs::write(
             content.join("flint_to_echo_shard.json"),
             br#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:flint"],"result":{"id":"minecraft:echo_shard","count":2}}"#,
         )
         .unwrap();
-        std::fs::write(
+        horizon_os::fs::write(
             content.join("gated.json"),
             br#"{"type":"minecraft:crafting_shapeless","neoforge:conditions":[{"type":"neoforge:mod_loaded","modid":"absent"}],"result":{"id":"minecraft:diamond"}}"#,
         )
         .unwrap();
         let index = RecipeIndex::load(&root, &PackOverlay::NONE);
-        std::fs::remove_dir_all(&root).unwrap();
+        horizon_os::fs::remove_dir_all(&root).unwrap();
         let id = "recipe_pilot:flint_to_echo_shard";
         let display = index
             .first_display(id)
@@ -1649,12 +1694,14 @@ mod tests {
     }
     #[test]
     fn a_knowledge_book_unlocks_its_recipes_and_is_used_up() {
-        let root =
-            std::env::temp_dir().join(format!("horizon-knowledge-book-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-knowledge-book-{}",
+            horizon_os::process::id()
+        ));
         let dir = root.join("data/minecraft/recipe");
-        std::fs::create_dir_all(&dir).unwrap();
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         for name in ["stick", "crafting_table", "torch"] {
-            std::fs::write(
+            horizon_os::fs::write(
                 dir.join(format!("{name}.json")),
                 format!(
                     r#"{{"type":"minecraft:crafting_shaped","result":{{"id":"minecraft:{name}"}}}}"#
@@ -1663,7 +1710,7 @@ mod tests {
             .unwrap();
         }
         let index = RecipeIndex::load(&root, &PackOverlay::NONE);
-        std::fs::remove_dir_all(&root).unwrap();
+        horizon_os::fs::remove_dir_all(&root).unwrap();
         let book = |recipes: &[&str], count: u32| {
             let ids = recipes.iter().map(|id| Tag::String((*id).into())).collect();
             let mut stack = ItemStack::new("minecraft:knowledge_book", count);
@@ -1719,20 +1766,22 @@ mod tests {
     /// order: the file's path (with `.json`) first, then its namespace.
     #[test]
     fn display_ids_follow_registration_order() {
-        let root =
-            std::env::temp_dir().join(format!("horizon-display-order-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-display-order-{}",
+            horizon_os::process::id()
+        ));
         let dir = root.join("data/minecraft/recipe");
-        std::fs::create_dir_all(&dir).unwrap();
+        horizon_os::fs::create_dir_all(&dir).unwrap();
         let recipe = r#"{"type":"minecraft:crafting_shapeless","result":{"id":"minecraft:stick"}}"#;
         for name in ["z_pick", "prefix", "prefix-early"] {
-            std::fs::write(dir.join(format!("{name}.json")), recipe).unwrap();
+            horizon_os::fs::write(dir.join(format!("{name}.json")), recipe).unwrap();
         }
         let packs = [(
             "recipe/parity:a_pick".to_owned(),
             vec![recipe.as_bytes().to_vec()],
         )];
         let index = RecipeIndex::load(&root, &PackOverlay { files: &packs });
-        std::fs::remove_dir_all(&root).unwrap();
+        horizon_os::fs::remove_dir_all(&root).unwrap();
         let ids = [
             "parity:a_pick",
             "minecraft:prefix-early",
@@ -1746,17 +1795,68 @@ mod tests {
         assert_eq!(index.recipe_of_display(0), Some("parity:a_pick"));
     }
 
+    /// A client sent a server's recipes (`horizon:recipe_content`) numbers
+    /// them over the same set the server does: a world's data pack recipe
+    /// moves every display after it, here `copper_axe` and `fishing_rod`,
+    /// and the client's own files alone would number them one lower, so the
+    /// server's book entries landed on other recipes (Braid's Copper-Reel
+    /// Rod vanished from the book and from recipe viewers).
+    #[test]
+    fn synced_recipes_number_their_displays_as_the_server_does() {
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-synced-order-{}",
+            horizon_os::process::id()
+        ));
+        let dir = root.join("data/minecraft/recipe");
+        horizon_os::fs::create_dir_all(&dir).unwrap();
+        let recipe = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stick"],"result":{"id":"minecraft:stick"}}"#;
+        for name in ["acacia_boat", "copper_axe", "fishing_rod"] {
+            horizon_os::fs::write(dir.join(format!("{name}.json")), recipe).unwrap();
+        }
+        let pack: serde_json::Value = serde_json::from_str(recipe).unwrap();
+        let packs = [(
+            "recipe/braid:cauldron_from_copper".to_owned(),
+            vec![recipe.as_bytes().to_vec()],
+        )];
+        let server = RecipeIndex::load(&root, &PackOverlay { files: &packs });
+        let own = crate::crafting::Recipes::sources(&root, &PackOverlay::NONE).unwrap();
+        horizon_os::fs::remove_dir_all(&root).unwrap();
+        let client = RecipeIndex::load_from_sources(&own);
+        let mut synced = own;
+        synced.push(("braid:cauldron_from_copper".to_owned(), pack));
+        let synced = RecipeIndex::load_from_sources(&synced);
+        let ids = [
+            "minecraft:acacia_boat",
+            "braid:cauldron_from_copper",
+            "minecraft:copper_axe",
+            "minecraft:fishing_rod",
+        ];
+        assert_eq!(
+            ids.map(|id| server.first_display(id)),
+            [Some(0), Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(
+            ids.map(|id| synced.first_display(id)),
+            ids.map(|id| server.first_display(id))
+        );
+        // The client's own files alone: the pack's recipe is not there, and
+        // the server's 2 is the client's `fishing_rod`.
+        assert_eq!(client.first_display("minecraft:copper_axe"), Some(1));
+        assert_eq!(client.recipe_of_display(2), Some("minecraft:fishing_rod"));
+    }
+
     // ---- a server whose display ids are not this client's (#11705) ----
 
     use horizon_protocol::packets::recipes::RecipeBookAdd;
 
     /// The ids of the items the packet below names.
-    const ITEMS: [&str; 5] = [
+    const ITEMS: [&str; 6] = [
         "minecraft:tnt",
         "minecraft:piston",
         "minecraft:stick",
         "minecraft:diamond",
         "minecraft:gunpowder",
+        "minecraft:blaze_rod",
     ];
     fn item_name(id: i32) -> Option<String> {
         ITEMS
@@ -2184,5 +2284,47 @@ mod tests {
         };
         book.use_server_entries(&[stonecutter], &names(&tags));
         assert!(!book.server_requirements.contains_key(&10));
+    }
+    #[test]
+    fn custom_server_crafting_recipe_is_shown_and_searchable() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        // A custom 1x3 shaped recipe for blaze rod (KiwiMC #14608).
+        let mut custom = shaped_entry(99, 1, 3, &[3, 2, 4]);
+        custom.display = RecipeDisplay::Shaped {
+            width: 1,
+            height: 3,
+            ingredients: vec![
+                SlotDisplay::Item(3),
+                SlotDisplay::Item(2),
+                SlotDisplay::Item(4),
+            ],
+            result: SlotDisplay::Item(5),
+            station: SlotDisplay::Item(0),
+        };
+        custom.category = 3;
+        book.use_server_entries(&[custom], &names(&tags));
+        let mut client = ClientBook::default();
+        client.add(99);
+        let misc = client.collections(
+            &book,
+            BookType::Crafting,
+            Tab::Category(Category::CraftingMisc),
+        );
+        assert_eq!(misc.len(), 1);
+        assert_eq!(misc[0].entries.len(), 1);
+        let custom_index = misc[0].entries[0];
+        assert_eq!(
+            &*book.entries[custom_index].result.item,
+            "minecraft:blaze_rod"
+        );
+        // `FullTextSearchTree`: plain text searches the tooltip lines only
+        // (#15321); `namespace:path` also searches the result's id.
+        let lines = |_: &ItemStack| vec!["Custom Recipe".to_owned()];
+        assert!(book.collection_matches(&[custom_index], "custom", &lines));
+        assert!(!book.collection_matches(&[custom_index], "blaze", &lines));
+        assert!(!book.collection_matches(&[custom_index], "rod", &lines));
+        assert!(book.collection_matches(&[custom_index], "minecraft:blaze", &lines));
+        assert!(!book.collection_matches(&[custom_index], "iron", &lines));
     }
 }

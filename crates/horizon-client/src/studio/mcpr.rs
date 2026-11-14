@@ -6,8 +6,8 @@
 //!   `[timestamp_ms: u32 big-endian][packet_length: u32 big-endian][packet_data: VarInt(packet_id) + payload]`
 //! - Optional `recording.tmcpr.crc32`: CRC32 of the packet stream.
 
-use horizon_os::fs::{self, File, OpenOptions, PathExt};
 use super::spline::CameraTrack;
+use horizon_os::fs::{self, File, OpenOptions, PathExt};
 use horizon_protocol::buf::{Reader, write_varint};
 use serde::{Deserialize, Serialize};
 use std::{

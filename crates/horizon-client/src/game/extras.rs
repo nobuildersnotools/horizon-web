@@ -2,15 +2,22 @@
 //! (`native_minimap`: its tiles, image and HUD) and zoom (`native_zoom`) on the camera; clicks
 //! and frame times for mods (`native_clicks`, `native_frame_rate`).
 //! Each hook does nothing while its extra is off and no mod uses it.
+//!
+//! Each Horizon extra's game glue is a child module here, so it leaves the engine in one move
+//! (docs/layers.md, plan M5): `reconnect` (auto-reconnect), `pvp` (the PvP & HUD options),
+//! `mouse_tweaks` and `sorting` (the inventory extras).
+pub(in crate::game) mod mouse_tweaks;
+pub(in crate::game) mod pvp;
+mod reconnect;
+mod sorting;
+
 use super::{Dim, Game, Screen, native_hooks::NativeMinimap};
 use horizon_client::{
     extras::{Corner, Cps, FpsCounter, fov_target},
     extras_hud::{self, Corners},
     hud::{HudBatch, MINIMAP_SPRITE},
     minimap::{self, Layer, Minimap, View},
-    multiplayer,
-    reconnect::{Retry, Tracker},
-    title::Mode,
+    reconnect::Tracker,
 };
 use horizon_os::time::Duration;
 use winit::event::MouseButton;
@@ -61,6 +68,7 @@ impl Game<'_> {
         // For mods (`render.frame-stats`, `native_frame_rate`).
         let now = self.extras_now();
         self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
+        self.recipe_lookups_now();
         self.native_frame(elapsed);
         self.pvp_frame();
         self.recipes_received_now();
@@ -76,121 +84,6 @@ impl Game<'_> {
         let [l, r] = &mut self.extras.cps;
         let cps = (l.per_second(now) as u32, r.per_second(now) as u32);
         (cps, self.extras.mouse)
-    }
-    /// Auto-reconnect: a connection to `address` as `name` starts.
-    pub(super) fn extras_connecting(&mut self, address: &str, name: &str, lan: bool) {
-        self.extras.reconnect.connecting(address, name, lan);
-    }
-    /// The server this game connected to last.
-    pub(super) fn server_address(&self) -> Option<&str> {
-        self.extras.reconnect.address()
-    }
-    /// The server this game connected to last was found on the local network.
-    pub(super) fn server_is_lan(&self) -> bool {
-        self.extras.reconnect.lan()
-    }
-    /// Auto-reconnect: the server let the player in.
-    pub(super) fn extras_joined(&mut self) {
-        self.extras
-            .reconnect
-            .joined(horizon_os::time::Instant::now());
-    }
-    /// Auto-reconnect: the player left the server on purpose.
-    pub(super) fn extras_left(&mut self) {
-        self.extras.reconnect.reset();
-    }
-    /// Auto-reconnect's next attempt after a disconnect, when it is on.
-    pub(super) fn reconnect_after(
-        &mut self,
-        _reason: &str,
-        _key: Option<&str>,
-        _from_server: bool,
-    ) -> Option<Retry> {
-        // Incari's Disconnected screen has Reconnect and Auto Reconnect
-        // buttons, so the server is kept with the setting off, and any reason
-        // is retried, kicks too: the player turned it on there for that.
-        if !self.settings.extras.auto_reconnect {
-            return None;
-        }
-        let now = horizon_os::time::Instant::now();
-        self.extras.reconnect.ended_any(now)
-    }
-    /// The Disconnected screen's buttons and the attempt's countdown.
-    pub(super) fn offer_reconnect(&mut self, retry: Option<Retry>) {
-        let offered = self.extras.reconnect.address().is_some();
-        let auto = self.settings.extras.auto_reconnect;
-        if let Some(title) = self.title.as_mut()
-            && let Mode::Multiplayer(multiplayer::Screen::Disconnected {
-                retry: slot,
-                rejoin,
-                ..
-            }) = &mut title.mode
-        {
-            rejoin.offered = offered;
-            rejoin.auto = auto;
-            if let Some(retry) = retry {
-                log::info!(
-                    "Horizon: reconnecting to {} in {} s",
-                    horizon_client::net::shown_address(&retry.address),
-                    retry.seconds_left(horizon_os::time::Instant::now())
-                );
-                *slot = Some(retry);
-            }
-        }
-    }
-    /// Reconnect, and Auto Reconnect turned on or off, on the Disconnected
-    /// screen.
-    fn extras_rejoin_clicks(&mut self) {
-        let Some(asked) = self.title.as_mut().and_then(|t| match &mut t.mode {
-            Mode::Multiplayer(screen) => screen.take_asked(),
-            _ => None,
-        }) else {
-            return;
-        };
-        let now = horizon_os::time::Instant::now();
-        let retry = match asked {
-            multiplayer::Asked::Reconnect => self.extras.reconnect.attempt_at(now),
-            multiplayer::Asked::ToggleAuto => {
-                let on = !self.settings.extras.auto_reconnect;
-                self.settings.extras.auto_reconnect = on;
-                self.settings.save(&Self::options_path());
-                // Turned on here: a full countdown, attempts counted anew.
-                self.extras.reconnect.restart();
-                if on {
-                    self.extras.reconnect.ended_any(now)
-                } else {
-                    None
-                }
-            }
-        };
-        let auto = self.settings.extras.auto_reconnect;
-        if let Some(title) = self.title.as_mut()
-            && let Mode::Multiplayer(multiplayer::Screen::Disconnected {
-                retry: slot,
-                rejoin,
-                ..
-            }) = &mut title.mode
-        {
-            rejoin.auto = auto;
-            *slot = retry;
-        }
-    }
-    /// Auto-reconnect: connect again once the countdown is over. An
-    /// online-mode server gets the signed-in account again: `connect_server`
-    /// takes it from `auth::current()`, held in memory for the whole run
-    /// (the launcher's session file is gone after the first read).
-    pub(super) fn extras_retry(&mut self) -> horizon_client::Result<()> {
-        self.extras_rejoin_clicks();
-        if let Some(retry) = self.title.as_mut().and_then(|t| t.due_retry()) {
-            self.connect_server_with_options(
-                &retry.address,
-                &retry.name,
-                None,
-                retry.lan,
-                self.realm_session,
-            )?;
-        }
-        Ok(())
     }
     /// The minimap a mod shows (`native_minimap`): its corner, its side
     /// in GUI pixels and its view of the player.
@@ -239,7 +132,7 @@ impl Game<'_> {
         let (bx, bz) = (view.x.floor() as i32, view.z.floor() as i32);
         // Underground, under a roof or in the Nether: the floor around the player.
         let covered = self.world.light(bx, head, bz) >> 4 == 0;
-        let layer = if self.dim == Dim::Nether || covered {
+        let layer = if self.world.shape.has_ceiling || covered {
             Layer::Below(head)
         } else {
             Layer::Surface
@@ -328,6 +221,12 @@ impl Game<'_> {
         }
         self.draw_pvp_hud(batch, &mut corners);
         self.native_hud(batch, &mut corners);
+        // The layers crates registered (`horizon_hooks::hud`): none, no canvas.
+        let layers = horizon_hooks::hud::engine::all();
+        if !layers.is_empty() {
+            let shown = Corner::ALL.map(|corner| self.native_corner_shown(corner));
+            extras_hud::draw_layers(layers, batch, &self.gui.atlas, &mut corners, shown);
+        }
     }
     /// The height the status effect icons take at the top right
     /// (`Hud.extractEffects`: beneficial at y 1, harmful at y 26).

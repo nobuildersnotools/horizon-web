@@ -25,6 +25,12 @@ use std::{collections::HashMap, sync::Arc};
 use super::lan_actions::GuestPlay;
 
 #[cfg(test)]
+#[path = "fishing_air_tests.rs"]
+mod air_tests;
+#[cfg(test)]
+#[path = "fishing_block_hit_tests.rs"]
+mod block_hit_tests;
+#[cfg(test)]
 #[path = "fishing_medium_tests.rs"]
 mod medium_tests;
 
@@ -318,7 +324,7 @@ impl Game<'_> {
             self.hook = Some(hook);
             let item_start = self.dropped.len();
             let orb_start = self.orbs.len();
-            self.world.random = LegacyRandom::new(seed);
+            self.world.random.set_seed(seed);
             self.use_fishing_rod(&rod);
             let items: Vec<_> = self
                 .dropped
@@ -711,8 +717,10 @@ impl Game<'_> {
     }
     /// getOpenWaterTypeForBlock: 0 above water, 1 inside water, 2 invalid.
     fn open_water_type(&self, x: i32, y: i32, z: i32) -> u8 {
-        let f = self.res.facts().get(self.world.block(x, y, z));
-        if self.world.is_air(self.world.block(x, y, z)) || &*f.name == "minecraft:lily_pad" {
+        let state = self.world.block(x, y, z);
+        let f = self.res.facts().get(state);
+        // `!state.isAir()`: cave_air and void_air are air too.
+        if self.res.facts().is_air(state) || &*f.name == "minecraft:lily_pad" {
             return 0;
         }
         if f.fluid == Fluid::Water
@@ -1057,7 +1065,12 @@ impl Game<'_> {
                 } else if let Some(hit) = block_hit {
                     landed = block_hit_at
                         .map(|at| ([at.block.x, at.block.y, at.block.z], at.direction.normal()));
-                    // Projectile.onHit on a block: PROJECTILE_LAND.
+                    // Projectile.onHit on a block: onHitBlock first, whose super call
+                    // runs the block's onProjectileHit, then the rebound.
+                    if let Some((pos, face)) = landed {
+                        self.fishing_hook_block_hit(h.position, pos, hit, face);
+                    }
+                    // Then PROJECTILE_LAND.
                     self.projectile_event(
                         "minecraft:projectile_land",
                         Some(horizon_client::mobs::Who::Player),
@@ -1440,7 +1453,8 @@ impl Game<'_> {
 /// running to that player's hand.
 pub(super) struct RemoteHook {
     id: u32,
-    owner: u32,
+    pub(super) owner: u32,
+    pub(super) owner_fishing: bool,
     pub(super) position: Vec3,
     pub(super) previous: Vec3,
     velocity: Vec3,
@@ -1448,6 +1462,34 @@ pub(super) struct RemoteHook {
     on_ground: bool,
     lerp: HookLerp,
     pub(super) random: LegacyRandom,
+}
+
+fn push_remote_hook(hooks: &mut Vec<RemoteHook>, id: u32, owner: u32, at: Vec3, velocity: Vec3) {
+    for h in hooks.iter_mut().filter(|h| h.owner == owner) {
+        h.owner_fishing = false;
+    }
+    hooks.push(RemoteHook {
+        id,
+        owner,
+        owner_fishing: true,
+        position: at,
+        previous: at,
+        velocity,
+        state: State::Flying,
+        on_ground: false,
+        lerp: HookLerp::default(),
+        random: random_source::entity(),
+    });
+}
+
+fn remove_remote_hook_from(hooks: &mut Vec<RemoteHook>, id: u32) {
+    let owner = hooks.iter().find(|h| h.id == id).map(|h| h.owner);
+    hooks.retain(|h| h.id != id);
+    if let Some(owner) = owner {
+        for h in hooks.iter_mut().filter(|h| h.owner == owner) {
+            h.owner_fishing = false;
+        }
+    }
 }
 
 /// The `onGround` of a server's update (`handleMoveEntity`), except that a
@@ -1596,17 +1638,7 @@ impl Game<'_> {
             hook.velocity = velocity;
             self.hook = Some(hook);
         } else {
-            self.remote_hooks.push(RemoteHook {
-                id,
-                owner: owner as u32,
-                position: at,
-                previous: at,
-                velocity,
-                state: State::Flying,
-                on_ground: false,
-                lerp: HookLerp::default(),
-                random: random_source::entity(),
-            });
+            push_remote_hook(&mut self.remote_hooks, id, owner as u32, at, velocity);
         }
     }
 
@@ -1712,7 +1744,7 @@ impl Game<'_> {
     }
 
     /// The fishing medium a mod says the hook at `position` floats in
-    /// (`native_fishing_medium`), when it is in it. API @API:fishing_medium@.
+    /// (`native_fishing_medium`), when it is in it. API 578.
     fn hook_medium(
         &mut self,
         id: u32,
@@ -1912,7 +1944,7 @@ impl Game<'_> {
         if self.remote.is_some() && self.hook.as_ref().is_some_and(|h| h.id == id) {
             self.hook = None;
         }
-        self.remote_hooks.retain(|h| h.id != id);
+        remove_remote_hook_from(&mut self.remote_hooks, id);
     }
 
     pub(super) fn clear_remote_hooks(&mut self) {
@@ -2168,6 +2200,7 @@ mod tests {
     #[test]
     fn reeling_an_item_requests_an_immediate_motion_update() {
         let mut item = ItemEntity {
+            random: horizon_core::random::LegacyRandom::new(0),
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -2183,6 +2216,7 @@ mod tests {
             on_ground: true,
             vertical_collision: false,
             horizontal_collision: false,
+            fall_distance: 0.0,
             age: 0,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -2299,5 +2333,20 @@ mod tests {
             Vec3::new(10.0, 2.0, 0.0),
         );
         assert_eq!(pulled, Vec3::new(1.5, 0.2, 0.0));
+    }
+
+    #[test]
+    fn removing_one_of_two_remote_hooks_clears_owner_fishing() {
+        let mut hooks = Vec::new();
+        super::push_remote_hook(&mut hooks, 10, 7, Vec3::ZERO, Vec3::ZERO);
+        super::push_remote_hook(&mut hooks, 11, 7, Vec3::ZERO, Vec3::ZERO);
+        super::push_remote_hook(&mut hooks, 20, 12, Vec3::ZERO, Vec3::ZERO);
+        assert!(!hooks[0].owner_fishing);
+        assert!(hooks[1].owner_fishing);
+        assert!(hooks[2].owner_fishing);
+        super::remove_remote_hook_from(&mut hooks, 10);
+        assert_eq!(hooks.len(), 2);
+        assert!(!hooks.iter().any(|h| h.owner == 7 && h.owner_fishing));
+        assert!(hooks.iter().any(|h| h.owner == 12 && h.owner_fishing));
     }
 }

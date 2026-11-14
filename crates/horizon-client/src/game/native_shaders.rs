@@ -12,12 +12,30 @@ use std::{
 };
 
 use horizon_client::text::Text;
-use horizon_shader_api::{Api, Blend, Manifest, Pack, check};
+use horizon_shader_api::{Api, Manifest, Pack, Primaries, check};
 
 use super::Game;
 
 const LOOK_EVERY: Duration = Duration::from_millis(500);
 const RED: u32 = 0xFF5555;
+
+thread_local! {
+    // Loader outcomes survive renderer replacement; rejected files must not cause a rebuild loop.
+    static OUTCOMES: std::cell::RefCell<std::collections::HashMap<PathBuf, (Option<u64>, Option<Api>)>> =
+        std::cell::RefCell::default();
+}
+
+pub(super) fn outcome(path: &Path) -> Option<Option<Api>> {
+    OUTCOMES.with_borrow(|packs| packs.get(path).map(|(_, api)| *api))
+}
+
+pub(super) fn remember(path: &Path, stamp: Option<u64>, api: Option<Api>) {
+    OUTCOMES.with_borrow_mut(|packs| packs.insert(path.to_owned(), (stamp, api)));
+}
+
+pub(super) fn refused(path: &Path, stamp: Option<u64>) -> bool {
+    OUTCOMES.with_borrow(|packs| packs.get(path) == Some(&(stamp, None)))
+}
 
 #[derive(Default)]
 pub(super) struct NativeShaders {
@@ -84,7 +102,7 @@ impl Game<'_> {
         }
         state.looked = Some(now);
         let stamp = fingerprint(path);
-        if stamp == state.stamp {
+        if stamp == state.stamp || (linear_frame_switch() && refused(path, stamp)) {
             return;
         }
         let reload = state.stamp.is_some();
@@ -144,6 +162,7 @@ impl Game<'_> {
                 .map_err(|e| vec![e])?;
             Ok((pack.manifest, labels, translucent))
         });
+        remember(path, stamp, result.as_ref().ok().map(|(m, _, _)| m.api));
         // The resources were loaded without a native pack, so without the resource packs'
         // LabPBR maps its material stage reads: load them once, now that one runs.
         if result.as_ref().is_ok_and(|(m, _, _)| m.material.is_some())
@@ -179,14 +198,18 @@ impl Game<'_> {
     }
 }
 
-/// Why the game doesn't draw a pack the check may still pass: what it asks of shader API 0.2
-/// (docs/design/hdr-linear-light.md, steps 3 and 4) isn't served yet. 0.2 itself is drawn
-/// under `HORIZON_HDR_FRAME=float` (`switch`).
+/// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
+/// isn't served yet (#14584), and shader API 0.2 is drawn only under `HORIZON_HDR_FRAME=float`
+/// (`switch`).
 fn not_drawn(m: &Manifest, switch: bool) -> Option<String> {
-    if m.blend == Blend::Linear {
+    if m.primaries == Primaries::Bt2020 {
         return Some(
-            "[frame] blend = \"linear\" isn't served yet: leave it out, or set \"gamma\"".into(),
+            "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\""
+                .into(),
         );
+    }
+    if m.entity.is_some() {
+        return Some("the [entity] stage isn't drawn yet: leave it out".into());
     }
     (m.api != Api::V0_1 && !switch).then(|| {
         format!(
@@ -198,14 +221,14 @@ fn not_drawn(m: &Manifest, switch: bool) -> Option<String> {
 }
 
 /// `HORIZON_HDR_FRAME=float`: shader API 0.2 packs are drawn, on a float frame where the
-/// renderer is made with one picked, as HDR without a pack is (`PickedPack::hdr_float`).
+/// renderer is made with one picked and not refused, as HDR without a pack is (`PickedPack::hdr_float`).
 pub(super) fn linear_frame_switch() -> bool {
     std::env::var("HORIZON_HDR_FRAME").is_ok_and(|v| v == "float")
 }
 
 /// A hash of the names, sizes and modification times of the pack's files and of its saved
 /// option values (`None` when the pack is unreadable).
-fn fingerprint(path: &Path) -> Option<u64> {
+pub(super) fn fingerprint(path: &Path) -> Option<u64> {
     fn walk(path: &Path, hasher: &mut std::hash::DefaultHasher) -> Option<()> {
         let meta = horizon_os::fs::metadata(path).ok()?;
         path.hash(hasher);
@@ -241,6 +264,35 @@ mod tests {
     use super::not_drawn;
     use horizon_shader_api::Manifest;
 
+    #[test]
+    fn outcomes_and_refusals_survive_renderer_resets() {
+        use super::{Api, NativeShaders, fingerprint, outcome, refused, remember};
+        let root = horizon_os::env::temp_dir()
+            .join(format!("horizon-acceptance-{}", horizon_os::process::id()));
+        horizon_os::fs::create_dir_all(&root).unwrap();
+        let file = root.join("post.wgsl");
+        horizon_os::fs::write(&file, "first files").unwrap();
+        let stamp = fingerprint(&root);
+        assert_eq!(outcome(&root), None);
+        remember(&root, stamp, Some(Api::V0_1));
+        assert_eq!(outcome(&root), Some(Some(Api::V0_1)));
+        remember(&root, stamp, Some(Api::V0_2));
+        assert_eq!(outcome(&root), Some(Some(Api::V0_2)));
+        // Policy, SDK and GPU refusals all reach this same outcome before any resource reload.
+        remember(&root, stamp, None);
+        for _ in 0..3 {
+            let mut reset = NativeShaders::picking(&root.to_string_lossy());
+            reset.select(&root.to_string_lossy());
+            assert_eq!(outcome(&root), Some(None));
+            assert!(refused(&root, fingerprint(&root)));
+        }
+        horizon_os::fs::write(&file, "repaired files with a different size").unwrap();
+        assert!(!refused(&root, fingerprint(&root)));
+        remember(&root, fingerprint(&root), Some(Api::V0_2));
+        assert_eq!(outcome(&root), Some(Some(Api::V0_2)));
+        horizon_os::fs::remove_dir_all(root).unwrap();
+    }
+
     fn manifest(api: &str, extra: &str) -> Manifest {
         Manifest::parse(&format!(
             "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"{api}\"\n\
@@ -252,41 +304,43 @@ mod tests {
     #[test]
     fn stable_options_are_in_the_reload_signature_and_override_keeps_its_path() {
         use super::{NativeShaders, fingerprint};
-        let dir =
-            std::env::temp_dir().join(format!("horizon-native-identity-{}", std::process::id()));
+        let dir = horizon_os::env::temp_dir().join(format!(
+            "horizon-native-identity-{}",
+            horizon_os::process::id()
+        ));
         let pack = dir.join("native-test_mod");
-        std::fs::create_dir_all(&pack).unwrap();
-        std::fs::write(pack.join(horizon_shader_api::MANIFEST),
+        horizon_os::fs::create_dir_all(&pack).unwrap();
+        horizon_os::fs::write(pack.join(horizon_shader_api::MANIFEST),
             "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.1\"\n[[post]]\nfile = \"post.wgsl\"\n").unwrap();
-        std::fs::write(pack.join("post.wgsl"), "fixture").unwrap();
+        horizon_os::fs::write(pack.join("post.wgsl"), "fixture").unwrap();
         let mut state = NativeShaders::default();
         assert_eq!(state.resolve_path(&dir, "horizon:p", false), pack);
         let first = fingerprint(&pack).unwrap();
         let manifest_path = pack.join(horizon_shader_api::MANIFEST);
-        let manifest = std::fs::read_to_string(&manifest_path).unwrap();
-        std::fs::write(&manifest_path, "temporarily invalid").unwrap();
-        state.resolved_at = Some(std::time::Instant::now() - super::LOOK_EVERY);
+        let manifest = horizon_os::fs::read_to_string(&manifest_path).unwrap();
+        horizon_os::fs::write(&manifest_path, "temporarily invalid").unwrap();
+        state.resolved_at = Some(horizon_os::time::Instant::now() - super::LOOK_EVERY);
         assert_eq!(state.resolve_path(&dir, "horizon:p", false), pack);
         assert_ne!(fingerprint(&pack).unwrap(), first);
-        std::fs::write(&manifest_path, manifest).unwrap();
+        horizon_os::fs::write(&manifest_path, manifest).unwrap();
         let first = fingerprint(&pack).unwrap();
         let values = horizon_client::shader_pack_list::native_values_pack(&pack, "p");
         let path = horizon_client::shader_pack_list::values_path(&values);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "strength=2\n").unwrap();
+        horizon_os::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        horizon_os::fs::write(&path, "strength=2\n").unwrap();
         assert_ne!(fingerprint(&pack).unwrap(), first);
-        std::fs::rename(&pack, dir.join("renamed")).unwrap();
+        horizon_os::fs::rename(&pack, dir.join("renamed")).unwrap();
         state.resolved_at = None;
         assert_eq!(
             state.resolve_path(&dir, "horizon:p", false),
             dir.join("renamed")
         );
         let manifest_path = dir.join("renamed").join(horizon_shader_api::MANIFEST);
-        let text = std::fs::read_to_string(&manifest_path)
+        let text = horizon_os::fs::read_to_string(&manifest_path)
             .unwrap()
             .replace("id = \"p\"", "id = \"other\"");
-        std::fs::write(manifest_path, text).unwrap();
-        state.resolved_at = Some(std::time::Instant::now() - super::LOOK_EVERY);
+        horizon_os::fs::write(manifest_path, text).unwrap();
+        state.resolved_at = Some(horizon_os::time::Instant::now() - super::LOOK_EVERY);
         assert_eq!(
             state.resolve_path(&dir, "horizon:p", false),
             dir.join("horizon:p"),
@@ -298,21 +352,32 @@ mod tests {
             pack,
             "an explicit missing filesystem override must not switch to another installed pack"
         );
-        std::fs::remove_dir_all(dir).unwrap();
+        horizon_os::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn shader_api_0_2_is_drawn_only_under_the_switch() {
         for switch in [false, true] {
             assert_eq!(not_drawn(&manifest("0.1", ""), switch), None);
-            let why = not_drawn(&manifest("0.2", "[frame]\nblend = \"linear\"\n"), switch);
-            assert!(why.unwrap().contains("blend = \"linear\" isn't served yet"));
+            let wide = "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n";
+            let why = not_drawn(&manifest("0.2", wide), switch).unwrap();
+            assert!(
+                why.contains("primaries = \"bt2020\" isn't served yet"),
+                "{why}"
+            );
+            let why = not_drawn(&manifest("0.2", "[entity]\nfile = \"e.wgsl\"\n"), switch);
+            assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
+            let named = manifest("0.2", "[frame]\nprimaries = \"bt709\"\n");
+            assert_eq!(not_drawn(&named, true), None);
         }
-        let why = not_drawn(&manifest("0.2", ""), false).unwrap();
-        assert!(
-            why.contains("drawn only under HORIZON_HDR_FRAME=float"),
-            "{why}"
-        );
-        assert_eq!(not_drawn(&manifest("0.2", ""), true), None);
+        // Either blend: `"linear"` is drawn as `"gamma"` is.
+        for frame in ["", "[frame]\nblend = \"linear\"\n"] {
+            let why = not_drawn(&manifest("0.2", frame), false).unwrap();
+            assert!(
+                why.contains("drawn only under HORIZON_HDR_FRAME=float"),
+                "{why}"
+            );
+            assert_eq!(not_drawn(&manifest("0.2", frame), true), None, "{frame}");
+        }
     }
 }

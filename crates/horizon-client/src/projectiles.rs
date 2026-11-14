@@ -11,6 +11,17 @@ use horizon_core::{
     random::RandomSource,
 };
 
+/// `AbstractArrow.startFalling`'s per-axis random velocity damping.
+pub fn start_falling_velocity(
+    velocity: Vec3,
+    random: &mut horizon_core::random::LegacyRandom,
+) -> Vec3 {
+    let x = f64::from(random.next_float() * 0.2);
+    let y = f64::from(random.next_float() * 0.2);
+    let z = f64::from(random.next_float() * 0.2);
+    Vec3::new(velocity.x * x, velocity.y * y, velocity.z * z)
+}
+
 /// a content mod's thrown item projectile, a copy of `Snowball` that deals
 /// `damage` and flies as its `item`.
 #[derive(Debug, PartialEq)]
@@ -235,19 +246,54 @@ pub struct Projectile {
     /// `Entity.needsSync`: a server tells its clients about the change this
     /// tick instead of at the next update interval.
     pub needs_sync: bool,
+    /// `WindCharge.noDeflectTicks`: a player's wind charge turns for nothing
+    /// (`deflect` refuses) until it has ticked 5 times. Not saved, so a
+    /// loaded one starts again at 5.
+    pub no_deflect_ticks: u8,
+    /// The bubble column tops this tick's `onAboveBubbleColumn` pushes came
+    /// from, for their particles (`sendBubbleColumnParticles`); the caller
+    /// drains them.
+    pub bubble_surfaces: Vec<[i32; 3]>,
     /// `Entity.wasTouchingWater`: what the last tick's
     /// `updateFluidInteraction` found around the box after the move, read by
     /// the next tick's inertia (false until the first tick has moved it).
     pub touching_water: bool,
     /// `Entity.noGravity` (`NoGravity` in its save): `getGravity` is 0.
     pub no_gravity: bool,
+    /// `Entity.onGround` (`OnGround` in its save). A projectile moves by
+    /// `setPos`, never `Entity.move`, so it keeps what it was loaded with.
+    pub on_ground: bool,
     /// `Entity.remainingFireTicks`: a thrown projectile that flew through a
     /// fire block burns for 160 ticks, with the flame drawn over it.
     pub fire_ticks: i32,
+    /// `Entity.DATA_AIR_SUPPLY_ID`, saved as a short but tracked as an int.
+    pub air_supply: i32,
+    /// `Entity.hasVisualFire`: an optional saved flag independent of burning.
+    pub has_visual_fire: bool,
+    /// `Entity.fallDistance` (`fall_distance` in its save): a projectile sets
+    /// its position without `Entity.move`, so it keeps what it was given.
+    pub fall_distance: f64,
+    /// `Entity.DATA_SHARED_FLAGS_ID`'s fire bit, set by the server's base tick.
+    pub synced_fire: bool,
     /// `Fireball.DATA_ITEM_STACK`: the item a fireball is drawn as, a fire
     /// charge until [`Projectile::set_item`] gives it another. None for the
     /// kinds that are no `Fireball` (a wither skull, a wind charge).
     pub item: Option<crate::items::ItemStack>,
+    /// `ThrownEgg`'s item `CHICKEN_VARIANT` component, as the chicken variant
+    /// index its hatchlings get; None when no item was recorded.
+    pub egg_variant: Option<u8>,
+    /// The UUID its own random made (`Mth.createInsecureUUID`), for the server
+    /// to keep unless a save gives one: an arrow's at construction, another
+    /// kind's when it is shot (`shoot_own`), which is the same stream since
+    /// nothing else draws from it between.
+    pub uuid: Option<[i32; 4]>,
+}
+/// A new projectile's own random (`Entity.random`) and the UUID its first two
+/// draws make (`Mth.createInsecureUUID`).
+pub fn new_own_random() -> (horizon_core::random::LegacyRandom, [i32; 4]) {
+    let mut random = crate::random_source::entity();
+    let uuid = crate::save::insecure_uuid(&mut random);
+    (random, uuid)
 }
 /// `ThrownEnderpearl.isAllowedToTeleportOwner(owner, level)` for an owner in
 /// the pearl's own dimension: vanilla reaches
@@ -287,7 +333,18 @@ pub trait ProjectileWorld {
     /// `Entity.isInWater` as `updateFluidInteraction` sets it: some water
     /// block's surface reaches the bottom of the box (deflated by 0.001).
     fn in_water(&self, bounds: Aabb) -> bool;
+    /// `velocity` after the currents of the water and the lava the box
+    /// touches (`EntityFluidInteraction.applyCurrentTo`): a projectile is
+    /// pushed by fluids like any entity (`Entity.isPushedByFluid`).
+    fn pushed_by_currents(&self, _bounds: Aabb, velocity: Vec3) -> Vec3 {
+        velocity
+    }
     fn targets(&self) -> &[(Who, Aabb)];
+    /// `Level.getMinY() - 64` (`Entity.checkBelowWorld`); the Overworld's
+    /// unless the world says otherwise.
+    fn below_world_y(&self) -> f64 {
+        -128.0
+    }
     /// Server-only mod-block contacts along the completed movement.
     fn block_contacts(&self, _entity: i32, _kind: &str, _from: Vec3, _to: Vec3, _bounds: Aabb) {}
     /// `Level.isEmptyBlock`.
@@ -398,17 +455,58 @@ pub fn water_bubble_at(position: [f64; 3], movement: [f64; 3]) -> ([f64; 3], [f6
         movement,
     )
 }
+/// The chicken variant a thrown egg stack carries: its explicit
+/// `minecraft:chicken/variant` component, else its item's default (egg
+/// temperate, blue egg cold, brown egg warm). An explicit removal
+/// (`!minecraft:chicken/variant`) leaves the hatchling its temperate default.
+pub fn egg_chicken_variant(stack: &crate::items::ItemStack) -> u8 {
+    let named = stack
+        .extra
+        .as_ref()
+        .and_then(|d| d.other("minecraft:chicken/variant"))
+        .and_then(|t| match t {
+            horizon_world::nbt::Tag::String(s) => s.to_string().ok(),
+            _ => None,
+        });
+    // 🤖 Agent: a removed component resolves to absent, not to the item default.
+    let removed = stack
+        .extra
+        .as_ref()
+        .is_some_and(|d| d.other("!minecraft:chicken/variant").is_some());
+    let name = named.as_deref().unwrap_or(if removed {
+        "temperate"
+    } else {
+        match &*stack.item {
+            "minecraft:blue_egg" => "cold",
+            "minecraft:brown_egg" => "warm",
+            _ => "temperate",
+        }
+    });
+    crate::mobs::finalize::variant_index(crate::mobs::Species::Chicken, name)
+}
 impl Projectile {
-    /// `Entity.getBoundingBox`: its type's square box standing on its position.
+    /// `Entity.getBoundingBox`: its type's square box standing on its position,
+    /// a wind charge's 0.15 lower (`AbstractWindCharge.makeBoundingBox`).
     pub fn bounds(&self) -> Aabb {
         let (p, half) = (self.position, self.kind.size() / 2.0);
         let height = self.kind.size();
+        let bottom = match self.kind {
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {
+                p.y - f64::from(0.15_f32)
+            }
+            _ => p.y,
+        };
         Aabb::new(
-            Vec3::new(p.x - half, p.y, p.z - half),
-            Vec3::new(p.x + half, p.y + height, p.z + half),
+            Vec3::new(p.x - half, bottom, p.z - half),
+            Vec3::new(p.x + half, bottom + height, p.z + half),
         )
     }
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
+        let no_deflect_ticks = if kind == ProjectileKind::WindCharge {
+            5
+        } else {
+            0
+        };
         let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. } | ProjectileKind::Trident);
         // `Fireball.defineSynchedData`: DATA_ITEM_STACK starts as a fire charge.
         let item = kind
@@ -423,9 +521,13 @@ impl Projectile {
         } else {
             0.1
         };
+        // An arrow keeps its own random (`Entity.random`) for its later draws.
+        let own = kind_is_arrow.then(new_own_random);
+        let uuid = own.as_ref().map(|o| o.1);
         Self {
             join: Default::default(),
             id: 0,
+            egg_variant: None,
             kind,
             owner,
             owner_uuid: None,
@@ -446,30 +548,24 @@ impl Projectile {
             bonus: Default::default(),
             acceleration,
             needs_sync: false,
+            no_deflect_ticks,
+            bubble_surfaces: Vec::new(),
             touching_water: false,
             no_gravity: false,
+            on_ground: false,
             fire_ticks: 0,
+            air_supply: 300,
+            has_visual_fire: false,
+            fall_distance: 0.0,
+            synced_fire: false,
             item,
-            arrow: kind_is_arrow.then(|| {
-                // The arrow's own random (`Entity.random`).
-                Box::new(crate::arrows::ArrowState::new(
-                    crate::random_source::entity(),
-                ))
-            }),
+            arrow: own.map(|(random, _)| Box::new(crate::arrows::ArrowState::new(random))),
+            uuid,
         }
     }
-    /// Entity box from the feet (`EntityType.sized` cube of `kind.size()`).
+    /// Entity box (`EntityType.sized` cube of `kind.size()`), as `bounds`.
     pub fn aabb(&self) -> Aabb {
-        let s = self.kind.size();
-        let h = s * 0.5;
-        Aabb::new(
-            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
-            Vec3::new(
-                self.position.x + h,
-                self.position.y + s,
-                self.position.z + h,
-            ),
-        )
+        self.bounds()
     }
     /// The arrow's own random from now on (`Entity.random`).
     pub fn with_arrow_random(mut self, random: horizon_core::random::LegacyRandom) -> Self {
@@ -553,9 +649,10 @@ impl Projectile {
                 | ProjectileKind::Thrown(_)
         )
     }
-    /// `Entity.isOnFire`.
+    /// `Entity.isOnFire`. `WitherSkull.isOnFire` always returns false.
     pub fn on_fire(&self) -> bool {
-        self.fire_ticks > 0
+        !matches!(self.kind, ProjectileKind::WitherSkull { .. })
+            && (self.fire_ticks > 0 || self.synced_fire)
     }
     /// `Entity.igniteForTicks`: the longer fire wins.
     pub fn ignite_for_ticks(&mut self, ticks: i32) {
@@ -567,21 +664,51 @@ impl Projectile {
     pub fn clear_fire(&mut self) {
         self.fire_ticks = self.fire_ticks.min(0);
     }
-    /// `ThrowableProjectile.tick`'s `applyEffectsFromBlocks` and the fire phase
-    /// of `Entity.baseTick`: a fire block the box is in ignites the projectile
-    /// for 160 ticks (`BaseFireBlock.fireIgnite`), water puts it out, and one
-    /// tick is counted down every tick.
-    fn fire_tick(&mut self, w: &impl ProjectileWorld) {
-        if !self.is_thrown() {
+    /// `Entity.baseTick` counts down active fire after block effects. The two
+    /// item fireballs then renew their own flame in `AbstractHurtingProjectile.tick`.
+    fn fire_tick(&mut self, w: &impl ProjectileWorld, client_side: bool) {
+        if !(self.is_thrown()
+            || self.kind == ProjectileKind::ExperienceBottle
+            || self.is_fireball()
+            || matches!(
+                self.kind,
+                ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+            ))
+        {
             return;
         }
+        let previous_fire_ticks = self.fire_ticks;
         if self.in_fire(w) {
-            self.ignite_for_ticks(160);
+            // BaseFireBlock.fireIgnite: a non-player counts up to zero before
+            // it can catch fire again.
+            if self.fire_ticks < 0 {
+                self.fire_ticks += 1;
+            }
+            if self.fire_ticks >= 0 {
+                self.ignite_for_ticks(160);
+            }
         }
         if w.in_water(self.bounds()) {
             self.clear_fire();
-        } else if self.fire_ticks > 0 {
+        }
+        let sync_fire = !client_side && self.kind != ProjectileKind::LlamaSpit;
+        let burning =
+            self.fire_ticks > 0 && !matches!(self.kind, ProjectileKind::WitherSkull { .. });
+        if sync_fire && !burning && self.fire_ticks <= previous_fire_ticks {
+            // Entity.applyEffectsFromBlocks resets fire immunity when the entity
+            // is not burning and no block ignited it. A skull always reports
+            // isOnFire=false, even when its saved remainingFireTicks is positive.
+            self.fire_ticks = 0;
+        }
+        if self.fire_ticks > 0 {
             self.fire_ticks -= 1;
+        }
+        if sync_fire {
+            // Entity.setSharedFlagOnFire runs before the fireball's own ignition.
+            self.synced_fire = self.fire_ticks > 0 || self.has_visual_fire;
+        }
+        if self.kind.is_item_fireball() {
+            self.ignite_for_ticks(20);
         }
     }
     /// `Entity.checkInsideBlocks`: the blocks under the box, deflated by 1e-7
@@ -621,9 +748,11 @@ impl Projectile {
             self.kind.id()
         }
     }
-    /// `Arrow.ID_EFFECT_COLOR` (`updateColor`): the opaque colour of the
-    /// potion the arrow carries, from its tipped pickup item or the effect a
-    /// stray, bogged or parched adds; -1 for none.
+    /// `Arrow.ID_EFFECT_COLOR` (`updateColor`): `PotionContents.getColor` of
+    /// the contents the arrow carries, from its pickup item, or the effect a
+    /// stray, bogged or parched adds; -1 while they are
+    /// `PotionContents.EMPTY` (a colour and a custom effect alone make them
+    /// nonempty, with no potion id at all).
     pub fn arrow_effect_color(&self) -> i32 {
         let ProjectileKind::Arrow { effect, .. } = &self.kind else {
             return -1;
@@ -631,15 +760,17 @@ impl Projectile {
         if self.is_spectral_arrow() {
             return -1;
         }
-        let rgb = match (effect, &self.arrow) {
-            (Some((id, _)), _) => crate::brewing::effect(id).map(|e| e.color),
-            (None, Some(a)) if &*a.pickup_item.item == "minecraft:tipped_arrow" => a
-                .pickup_item
-                .potion()
-                .map(|p| crate::brewing::potion_color(Some(p))),
+        let color = match (effect, &self.arrow) {
+            // One added effect is one custom effect: its own colour, opaque.
+            (Some((id, _)), _) => crate::brewing::effect(id).map(|e| e.shown_color() | 0xFF00_0000),
+            // `PotionContents.getColor` already carries the alpha a
+            // `custom_color` was given, as vanilla syncs it. Any arrow item's
+            // contents count, as `updateColor` reads the pickup stack.
+            (None, Some(a)) => (!crate::brewing::contents_empty(&a.pickup_item))
+                .then(|| crate::brewing::contents_color(&a.pickup_item)),
             _ => None,
         };
-        rgb.map_or(-1, |rgb| (rgb | 0xFF00_0000) as i32)
+        color.map_or(-1, |color| color as i32)
     }
     pub fn is_fireball(&self) -> bool {
         matches!(
@@ -728,10 +859,33 @@ impl Projectile {
         self.velocity = Vec3::new(v[0], v[1], v[2]);
         self.update_rotation();
     }
-    /// Projectile.shootFromRotation for player throws.
+    /// The UUID a loaded or summoned projectile keeps (`Entity.load`): the
+    /// tag's, else the one its own random made. The constructor makes that
+    /// random either way, so a kind that makes it at the shot makes it here.
+    pub fn own_uuid(&mut self, tag_uuid: Option<[i32; 4]>) -> [i32; 4] {
+        let own = self.uuid.take().unwrap_or_else(|| new_own_random().1);
+        tag_uuid.unwrap_or(own)
+    }
+    /// `Projectile.shoot` from the projectile's own random, after its UUID's
+    /// draws: an arrow's, or for another kind one made now.
+    pub fn shoot_own(&mut self, dir: [f64; 3], speed: f32, uncertainty: f32) {
+        let mut random = match self.arrow.as_mut() {
+            Some(a) => a.random.clone(),
+            None => {
+                let (random, uuid) = new_own_random();
+                self.uuid = Some(uuid);
+                random
+            }
+        };
+        self.shoot(&mut random, dir, speed, uncertainty);
+        if let Some(a) = self.arrow.as_mut() {
+            a.random = random;
+        }
+    }
+    /// Projectile.shootFromRotation for player throws, from the projectile's
+    /// own random (`shoot_own`).
     pub fn shoot_from_rotation(
         &mut self,
-        random: &mut impl RandomSource,
         pitch: f32,
         yaw: f32,
         offset: f32,
@@ -750,7 +904,7 @@ impl Projectile {
             f64::from(-o.sin()),
             f64::from(y.cos() * p.cos()),
         ];
-        self.shoot(random, dir, speed, uncertainty);
+        self.shoot_own(dir, speed, uncertainty);
         self.velocity = Vec3::new(
             self.velocity.x + source_velocity.x,
             self.velocity.y
@@ -780,6 +934,12 @@ impl Projectile {
     /// `Fireball.setItem`: the item a fireball is drawn as. An empty stack
     /// puts the default fire charge back, anything else is kept as a single
     /// one (`copyWithCount(1)`); a kind that is no `Fireball` has no item.
+    /// `ThrownEgg`'s item: what its hatchlings' variant comes from.
+    pub fn set_egg_item(&mut self, stack: &crate::items::ItemStack) {
+        if self.kind == ProjectileKind::Egg {
+            self.egg_variant = Some(egg_chicken_variant(stack));
+        }
+    }
     pub fn set_item(&mut self, stack: crate::items::ItemStack) {
         if !self.kind.is_item_fireball() {
             return;
@@ -803,11 +963,86 @@ impl Projectile {
         self.previous_yaw = self.yaw;
         self.previous_pitch = self.pitch;
     }
+    /// `ProjectileUtil.rotateTowardsMovement`: eases the rotation from the
+    /// previous tick's towards the movement by `t`.
+    fn rotate_towards_movement(&mut self, t: f32) {
+        let v = self.velocity;
+        if v.x * v.x + v.y * v.y + v.z * v.z == 0.0 {
+            return;
+        }
+        let horizontal = (v.x * v.x + v.z * v.z).sqrt();
+        let y_rot = horizon_core::geometry::trig::atan2_degrees(v.z, v.x) + 90.0;
+        let x_rot = horizon_core::geometry::trig::atan2_degrees(horizontal, v.y) - 90.0;
+        // Shift the old angles by whole turns so the lerp takes the shortest
+        // way; the shifted old angles are what rendering interpolates from.
+        while x_rot - self.previous_pitch < -180.0 {
+            self.previous_pitch -= 360.0;
+        }
+        while x_rot - self.previous_pitch >= 180.0 {
+            self.previous_pitch += 360.0;
+        }
+        while y_rot - self.previous_yaw < -180.0 {
+            self.previous_yaw -= 360.0;
+        }
+        while y_rot - self.previous_yaw >= 180.0 {
+            self.previous_yaw += 360.0;
+        }
+        self.pitch = self.previous_pitch + t * (x_rot - self.previous_pitch);
+        self.yaw = self.previous_yaw + t * (y_rot - self.previous_yaw);
+    }
+    /// The kinds whose tick turns them with `Projectile.updateRotation`: a
+    /// `ThrowableProjectile` (the thrown kinds and the experience bottle) and
+    /// llama spit.
+    fn turns_with_update_rotation(&self) -> bool {
+        self.is_thrown() || self.kind == ProjectileKind::ExperienceBottle
+    }
+    /// `Projectile.updateRotation`: a fifth of the way (`lerpRotation`) from
+    /// the rotation the tick started with toward the motion's direction.
+    fn turn_towards_movement(&mut self) {
+        use horizon_core::geometry::trig::atan2_degrees;
+        let v = self.velocity;
+        let x_rot = atan2_degrees(v.y, v.horizontal_distance());
+        let y_rot = atan2_degrees(v.x, v.z);
+        self.pitch = crate::arrows::lerp_rotation(self.previous_pitch, x_rot);
+        self.yaw = crate::arrows::lerp_rotation(self.previous_yaw, y_rot);
+    }
     /// `Entity.setOldPosAndRot`: where the renderer interpolates from.
     pub fn set_old_pos_and_rot(&mut self) {
         self.previous = self.position;
         self.previous_yaw = self.yaw;
         self.previous_pitch = self.pitch;
+    }
+    /// `Entity.move(PISTON)`: the position only; `release_after_piston` follows
+    /// (`AbstractArrow.move`).
+    pub fn move_by_piston(&mut self, movement: Vec3) {
+        self.position = self.position.add_vector(movement);
+        self.needs_sync = true;
+    }
+    pub fn piston_release_bounds(&self) -> Option<Aabb> {
+        let arrow = self.arrow.as_ref()?;
+        if !arrow.in_ground || arrow.no_physics {
+            return None;
+        }
+        Some(Aabb::new(self.position, self.position).inflate(Vec3::new(0.06, 0.06, 0.06)))
+    }
+    pub fn release_after_piston(&mut self, no_block_collision: bool) {
+        let Some(arrow) = self.arrow.as_mut() else {
+            return;
+        };
+        if arrow.in_ground && !arrow.no_physics && no_block_collision {
+            self.velocity = start_falling_velocity(self.velocity, &mut arrow.random);
+            arrow.in_ground = false;
+            arrow.life = 0;
+            self.stuck = false;
+            self.needs_sync = true;
+        }
+    }
+    /// `PistonMovingBlockEntity.moveCollidedEntities` on a slime block: the
+    /// velocity along the axis. The piston's move after it (`AbstractArrow.move`)
+    /// is what takes a stuck arrow out, with `startFalling`'s random damping.
+    pub fn piston_slime_bounce(&mut self, movement: Direction) {
+        self.velocity = horizon_world::piston_push::bounce_velocity(movement, self.velocity);
+        self.needs_sync = true;
     }
     /// `ShulkerBullet.<init>(level, owner, target, invalidStartAxis)`: a
     /// shulker's bullet at `at`, the centre of its owner's box
@@ -1046,7 +1281,7 @@ impl Projectile {
                 }
             }
         }
-        (self.position.y > -128.0, Hit::None)
+        (self.position.y >= w.below_world_y(), Hit::None)
     }
     /// AbstractHurtingProjectile.applyInertia, on both server and client.
     pub fn apply_hurting_inertia(&mut self, water: bool) {
@@ -1070,21 +1305,31 @@ impl Projectile {
 
     /// One tick: returns whether to keep the projectile and what it hit.
     pub fn tick(&mut self, w: &impl ProjectileWorld) -> (bool, Hit) {
-        self.tick_with(w, true)
+        horizon_threads::work::set_entity(horizon_threads::work::entity_id(self.kind.id()));
+        self.tick_with(w, true, false)
     }
-    /// One tick of a server's projectile on its client: [`tick`](Self::tick)
-    /// with `ThrowableProjectile.tick`'s swept bubble columns, which push it on
-    /// the client too, so a pearl held in a stasis chamber hovers between the
-    /// server's updates instead of sinking and snapping back. The first tick's
-    /// column scan is in [`tick`](Self::tick) itself, for a server too.
+    /// One tick of a server's projectile on its client: [`tick`](Self::tick),
+    /// whose bubble columns push it on the client too, so a pearl held in a
+    /// stasis chamber hovers between the server's updates instead of sinking
+    /// and snapping back.
     pub fn tick_remote(&mut self, w: &impl ProjectileWorld) -> (bool, Hit) {
-        if !self.is_throwable_projectile() {
-            return self.tick(w);
-        }
-        let from = self.position;
-        let result = self.tick(w);
-        self.bubble_columns_along(w, from);
-        result
+        self.tick_with(w, true, true)
+    }
+    /// The projectiles whose tick applies the effects of the blocks they moved
+    /// through (`applyEffectsFromBlocks`), bubble columns among them:
+    /// `ThrowableProjectile`, `AbstractHurtingProjectile` and `ShulkerBullet`.
+    /// Arrows push themselves (`arrows::tick`); llama spit applies none.
+    pub fn applies_block_effects(&self) -> bool {
+        self.is_throwable_projectile()
+            || matches!(
+                self.kind,
+                ProjectileKind::SmallFireball
+                    | ProjectileKind::LargeFireball { .. }
+                    | ProjectileKind::WitherSkull { .. }
+                    | ProjectileKind::WindCharge
+                    | ProjectileKind::BreezeWindCharge
+                    | ProjectileKind::ShulkerBullet { .. }
+            )
     }
     /// A `ThrowableProjectile`: the thrown kinds but llama spit, a plain
     /// `Projectile` with its own tick.
@@ -1102,7 +1347,7 @@ impl Projectile {
             for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
                 for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
                     if let Some((drag, surface)) = w.bubble_column([x, y, z]) {
-                        self.bubble_column_push(drag, surface);
+                        self.bubble_column_push(drag, surface, [x, y, z]);
                     }
                 }
             }
@@ -1110,7 +1355,16 @@ impl Projectile {
     }
     /// `Projectile.onAboveBubbleColumn` / `onInsideBubbleColumn`: unlike
     /// `Entity`'s, a projectile's pushes are not clamped.
-    fn bubble_column_push(&mut self, drag: bool, surface: bool) {
+    fn bubble_column_push(&mut self, drag: bool, surface: bool, at: [i32; 3]) {
+        if surface {
+            self.bubble_surfaces.push(at);
+        } else {
+            // Projectile.onInsideBubbleColumn's resetFallDistance.
+            self.fall_distance = 0.0;
+            if let Some(arrow) = self.arrow.as_mut() {
+                arrow.fall_distance = 0.0;
+            }
+        }
         self.velocity.y += match (drag, surface) {
             (true, _) => -0.03,
             (false, true) => 0.1,
@@ -1120,7 +1374,18 @@ impl Projectile {
     /// `applyEffectsFromBlocks`' bubble columns (`Entity.checkInsideBlocks`):
     /// the blocks the box swept through from `from`, each once, pushing when
     /// the move was long or the final box (deflated by 1e-5F) is inside it.
-    fn bubble_columns_along(&mut self, w: &impl ProjectileWorld, from: Vec3) {
+    pub fn bubble_columns_along(&mut self, w: &impl ProjectileWorld, from: Vec3) {
+        self.bubble_columns_since(from, |p| w.bubble_column(p));
+    }
+    /// [`bubble_columns_along`](Self::bubble_columns_along) with the bubble
+    /// columns read by `column`, for a move made by something else: a
+    /// piston's push applies the block effects too (`moveEntityByPiston`'s
+    /// `applyEffectsFromBlocks`).
+    pub fn bubble_columns_since(
+        &mut self,
+        from: Vec3,
+        column: impl Fn([i32; 3]) -> Option<(bool, bool)>,
+    ) {
         let to = self.position;
         let eps = f64::from(1.0e-5_f32);
         let deflated = self.bounds().deflate(Vec3::new(eps, eps, eps));
@@ -1162,7 +1427,7 @@ impl Projectile {
             if cells[..i].contains(&p) {
                 continue;
             }
-            let Some((drag, surface)) = w.bubble_column([p.x, p.y, p.z]) else {
+            let Some((drag, surface)) = column([p.x, p.y, p.z]) else {
                 continue;
             };
             let cell = Aabb::new(
@@ -1170,7 +1435,7 @@ impl Projectile {
                 Vec3::new(f64::from(p.x + 1), f64::from(p.y + 1), f64::from(p.z + 1)),
             );
             if far || deflated.intersects(cell) {
-                self.bubble_column_push(drag, surface);
+                self.bubble_column_push(drag, surface, [p.x, p.y, p.z]);
             }
         }
     }
@@ -1178,9 +1443,14 @@ impl Projectile {
     /// canceled (`ProjectileImpactEvent`). The projectile goes the whole way of its
     /// motion and flies on, with no hit to act on.
     pub fn tick_through(&mut self, w: &impl ProjectileWorld) -> (bool, Hit) {
-        self.tick_with(w, false)
+        self.tick_with(w, false, false)
     }
-    fn tick_with(&mut self, w: &impl ProjectileWorld, impact: bool) -> (bool, Hit) {
+    fn tick_with(
+        &mut self,
+        w: &impl ProjectileWorld,
+        impact: bool,
+        client_side: bool,
+    ) -> (bool, Hit) {
         // LlamaSpit and ShulkerBullet call Projectile.tick before moving;
         // ThrowableProjectile and AbstractHurtingProjectile call it afterwards.
         let base_first = matches!(
@@ -1190,6 +1460,7 @@ impl Projectile {
         if base_first {
             self.tick_shoot_event();
         }
+        self.bubble_surfaces.clear();
         // `ThrowableProjectile.tick` begins with `handleFirstTickBubbleColumn`,
         // before its gravity and inertia, so the push takes the tick's drag
         // with it. A server simulates it too, not only a client.
@@ -1198,6 +1469,9 @@ impl Projectile {
         }
         let from = self.position;
         let result = self.tick_inner(w, impact);
+        if self.applies_block_effects() {
+            self.bubble_columns_along(w, from);
+        }
         w.block_contacts(
             self.id as i32,
             self.kind.id(),
@@ -1205,12 +1479,19 @@ impl Projectile {
             self.position,
             self.bounds(),
         );
-        self.fire_tick(w);
+        self.fire_tick(w, client_side);
         self.stuck_tick(w, from);
         if !base_first {
             self.tick_shoot_event();
         }
+        // WindCharge.tick: after AbstractHurtingProjectile.tick.
+        self.no_deflect_ticks = self.no_deflect_ticks.saturating_sub(1);
         result
+    }
+    /// `Projectile.deflect`, which `WindCharge` refuses while its
+    /// `noDeflectTicks` last.
+    pub fn deflectable(&self) -> bool {
+        self.no_deflect_ticks == 0
     }
     /// `applyEffectsFromBlocks` after the tick's move, for its cobwebs and
     /// powder snow (`makeStuckInBlock`): the last such block its box (deflated
@@ -1304,6 +1585,11 @@ impl Projectile {
                 );
             }
         }
+        // ThrowableProjectile.tick and LlamaSpit.tick turn with this move's
+        // motion, hit or not (a spit's drag and gravity come after).
+        if self.turns_with_update_rotation() {
+            self.turn_towards_movement();
+        }
         let from = self.position;
         let to = Vec3::new(
             from.x + self.velocity.x,
@@ -1349,7 +1635,7 @@ impl Projectile {
         {
             self.position = at;
             self.touching_water = w.in_water(self.bounds());
-            let alive = self.position.y > -128.0 && self.age < 1200;
+            let alive = self.position.y >= w.below_world_y() && self.age < 1200;
             return (alive, Hit::None);
         }
         // LlamaSpit never discards on an entity: `onHitEntity` only hurts, so
@@ -1397,17 +1683,26 @@ impl Projectile {
                 self.velocity.y * drag - self.get_gravity(),
                 self.velocity.z * drag,
             );
-            self.update_rotation();
-            return (self.position.y > -128.0 && self.age < 6000, spit_hit);
+            return (
+                self.position.y >= w.below_world_y() && self.age < 6000,
+                spit_hit,
+            );
         }
         self.position = to;
-        if !self.is_fireball() {
+        // Fireballs ease towards the motion (`ProjectileUtil.rotateTowardsMovement`);
+        // wind charges still face their motion at once; the thrown kinds turned
+        // in `tick` above.
+        if self.is_fireball() {
+            self.rotate_towards_movement(0.2);
+        } else if !self.turns_with_update_rotation() {
             self.update_rotation();
         }
-        // Entity.baseTick's updateFluidInteraction, after the move.
+        // Entity.baseTick's updateFluidInteraction, after the move: the fluids
+        // it touches now, and their currents push it.
         self.touching_water = w.in_water(self.bounds());
-        let alive =
-            self.position.y > -128.0 && self.age < if self.is_fireball() { 1200 } else { 6000 };
+        self.velocity = w.pushed_by_currents(self.bounds(), self.velocity);
+        let alive = self.position.y >= w.below_world_y()
+            && self.age < if self.is_fireball() { 1200 } else { 6000 };
         (alive, Hit::None)
     }
     /// AbstractArrow.onHitEntity damage: ceil(speed * base) plus crit bonus.
@@ -1482,6 +1777,26 @@ impl Projectile {
 mod tests {
     use super::*;
     use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn egg_variant_honors_explicit_removal() {
+        use crate::mobs::{Species, finalize::variant_index};
+        let mut blue = crate::items::ItemStack::new("minecraft:blue_egg", 1);
+        assert_eq!(
+            egg_chicken_variant(&blue),
+            variant_index(Species::Chicken, "cold")
+        );
+        let mut data = horizon_items::item_data::StackData::default();
+        data.set_other(
+            "!minecraft:chicken/variant",
+            Some(horizon_world::nbt::Tag::Compound(Default::default())),
+        );
+        blue.extra = Some(Box::new(data));
+        assert_eq!(
+            egg_chicken_variant(&blue),
+            variant_index(Species::Chicken, "temperate")
+        );
+    }
 
     struct Empty(Vec<(Who, Aabb)>);
     impl ProjectileWorld for Empty {
@@ -1587,7 +1902,8 @@ mod tests {
     /// a snowball is shot in pushes it by the column it spawned in, before its
     /// gravity and the air drag, and only on that first tick. The client path
     /// (`tick_remote`) had it and the host's did not, so a throwable in a bubble
-    /// column rose for a guest and sank for the host.
+    /// column rose for a guest and sank for the host. Every tick then ends with
+    /// `applyEffectsFromBlocks`, whose columns push it again after the move.
     #[test]
     fn a_throwable_spawned_in_a_bubble_column_is_pushed_on_its_first_tick() {
         let air = f64::from(0.99_f32);
@@ -1618,7 +1934,7 @@ mod tests {
             p.tick(&column);
             assert_eq!(
                 p.velocity.y,
-                (push - 0.03) * air,
+                (push - 0.03) * air + push,
                 "drag {} surface {}",
                 column.drag,
                 column.surface
@@ -1626,17 +1942,20 @@ mod tests {
             p.velocity = Vec3::ZERO;
             p.tick(&column);
             // The box is in the column's water after the first move, so the
-            // drag is `getWaterDrag`'s 0.8F; the push was the first tick's only.
+            // drag is `getWaterDrag`'s 0.8F; the first tick's own scan is not
+            // run again, only the push of the blocks the move went through.
             assert_eq!(
                 p.velocity.y,
-                -0.03 * f64::from(0.8_f32),
+                -0.03 * f64::from(0.8_f32) + push,
                 "drag {} surface {}",
                 column.drag,
                 column.surface
             );
         }
-        // A kind that is no `ThrowableProjectile` is not pushed by a column its
-        // box is in: the hurting projectiles apply their own inertia only.
+        // A kind that is no `ThrowableProjectile` has no first-tick scan: a
+        // hurting projectile is pushed only by the blocks its move went through
+        // (`AbstractHurtingProjectile.tick`'s `applyEffectsFromBlocks`): its
+        // 1-block box spans two column blocks.
         let mut p = Projectile::new(
             ProjectileKind::LargeFireball { power: 1 },
             Vec3::new(0.5, 100.5, 0.5),
@@ -1646,7 +1965,7 @@ mod tests {
             drag: false,
             surface: false,
         });
-        assert_eq!(p.velocity.y, 0.0);
+        assert_eq!(p.velocity.y, 0.12);
     }
     #[test]
     fn a_pearl_outside_any_bubble_column_only_falls() {
@@ -1654,6 +1973,38 @@ mod tests {
         p.tick_remote(&Empty(vec![]));
         assert_eq!(p.velocity.y, -0.03 * f64::from(0.8_f32));
     }
+    #[test]
+    fn piston_move_releases_a_stuck_arrow_with_start_falling_velocity() {
+        let mut p = Projectile::new(
+            ProjectileKind::Arrow {
+                base_damage: 2.0,
+                critical: false,
+                effect: None,
+            },
+            Vec3::new(0.5, 100.0, 0.5),
+            None,
+        );
+        p.velocity = Vec3::new(1.0, -2.0, 3.0);
+        p.stuck = true;
+        p.arrow.as_mut().unwrap().in_ground = true;
+        let mut random = p.arrow.as_ref().unwrap().random.clone();
+        let expected = start_falling_velocity(p.velocity, &mut random);
+
+        p.move_by_piston(Vec3::new(0.5, 0.0, 0.0));
+        assert!(p.piston_release_bounds().is_some());
+        p.release_after_piston(false);
+        assert!(p.arrow.as_ref().unwrap().in_ground);
+        assert_eq!(p.velocity, Vec3::new(1.0, -2.0, 3.0));
+
+        p.release_after_piston(true);
+        let arrow = p.arrow.as_ref().unwrap();
+        assert!(!arrow.in_ground);
+        assert_eq!(p.velocity, expected);
+        assert!(!p.stuck);
+        assert!(p.needs_sync);
+        assert!(p.piston_release_bounds().is_none());
+    }
+
     #[test]
     fn first_tick_shoot_event_uses_base_tick_position_and_saved_flag() {
         let w = Empty(vec![]);
@@ -1750,22 +2101,62 @@ mod tests {
         });
         assert_eq!(wet.fire_ticks, 0, "water puts the snowball out");
     }
-    /// A fireball is an `AbstractHurtingProjectile`: it does not apply the
-    /// effects of the blocks it flies through, so the fire block leaves it cold.
+    /// `AbstractHurtingProjectile.tick` renews the fire after the base
+    /// countdown, without shortening a longer fire.
     #[test]
-    fn a_fireball_is_not_ignited_by_a_fire_block() {
+    fn a_fireball_renews_its_fire_after_the_base_countdown() {
         let mut p = Projectile::new(
             ProjectileKind::SmallFireball,
             Vec3::new(0.5, 99.5, 0.5),
             None,
         );
-        p.velocity = Vec3::ZERO;
+        let air = Empty(vec![]);
+        p.tick(&air);
+        assert_eq!(p.fire_ticks, 20);
+        assert!(
+            !p.synced_fire,
+            "the first renewal comes after the shared fire bit"
+        );
+        p.tick(&air);
+        assert_eq!(p.fire_ticks, 20);
+        assert!(p.synced_fire);
         p.tick(&Fire {
             targets: vec![],
             water: false,
         });
-        assert_eq!(p.fire_ticks, 0);
+        assert_eq!(p.fire_ticks, 159);
+        p.tick(&air);
+        assert_eq!(p.fire_ticks, 158);
     }
+
+    #[test]
+    fn visual_fire_stays_on_when_a_pearls_fire_ticks_expire() {
+        let mut server = Projectile::new(ProjectileKind::EnderPearl, Vec3::ZERO, None);
+        server.fire_ticks = 1;
+        server.has_visual_fire = true;
+        let air = Empty(vec![]);
+        server.tick(&air);
+        assert_eq!(server.fire_ticks, 0);
+        assert!(server.synced_fire);
+
+        let mut client = Projectile::new(ProjectileKind::EnderPearl, Vec3::ZERO, None);
+        client.synced_fire = server.synced_fire;
+        client.tick_remote(&air);
+        assert!(client.on_fire());
+    }
+
+    #[test]
+    fn restored_wind_charge_fire_counts_down_and_syncs_visual_fire() {
+        for kind in [ProjectileKind::WindCharge, ProjectileKind::BreezeWindCharge] {
+            let mut p = Projectile::new(kind, Vec3::ZERO, None);
+            p.fire_ticks = 20;
+            p.has_visual_fire = true;
+            p.tick(&Empty(vec![]));
+            assert_eq!(p.fire_ticks, 19, "{:?}", p.kind);
+            assert!(p.synced_fire, "{:?}", p.kind);
+        }
+    }
+
     #[test]
     fn throwables_in_water_leave_bubbles_behind_them() {
         let mut p = Projectile::new(ProjectileKind::Snowball, Vec3::new(0.5, 60.0, 0.5), None);
@@ -2231,6 +2622,39 @@ mod tests {
         assert_eq!(p.arrow_damage(&mut r), 6.0);
     }
     #[test]
+    fn a_dragon_fireball_turns_towards_its_flight_a_fifth_per_tick() {
+        let mut p = Projectile::new(
+            ProjectileKind::DragonFireball,
+            Vec3::new(8.5, 231.0, 8.5),
+            None,
+        );
+        p.velocity = Vec3::new(0.1, 0.25, -0.3);
+        p.yaw = 0.0;
+        p.pitch = 0.0;
+        for _ in 0..3 {
+            p.tick(&Wall(vec![]));
+        }
+        assert!((p.yaw - 8.996_265).abs() < 4e-6, "yaw {}", p.yaw);
+        assert!((p.pitch + 18.704_494).abs() < 4e-6, "pitch {}", p.pitch);
+    }
+    #[test]
+    fn a_fireball_turns_the_short_way_across_the_wrap_boundary() {
+        let mut p = Projectile::new(
+            ProjectileKind::DragonFireball,
+            Vec3::new(8.5, 231.0, 8.5),
+            None,
+        );
+        // Movement along -z aims at yaw 0 and pitch 0.
+        p.velocity = Vec3::new(0.0, 0.0, -1.0);
+        p.previous_yaw = 350.0;
+        p.previous_pitch = 350.0;
+        p.rotate_towards_movement(0.2);
+        assert!((p.yaw + 8.0).abs() < 1e-3, "yaw {}", p.yaw);
+        assert!((p.pitch + 8.0).abs() < 1e-3, "pitch {}", p.pitch);
+        assert!((p.previous_yaw + 10.0).abs() < 1e-3);
+        assert!((p.previous_pitch + 10.0).abs() < 1e-3);
+    }
+    #[test]
     fn fireball_accelerates_along_its_direction() {
         let mut p = Projectile::fireball(
             ProjectileKind::SmallFireball,
@@ -2551,6 +2975,78 @@ mod render_light_tests {
             shot(ProjectileKind::SmallFireball).entity_type(),
             "minecraft:small_fireball"
         );
+    }
+    /// `ThrownEgg.onHit`: the hatchlings take the variant of the item's
+    /// `CHICKEN_VARIANT` component (egg temperate, blue cold, brown warm).
+    #[test]
+    fn thrown_egg_carries_its_chickens_variant() {
+        use crate::items::ItemStack;
+        let variant = |item: &str| {
+            let mut egg = Projectile::new(ProjectileKind::Egg, Vec3::ZERO, None);
+            egg.set_egg_item(&ItemStack::new(item, 1));
+            egg.egg_variant
+        };
+        assert_eq!(variant("minecraft:egg"), Some(0));
+        assert_eq!(variant("minecraft:brown_egg"), Some(1));
+        assert_eq!(variant("minecraft:blue_egg"), Some(2));
+        let mut snowball = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None);
+        snowball.set_egg_item(&ItemStack::new("minecraft:blue_egg", 1));
+        assert_eq!(snowball.egg_variant, None);
+    }
+}
+
+#[cfg(test)]
+mod arrow_color_tests {
+    use super::*;
+    use crate::items::ItemStack;
+    use horizon_core::random::LegacyRandom;
+    use horizon_world::nbt::Tag;
+
+    /// `Arrow.updateColor`: `ID_EFFECT_COLOR` is -1 only while the pickup
+    /// item's contents are `PotionContents.EMPTY`, and otherwise
+    /// `PotionContents.getColor` — so a tipped arrow whose contents have a
+    /// `custom_color` or only custom effects, with no potion id at all, still
+    /// syncs a colour.
+    #[test]
+    fn a_tipped_arrows_synced_colour_is_its_whole_contents() {
+        let color = |stack: &ItemStack| {
+            let kind = ProjectileKind::Arrow {
+                base_damage: 2.0,
+                critical: false,
+                effect: None,
+            };
+            let mut p = Projectile::new(kind, Vec3::new(0.5, 64.0, 0.5), None);
+            let mut arrow = crate::arrows::ArrowState::new(LegacyRandom::new(0));
+            arrow.set_item(stack);
+            p.arrow = Some(Box::new(arrow));
+            p.arrow_effect_color()
+        };
+        let tipped = || ItemStack::new("minecraft:tipped_arrow", 1);
+        assert_eq!(color(&tipped()), -1, "PotionContents.EMPTY has no colour");
+        // `PotionContents.getColor`: an explicit `custom_color` wins, as given.
+        let mut custom_color = tipped();
+        custom_color
+            .data_mut()
+            .potion_extra
+            .push(("custom_color".into(), Tag::Int(0x8012_3456u32 as i32)));
+        assert_eq!(color(&custom_color), 0x8012_3456u32 as i32);
+        // Else the mix of the visible effects: poison's own colour (0x87A363).
+        let mut custom_effect = tipped();
+        custom_effect.data_mut().potion_extra.push((
+            "custom_effects".into(),
+            Tag::List(vec![Tag::compound([
+                ("id", Tag::String("minecraft:poison".into())),
+                ("duration", Tag::Int(900)),
+            ])]),
+        ));
+        assert_eq!(color(&custom_effect), 0xFF87_A363u32 as i32);
+        // `updateColor` reads the pickup stack, whatever arrow item it is.
+        let mut plain = ItemStack::new("minecraft:arrow", 1);
+        plain
+            .data_mut()
+            .potion_extra
+            .push(("custom_color".into(), Tag::Int(0x8012_3456u32 as i32)));
+        assert_eq!(color(&plain), 0x8012_3456u32 as i32);
     }
 }
 crate::impl_joined!(Projectile);

@@ -278,7 +278,9 @@ impl Game<'_> {
             yaw: snap_yaw(self.yaw),
             color,
             check_interval: 0,
-            custom_name: None,
+            // `EntityType.createDefaultStackConfig`: `Entity.applyImplicitComponents`
+            // copies the stack's `CUSTOM_NAME` onto the placed cushion.
+            custom_name: stack.data().and_then(|d| d.custom_name.clone()),
         });
         self.world
             .modified
@@ -378,20 +380,30 @@ impl Game<'_> {
         true
     }
 
-    /// `Cushion.dropItem`: the break sound and particles, then the coloured
-    /// item unless drops are off or the breaker has infinite materials.
+    /// `BlockAttachedEntity.hurtServer`: `kill` (the `entity_die` event), then
+    /// `Cushion.dropItem`.
     pub(super) fn break_cushion(&mut self, index: usize, by_player: bool) {
-        self.break_cushion_by(
-            index,
-            by_player,
-            by_player.then_some(super::commands::Target::Player),
-        )
+        self.break_cushion_by(index, by_player.then_some(super::commands::Target::Player))
     }
     pub(super) fn break_cushion_by(
         &mut self,
         index: usize,
-        by_player: bool,
         source: Option<super::commands::Target>,
+    ) {
+        self.remove_cushion(index, source, true);
+    }
+    /// `BlockAttachedEntity.tick` on lost support: `discard()` and then
+    /// `dropItem(level, null)`, which posts no game event.
+    pub(super) fn discard_cushion(&mut self, index: usize) {
+        self.remove_cushion(index, None, false);
+    }
+    /// The removal both paths share; `killed` posts `BlockAttachedEntity.kill`'s
+    /// `entity_die` event before `dropItem`'s sound and drop.
+    fn remove_cushion(
+        &mut self,
+        index: usize,
+        source: Option<super::commands::Target>,
+        killed: bool,
     ) {
         let c = self.cushions.remove(index);
         let p = c.position;
@@ -399,8 +411,10 @@ impl Game<'_> {
         if self.riding == Some(c.id) {
             self.dismount_removed_vehicle(p.y);
         }
-        // BlockAttachedEntity.kill, before dropItem.
-        self.entity_killed_event_by([p.x, p.y, p.z], source);
+        if killed {
+            // BlockAttachedEntity.kill, before dropItem.
+            self.entity_killed_event_by([p.x, p.y, p.z], source);
+        }
         self.audio.play(
             "minecraft:entity.cushion.break",
             Some([p.x, p.y, p.z]),
@@ -408,11 +422,26 @@ impl Game<'_> {
             1.0,
         );
         self.cushion_break_particles(&c);
-        if !self.ui.rules.bool("entity_drops") || (by_player && self.creative) {
+        // `Cushion.dropItem`: the item unless drops are off or the cause is a
+        // player with infinite materials (the TNT's owner for a blast).
+        if !self.ui.rules.bool("entity_drops") || self.infinite_materials(source.as_ref()) {
             return;
         }
         let stack = c.item_stack_with_data();
         self.spawn_item(stack, [p.x, p.y, p.z], [0.0; 3], 10);
+    }
+    /// `Player.hasInfiniteMaterials` of a hurt's cause: the mode of the body in
+    /// place, or of the guest the blast names.
+    fn infinite_materials(&self, source: Option<&super::commands::Target>) -> bool {
+        use super::commands::Target;
+        match source {
+            Some(Target::Player) => self.creative,
+            // The guest whose turn it is is in place already (the hub is out of
+            // `self.lan` while it acts), as `sculk::entity_event_by` reads it.
+            Some(Target::Guest(conn)) if self.lan_acting == Some(*conn) => self.creative,
+            Some(Target::Guest(conn)) => self.command_guest(*conn).is_some_and(|g| g.creative()),
+            _ => false,
+        }
     }
 
     /// `Entity.kill` of a cushion (`/kill`): gone with no drop, its rider let go.
@@ -471,13 +500,51 @@ impl Game<'_> {
                 continue;
             }
             self.cushions[i].check_interval = 0;
-            let c = self.cushions[i].clone();
-            if self.cushion_in_fire(&c) || !self.cushion_survives(&c) {
-                self.break_cushion(i, false);
-                continue;
+            if !self.check_cushion(i) {
+                i += 1;
             }
-            i += 1;
         }
+    }
+
+    /// `Cushion.tickAtCheckInterval` plus the survive check; true when the cushion broke.
+    fn check_cushion(&mut self, i: usize) -> bool {
+        let c = self.cushions[i].clone();
+        let p = c.position;
+        let (x, y, z) = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
+        // collidedWithFluid: the fluid box of the cushion's own block against its box.
+        if let Some((height, _)) =
+            self.fluid_height_of(x, y, z, Some(horizon_client::blocks::Fluid::Lava))
+        {
+            let fluid = Aabb::new(
+                Vec3::new(f64::from(x), f64::from(y), f64::from(z)),
+                Vec3::new(
+                    f64::from(x) + 1.0,
+                    f64::from(y) + f64::from(height),
+                    f64::from(z) + 1.0,
+                ),
+            );
+            if aabb(c.bounds())
+                .deflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7))
+                .intersects(fluid)
+            {
+                // LAVA_IGNITE's lavaHurt deals 4 damage, which breaks the cushion.
+                self.break_cushion(i, false);
+                self.lava_hurt_sound([p.x, p.y, p.z]);
+                return true;
+            }
+        }
+        // `destroyIfInFire` hurts the cushion (`kill`), so it is removed before
+        // the survive check below.
+        if self.cushion_in_fire(&c) {
+            self.break_cushion(i, false);
+            return true;
+        }
+        // BlockAttachedEntity.tick: `discard()` then `dropItem(level, null)`.
+        if !self.cushion_survives(&c) {
+            self.discard_cushion(i);
+            return true;
+        }
+        false
     }
 
     /// `LivingEntity.stopRiding` off a cushion: `dismountVehicle` beside it,
@@ -677,6 +744,28 @@ mod tests {
     use super::*;
     use horizon_world::nbt::Tag;
 
+    /// `Entity.saveWithoutId` writes `OnGround` and `fall_distance`; a
+    /// cushion never moves, so a save keeps what it was loaded with.
+    #[test]
+    fn a_cushion_save_keeps_its_loaded_ground_state() {
+        use crate::entity_nbt::{cushion_from_nbt, cushion_to_nbt};
+        let d = |v: f64| Tag::Double(v.to_bits());
+        let pos = Tag::List(vec![d(0.5), d(64.0), d(0.5)]);
+        let raw = Tag::compound([
+            ("Pos", pos),
+            ("block_pos", Tag::IntArray(vec![0, 64, 0])),
+            ("OnGround", Tag::Byte(1)),
+            ("fall_distance", d(20.0)),
+        ]);
+        let c = cushion_from_nbt(&raw, 1).unwrap();
+        let saved = cushion_to_nbt(&c, [1, 2, 3, 4], Some(&raw));
+        assert_eq!(saved.get("OnGround"), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get("fall_distance"), Some(&d(20.0)));
+        let fresh = cushion_to_nbt(&c, [1, 2, 3, 4], None);
+        assert_eq!(fresh.get("OnGround"), Some(&Tag::Byte(0)));
+        assert_eq!(fresh.get("fall_distance"), Some(&d(0.0)));
+    }
+
     /// `Cushion.getCushionItemStackWithData`: a named cushion drops named.
     #[test]
     fn a_named_cushion_drops_with_its_name() {
@@ -700,3 +789,7 @@ mod tests {
         assert!(c.item_stack_with_data().data().is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "cushion_drop_tests.rs"]
+mod cushion_drop_tests;

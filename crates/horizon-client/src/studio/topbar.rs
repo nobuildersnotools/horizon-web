@@ -339,7 +339,11 @@ impl TopBarUi {
                 &Text::translate(key, &[]),
                 x + 8.0,
                 y + 6.0,
-                if hovered { style::white() } else { style::muted() },
+                if hovered {
+                    style::white()
+                } else {
+                    style::muted()
+                },
                 true,
             );
             if !shortcut.is_empty() {

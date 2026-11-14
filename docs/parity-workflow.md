@@ -1,6 +1,6 @@
 # Parity workflow
 
-How parity work is run, checked and merged. The harnesses themselves are described in [Rust rewrite status](rust-parity.md).
+How parity work is run, checked and merged. What is ported and where it is checked: [Rust rewrite status](rust-parity.md).
 
 ## Running the vanilla harnesses
 
@@ -72,6 +72,7 @@ A harness can declare, at the top level of its script:
 
 - `PARITY_SHARDS = N`: it runs as `NAME#1` to `NAME#N`, in parallel, each told its share in `PARITY_SHARD=i/N` (`test_datafix_parity.py` upgrades every sixth world). `NAME` on the command line or in `--known-failures` means all of them.
 - `PARITY_RUST_SCOPE = [...]`: the Rust sources its probes can reach, as path prefixes. Cargo's dep-info names every file of every crate a probe links, so without it a probe of `horizon-world` depends on all 350 of its files. The runner keeps only the scope's files if the scope is closed: nothing in it names a module, crate-root re-export or macro outside it (`crate::`, `super::`, other workspace crates; comments and strings ignored), declares a module it doesn't cover, or includes source, and nothing outside it implements anything for a type it defines. Crate roots then count without their declarations of other modules, so adding a module elsewhere doesn't rerun the harness. If the scope isn't closed the runner says why and keeps every file. `datafix` depends on 41 files this way, not 354.
+- `PARITY_MANUAL = "<how to run it>"`: the script is a proof someone runs by hand with arguments (a Java side, then a native side against its reference), not a harness. `parity.py` leaves it out of every run, `--changed` and parity-main included, and names that text when it is asked for it by name.
 
 ### Which harnesses a change affects
 
@@ -159,7 +160,28 @@ python3 tools/parity_fuzz.py --replay scenarios.json                            
 
 ## Reading vanilla
 
-Besides the Vineflower sources in `.local/minecraft/<version>/sources/`, `tools/rea_vanilla.py` queries the shipped bytecode through REA (callers through lambdas, overloads, a second decompiler); see [decompilation status](decompilation-status.md#querying-the-shipped-bytecode-with-rea).
+Game jars, decompiled sources and reports live in the gitignored `.local/`, rebuilt from your own copy of the game;
+nothing of Mojang's is committed or downloaded by the tools ([README](../README.md#build-from-source)):
+
+```sh
+python3 tools/lab.py prepare --server-jar ~/Downloads/server.jar   # checks the pinned jars (research-lock.json)
+python3 tools/lab.py decompile    # Vineflower: .local/minecraft/26.3/sources/{client,server}/
+python3 tools/lab.py status       # coverage reports under .local/minecraft/26.3/reports/
+```
+
+`tools/rea_vanilla.py` queries the shipped bytecode through [REA](https://github.com/morluto/rea) (a headless JADX)
+for what text search misses: every caller of a method including lambdas and bridges, every overload, or a second
+decompiler's view of a method whose Vineflower output looks wrong:
+
+```sh
+python3 tools/rea_vanilla.py class net.minecraft.world.level.block.DispenserBlock
+python3 tools/rea_vanilla.py method net.minecraft.world.level.block.DispenserBlock dispenseFrom
+python3 tools/rea_vanilla.py callers net.minecraft.server.level.ServerLevel tickChunk
+python3 tools/rea_vanilla.py --jar server-game classes DedicatedServer
+```
+
+REA and JADX are pinned in `research-lock.json` and downloaded into `.local/tools/` on first use; each query takes
+about five seconds. Decompiled bodies are a reading aid: the bytecode and the oracle harnesses are the reference.
 
 ## Player-facing integration and deterministic fixtures
 

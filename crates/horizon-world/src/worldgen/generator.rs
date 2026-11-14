@@ -16,6 +16,7 @@ use super::{
     },
     biome::BiomeId,
     biome_chunk::{BiomeChunk, BiomeRegion},
+    biome_chunks::BiomeChunks,
     biome_source::{BiomeSourceCatalog, ResolvedBiomeSource},
     biome_temperature::{BiomeTemperature, BiomeTemperatureSettings},
     carver::{CarverCatalog, WorldCarver, generate_carving_mask},
@@ -803,6 +804,11 @@ pub struct ProtoChunk {
     /// False when a native mod's generator turned decoration's placed
     /// features off for this chunk (`native_chunk_generate`).
     pub(super) features: bool,
+    /// A full chunk standing in a decoration region (`ImposterProtoChunk`
+    /// with `allowWrites` false): features read it, their ordinary writes
+    /// leave it as it is, and only section writes (`BulkSectionAccess`)
+    /// change it. Not saved.
+    full: bool,
 }
 impl ProtoChunk {
     /// Its own heap bytes by part (`horizon-ctl memory`): packed blocks,
@@ -876,6 +882,15 @@ impl ProtoChunk {
     /// Also restores a saved proto chunk that was decorated before it was saved.
     pub fn set_decorated(&mut self) {
         self.decorated = true;
+    }
+    /// Whether this stands for a full chunk in a decoration region ([`Self::set_full`]).
+    pub fn is_full(&self) -> bool {
+        self.full
+    }
+    /// Marks this as a full chunk standing in a decoration region (`ImposterProtoChunk`
+    /// with `allowWrites` false): ordinary feature writes leave it as it is.
+    pub fn set_full(&mut self) {
+        self.full = true;
     }
     /// Highest non-air block + 1 in the column (WORLD_SURFACE).
     pub fn surface_height(&self, x: i32, z: i32) -> i32 {
@@ -969,7 +984,8 @@ pub struct FlatSettings {
     /// `lakes`: the lava lakes (`createLakesList`) take the biome's lakes step.
     pub lakes: bool,
 }
-const CACHE_LIMIT: usize = 16384;
+/// Carver origins whose biome is kept.
+const CARVER_CACHE_LIMIT: usize = 65536;
 /// What a generator's shared caches hold ([`OverworldGenerator::cache_census`]).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CacheCensus {
@@ -1013,7 +1029,7 @@ impl ChunkWork {
     }
 }
 
-type BiomeCache = Mutex<HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>>;
+type BiomeCache = Mutex<BiomeChunks>;
 type LatticeCache = Mutex<HashMap<(i32, i32), Arc<Vec<LatticeSamples>>>>;
 /// ~33 KB a chunk in To The Max; misses only resample.
 const LATTICE_CACHE_LIMIT: usize = 1024;
@@ -1219,7 +1235,7 @@ where
             noises,
             extensions,
             picker,
-            biome_cache: Mutex::new(HashMap::new()),
+            biome_cache: Mutex::new(BiomeChunks::default()),
             lattice_cache: Mutex::new(HashMap::new()),
             biome_work: ChunkWork::new(),
             carver_cache: Mutex::new(HashMap::new()),
@@ -1437,9 +1453,6 @@ where
             .map_err(stage("biomes"))?;
         let chunk = Arc::new(chunk);
         let mut cache = self.biome_cache.lock().unwrap();
-        if cache.len() >= CACHE_LIMIT {
-            cache.clear();
-        }
         cache.insert((pos.x, pos.z), chunk.clone());
         Ok(Some(chunk))
     }
@@ -1469,7 +1482,7 @@ where
             .map_err(|e| e.to_string())?;
         let id = self.data.biome_id(name).ok_or_else(|| name.to_owned())?;
         let mut cache = self.carver_cache.lock().unwrap();
-        if cache.len() >= CACHE_LIMIT * 4 {
+        if cache.len() >= CARVER_CACHE_LIMIT {
             cache.clear();
         }
         cache.insert(key, id);
@@ -1704,6 +1717,7 @@ where
                 own_starts,
                 entities: Vec::new(),
                 features,
+                full: false,
             });
         }
         let volume = DensityVolume::new(
@@ -1895,6 +1909,7 @@ where
             own_starts,
             entities: Vec::new(),
             features,
+            full: false,
         })
     }
 }
@@ -3767,7 +3782,7 @@ impl OverworldGenerator {
                 temperatures: data
                     .temperatures
                     .iter()
-                    .map(|s| BiomeTemperature::new(*s))
+                    .map(|s| BiomeTemperature::for_generation(*s))
                     .collect(),
                 terrain_context: SamplerContext::cached(),
                 biome_context: SamplerContext::cached(),
@@ -3997,6 +4012,7 @@ impl GeneratorWorker {
 
 #[cfg(test)]
 mod tests {
+    use super::super::biome_chunks::CACHE_LIMIT;
     use super::*;
     #[test]
     fn settings_default_states_read_the_26_3_block_state_form() {
@@ -4964,18 +4980,18 @@ mod tests {
                 assert!(Arc::ptr_eq(first, other));
             }
         }
-        // Force the existing whole-cache biome eviction threshold.
+        // Two generations of other chunks push this one out of the cache.
         {
             let mut cache = pipeline.biome_cache.lock().unwrap();
-            cache.clear();
             for x in 0..CACHE_LIMIT as i32 {
                 cache.insert((x, 10000), biomes.clone());
             }
+            assert!(cache.len() <= CACHE_LIMIT);
         }
         let mut worker = generator.worker();
         let rebuilt = pipeline.biome_chunk(&mut worker.state, pos).unwrap();
         assert!(!Arc::ptr_eq(biomes, &rebuilt));
-        assert_eq!(pipeline.biome_cache.lock().unwrap().len(), 1);
+        assert!(pipeline.biome_cache.lock().unwrap().len() <= CACHE_LIMIT);
         for section in 0..24 {
             assert_eq!(biomes.section(section), rebuilt.section(section));
         }
@@ -5033,11 +5049,14 @@ mod tests {
                         "igloo",
                         "ruined_portal",
                         "mansion",
+                        "monument",
+                        "mineshaft",
+                        "stronghold",
                     ][..],
                 ),
                 (
                     "minecraft:the_nether",
-                    &["bastion_remnant", "nether_fossil"][..],
+                    &["bastion_remnant", "nether_fossil", "fortress"][..],
                 ),
                 ("minecraft:the_end", &["end_city"][..]),
             ] {
@@ -5063,15 +5082,36 @@ mod tests {
                     } else {
                         ChunkPos::new(i as i32 * 3, 0)
                     };
-                    originals.push(
+                    // A monument needs open ocean around it, which this small area may not
+                    // have: search a cell per spacing step. `structure_start` generates the
+                    // structure wherever its own checks pass, not only in the set's chunk.
+                    let search: Vec<ChunkPos> = if name == "minecraft:monument" {
+                        (0..1024)
+                            .map(|i| {
+                                ChunkPos::new(
+                                    pos.x + (i % 32 - 16) * 32,
+                                    pos.z + (i / 32 - 16) * 32,
+                                )
+                            })
+                            .collect()
+                    } else {
                         std::iter::once(pos)
                             .chain((1..64).map(|i| ChunkPos::new(pos.x + i % 8, pos.z + i / 8)))
+                            .collect()
+                    };
+                    originals.push(
+                        search
+                            .into_iter()
                             .find_map(|pos| worker.structure_start(&name, pos))
                             .unwrap_or_else(|| panic!("{seed} {name}")),
                     );
                 }
                 let mut saved = HashMap::<(i32, i32), Compound>::new();
                 worker.forget_structure_starts();
+                // A fortress start's first piece is built through the `BridgeCrossing`
+                // constructor, so vanilla saves it as `nebcr`, which the registry reads
+                // back as a plain bridge crossing: only the kind's name differs.
+                let kinds = |s: String| s.replace("kind: Start,", "kind: BridgeCrossing,");
                 for original in &mut originals {
                     // Locating a generated start can increment its count. A nonzero value also
                     // proves that loading did not silently fall back to seed-identical generation.
@@ -5086,7 +5126,12 @@ mod tests {
                                     | "minecraft:wmp"
                                     | "minecraft:nefos"
                                     | "minecraft:ecp"
+                                    | "minecraft:omb"
                             )
+                            // The mineshaft, fortress and stronghold pieces read their own tags.
+                            || ["minecraft:ms", "minecraft:ne", "minecraft:sh"]
+                                .iter()
+                                .any(|prefix| p.type_name().starts_with(prefix))
                     }) {
                         Arc::get_mut(original)
                             .expect("uncached placement start")
@@ -5112,8 +5157,8 @@ mod tests {
                         original.name
                     );
                     assert_eq!(
-                        format!("{loaded:?}"),
-                        format!("{original:?}"),
+                        kinds(format!("{loaded:?}")),
+                        kinds(format!("{original:?}")),
                         "{seed} {}: every runtime field",
                         original.name
                     );

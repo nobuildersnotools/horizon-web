@@ -20,10 +20,12 @@ use super::input_trace::{InputOrigin, TraceEvent, TraceKind};
 use super::{Game, Screen};
 use horizon_client::{Result, gamepad::Button, keybinds, text::Text, title::world_management};
 use horizon_core::geometry::Vec3;
-use horizon_os::fs::{self, PathExt};
-use horizon_os::thread;
-use horizon_os::time::{Duration, Instant, SystemTime};
-use horizon_telemetry::scrub::Scrubber;
+use horizon_os::fs::PathExt;
+use horizon_os::{
+    fs, thread,
+    time::{Duration, Instant, SystemTime},
+};
+use horizon_system::scrub::Scrubber;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -583,20 +585,25 @@ impl Game<'_> {
         if include_world {
             let root = world_root.as_ref().expect("a local world's save folder");
             if let Some(server) = self.integrated.as_ref() {
-                server.set_paused(true);
-                let saved = server.call(|game| game.save_game().map_err(|e| e.to_string()));
-                let copied = copy_tree(root, &dir.join("world"));
-                server.set_paused(self.pause);
-                match saved {
-                    Some(Ok(())) => {}
-                    Some(Err(e)) => {
+                // The server thread saves, then waits there for the copy: pausing it instead
+                // runs its pause save (which renames files into place) during the copy.
+                let (saved_tx, saved) = mpsc::channel();
+                let (copied, copied_rx) = mpsc::channel::<()>();
+                // A server that has stopped drops the task, and `saved_tx` with it.
+                server.post(move |game| {
+                    let _ = saved_tx.send(game.save_game().map_err(|e| e.to_string()));
+                    let _ = copied_rx.recv();
+                });
+                match saved.recv() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
                         return Err(format!("saving the world for the recording: {e}").into());
                     }
-                    None => {
-                        log::warn!("Horizon: the integrated server did not save for the recording")
-                    }
+                    Err(_) => return Err("the integrated server has stopped".into()),
                 }
-                copied.map_err(|e| format!("copying the world: {e}"))?;
+                let result = copy_tree(root, &dir.join("world"));
+                drop(copied);
+                result.map_err(|e| format!("copying the world: {e}"))?;
             } else {
                 self.save_game_with(true)?;
                 copy_tree(root, &dir.join("world"))
@@ -1386,6 +1393,11 @@ impl Game<'_> {
 }
 
 impl Repro {
+    /// A replay is running or waiting for its world.
+    pub(super) fn replaying(&self) -> bool {
+        self.replay.is_some() || self.pending_replay.is_some()
+    }
+
     /// An agent event while recording joins `events.jsonl`.
     pub(super) fn note_event(&mut self, tick: u64, event: &Value) {
         let Some(rec) = self.recording.as_mut() else {
@@ -1850,7 +1862,8 @@ mod tests {
 
     #[test]
     fn a_world_copy_skips_the_lock_and_symlinks() {
-        let root = std::env::temp_dir().join(format!("horizon-repro-test-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir()
+            .join(format!("horizon-repro-test-{}", horizon_os::process::id()));
         let src = root.join("src");
         let dst = root.join("dst");
         fs::create_dir_all(src.join("region")).unwrap();
@@ -1964,7 +1977,8 @@ mod tests {
 
     #[test]
     fn an_export_name_that_is_taken_gets_a_number() {
-        let root = std::env::temp_dir().join(format!("horizon-repro-dest-{}", std::process::id()));
+        let root = horizon_os::env::temp_dir()
+            .join(format!("horizon-repro-dest-{}", horizon_os::process::id()));
         fs::create_dir_all(&root).unwrap();
         let first = root.join("repro.zip");
         fs::write(&first, b"x").unwrap();

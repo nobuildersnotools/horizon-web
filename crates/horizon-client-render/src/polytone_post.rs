@@ -2,9 +2,9 @@
 //! pack runs over the world while their `activation_condition` holds, with uniform blocks from
 //! expressions (`expression_uniforms`), the `PolyGlobals` block, and targets of their own
 //! (`post_targets`) kept between frames. `post_chain` runs them; this reads what they add.
-use horizon_os::fs::PathExt;
 use crate::environment::Frame;
 use crate::post_chain::{Extras, InternalTarget};
+use horizon_os::fs::PathExt;
 use horizon_polytone::expr::Program;
 use serde_json::Value as Json;
 use std::path::Path;
@@ -76,7 +76,11 @@ fn files(root: &Path, kind: &str) -> Vec<(String, Json)> {
     for namespace in namespaces {
         let mut stack = vec![namespace.path().join("polytone").join(kind)];
         while let Some(dir) = stack.pop() {
-            for entry in horizon_os::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            for entry in horizon_os::fs::read_dir(&dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
                 let path = entry.path();
                 if path.fs_is_dir() {
                     stack.push(path);
@@ -248,9 +252,10 @@ mod tests {
         };
         let (effects, extras) = post.frame(&frame, &PolyGlobals::default());
         assert_eq!(effects, ["p:glare"]);
+        // `g.rain` is the mean of rain (0.25) and thunder (0): 0.125.
         assert_eq!(
             f32::from_le_bytes(extras.blocks["Weather"][..4].try_into().unwrap()),
-            0.75
+            0.875
         );
         assert!(extras.targets["p:history"].persistent);
         frame.rain = 1.0;

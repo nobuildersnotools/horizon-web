@@ -298,7 +298,8 @@ impl Game<'_> {
             ];
             if let Some((sprite, tint)) = self.particle_sprite(state, block) {
                 self.particles.send_particles(
-                    &ParticleOptions::block(ParticleType::Block, sprite, tint),
+                    &ParticleOptions::block(ParticleType::Block, sprite, tint)
+                        .with_source(&self.res.facts().get(state).name),
                     at,
                     [0.0; 3],
                     speed,
@@ -436,7 +437,7 @@ impl Game<'_> {
             T::Effect | T::InstantEffect => {
                 Some(ParticleData::ColorPower(rgb_int(rgb(c)), options.scale))
             }
-            T::EntityEffect | T::TintedLeaves => Some(ParticleData::Color(
+            T::EntityEffect | T::TintedLeaves | T::Flash => Some(ParticleData::Color(
                 (((c[3].clamp(0.0, 1.0) * 255.0).round() as i32) << 24) | rgb_int(rgb(c)),
             )),
             T::DragonBreath | T::SculkCharge => Some(ParticleData::Scalar(options.scale)),
@@ -492,10 +493,12 @@ impl Game<'_> {
             None => ParticleOptions::simple(ty),
             Some(ParticleData::State(s)) => {
                 let pos = at.map(|v| v.floor() as i32);
+                let state = BlockStateId(*s as u32);
                 let (sprite, tint) = self
-                    .particle_sprite(BlockStateId(*s as u32), pos)
+                    .particle_sprite(state, pos)
                     .unwrap_or_else(|| ("block/stone".into(), 0xFFFFFF));
                 ParticleOptions::block(ty, sprite, tint)
+                    .with_source(&self.res.facts().get(state).name)
             }
             Some(ParticleData::ColorScale(c, scale)) => {
                 ParticleOptions::dust(rgb(rgba(*c)), *scale)
@@ -568,7 +571,7 @@ impl Game<'_> {
             return;
         };
         // Combat feel Legacy draws a hit as 1.8.9 did: no sweep, no damage hearts.
-        if self.settings.extras.pvp.combat.hides_particle(options.ty) {
+        if self.pvp_hides_particle(options.ty) {
             return;
         }
         let (d, s) = (p.dist.map(f64::from), p.max_speed.map(f64::from));
@@ -1131,6 +1134,30 @@ mod tests {
         assert_eq!(
             particle.data,
             Some(ParticleData::Vibration { source, ticks: 7 })
+        );
+    }
+
+    /// `ParticleTypes.STREAM_CODEC` for `ColorParticleOption` (`flash`, with
+    /// `entity_effect` and `tinted_leaves`): the colour as its ARGB int.
+    #[test]
+    fn flash_particles_carry_their_colour_to_guests() {
+        let (hub, rx_near, rx_far) = test_hub("FlashTest", {
+            // `Particle::read` reads a flash's colour from its pinned id, 52.
+            let mut names = vec!["minecraft:empty".to_string(); 52];
+            names.push("minecraft:flash".to_string());
+            names
+        });
+
+        let at = [0.0, 64.0, 0.0];
+        let options = ParticleOptions::colored(ParticleType::Flash, [1.0, 0.0, 0.0, 1.0]);
+        send_hub_level_particles(&hub, &options, at, [0.0; 3], 0.0, 1, None);
+
+        assert!(rx_far.try_recv().is_err(), "only players within 32 blocks");
+        let p = level_particles(&rx_near);
+        assert_eq!(p.particle.id, 52);
+        assert_eq!(
+            p.particle.data,
+            Some(ParticleData::Color(0xFFFF_0000u32 as i32))
         );
     }
 }

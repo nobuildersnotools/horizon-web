@@ -42,7 +42,7 @@ impl Game<'_> {
     /// `/place template` picks at `at`; no processor runs, and the template's
     /// entities are left out. None for an id that doesn't parse or has a `.`
     /// or `..` part, a template the game doesn't have, and on a client.
-    /// API @API:structure_template@.
+    /// API 433.
     pub(super) fn native_structure_template(
         &mut self,
         id: &str,
@@ -104,7 +104,7 @@ fn placements(
             NativeStructureBlock {
                 pos: std::array::from_fn(|i| relative[i] + at[i]),
                 state: transforms.rotate(transforms.mirror(block.state, mirror), rotation),
-                nbt: block.nbt.clone(),
+                nbt: block.nbt.as_deref().cloned(),
             }
         })
         .collect();

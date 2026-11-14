@@ -125,7 +125,8 @@ pub fn read(dir: &Path) -> io::Result<Arc<Folder>> {
 
     let result = read_uncached(dir).map_err(|e| (e.kind(), e.to_string()));
     {
-        let mut published = horizon_os::sync::lock(&flight.result).unwrap_or_else(|e| e.into_inner());
+        let mut published =
+            horizon_os::sync::lock(&flight.result).unwrap_or_else(|e| e.into_inner());
         *published = Some(result.clone());
         flight.ready.notify_all();
     }

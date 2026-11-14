@@ -3,17 +3,17 @@
 //! death are expressions, and emitters that spawn particles from blocks and from particles. Each
 //! custom particle is an ordinary engine particle (sprite set, interpolation, rendering, the
 //! total limit) with a controller that runs the type's ticker.
-use horizon_os::fs::PathExt;
 use super::{
     Behaviour, Fluid, Particle, ParticleEngine, ParticleLevel, ParticleOptions, ParticleType,
     ParticleUpdate, Sprite,
 };
 use crate::environment::Frame;
 use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_os::fs::PathExt;
 use horizon_polytone::expr::{Host, Program, Root, Value as V};
 use horizon_polytone::particles::{
-    BlockEmitters, CustomParticle, Emitter, EntityEmitters, LiquidAffinity, RenderType,
-    SoundEmitter,
+    BlockEmitters, CustomParticle, Emitter, EntityEmitters, LiquidAffinity, ParticleModifier,
+    RenderType, SoundEmitter,
 };
 use horizon_world::registry::BlockRegistry;
 use serde_json::Value as Json;
@@ -38,10 +38,17 @@ pub struct Registry {
     blocks: &'static BlockRegistry,
     /// Each custom particle type's colormap (`colormap`), by type id.
     tints: HashMap<String, Arc<Tint>>,
+    /// The tags modifiers' `targets` and emitters' `biomes` name.
+    tags: crate::pack_tags::Tags,
+    /// Each model particle type's faces (`model`), by type id.
+    models: HashMap<String, Arc<super::polytone_model::ParticleModel>>,
     /// Sound ids as the engine's sound queue holds them, interned once.
     sound_names: Mutex<HashMap<String, &'static str>>,
     /// Sounds the custom particles played this tick (`ParticleEngine::tick` plays them).
     sounds: Mutex<Vec<Sound>>,
+    /// The particle modifiers with their colormaps, and by particle type the ones aimed at it.
+    particle_modifiers: Vec<(ParticleModifier, Option<Tint>, Option<Filter>)>,
+    modifiers_by_type: Mutex<HashMap<String, Arc<[usize]>>>,
 }
 
 /// A sound for the engine's queue: id, position, volume, pitch, delayed by the distance.
@@ -119,7 +126,11 @@ fn json_files(root: &Path, dir: &Path) -> Vec<(String, Json)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        for entry in horizon_os::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        for entry in horizon_os::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let path = entry.path();
             if path.fs_is_dir() {
                 stack.push(path);
@@ -141,6 +152,15 @@ fn json_files(root: &Path, dir: &Path) -> Vec<(String, Json)> {
     out
 }
 
+impl super::ParticleOptions {
+    /// These options with the block or item they carry (`source`), for particle modifier
+    /// filters.
+    pub fn with_source(mut self, id: &str) -> Self {
+        self.source = Some(Arc::from(id));
+        self
+    }
+}
+
 impl Registry {
     /// Every `assets/<namespace>/polytone/{custom_particles,block_modifiers,entity_modifiers}/**.json` under a
     /// pack overlay root.
@@ -152,6 +172,16 @@ impl Registry {
         let mut types = HashMap::new();
         let mut modifiers = Vec::new();
         let mut entity_modifiers = Vec::new();
+        let mut particle_modifiers = Vec::new();
+        // Custom colours' `particle.<id>`: a modifier that sets only the colour, below the files'.
+        for (id, color) in horizon_polytone::colors::PackColors::read(pack_root).particles() {
+            let json = serde_json::json!({"targets": [id], "color": color});
+            match ParticleModifier::parse(&json, None) {
+                Ok(Some(m)) => particle_modifiers.push((m, None, None)),
+                Ok(None) => {}
+                Err(e) => log::warn!("colors particle.{id}: {e}"),
+            }
+        }
         let namespaces = horizon_os::fs::read_dir(pack_root.join("assets"))
             .into_iter()
             .flatten()
@@ -177,6 +207,24 @@ impl Registry {
                     Err(e) => log::warn!("{relative}: {e}"),
                 }
             }
+            for (relative, json) in json_files(pack_root, &polytone.join("particle_modifiers")) {
+                let implicit = horizon_polytone::implicit_id(&relative, "particle_modifiers");
+                match ParticleModifier::parse(&json, implicit.as_deref()) {
+                    Ok(Some(m)) => {
+                        let tint = m.colormap.as_ref().and_then(|json| {
+                            let tint = Tint::read(pack_root, json);
+                            if tint.is_none() {
+                                log::warn!("{relative}: colormap {json} not found");
+                            }
+                            tint
+                        });
+                        let filter = m.filter.as_ref().map(Filter::read);
+                        particle_modifiers.push((m, tint, filter));
+                    }
+                    Ok(None) => {}
+                    Err(e) => log::warn!("{relative}: {e}"),
+                }
+            }
             for (relative, json) in json_files(pack_root, &polytone.join("block_modifiers")) {
                 let implicit = horizon_polytone::implicit_id(&relative, "block_modifiers");
                 match BlockEmitters::parse(&json, implicit.as_deref()) {
@@ -186,7 +234,8 @@ impl Registry {
                 }
             }
         }
-        // Each block's modifiers: the highest priority ones (block tags aren't resolved here).
+        // Each block's modifiers: the highest priority ones.
+        let tags = crate::pack_tags::Tags::new(pack_root);
         let mut by_name: HashMap<&str, Option<Arc<[Arc<BlockEmitters>]>>> = HashMap::new();
         let block_emitters = (0..blocks.len() as u32)
             .map(|i| {
@@ -199,7 +248,10 @@ impl Registry {
                     .or_insert_with(|| {
                         let aimed: Vec<_> = modifiers
                             .iter()
-                            .filter(|m| m.targets.matches(name, |_| false))
+                            .filter(|m| {
+                                m.targets
+                                    .matches(name, |tag| tags.contains("block", tag, name))
+                            })
                             .collect();
                         let top = aimed.iter().map(|m| m.priority).max()?;
                         Some(
@@ -213,6 +265,12 @@ impl Registry {
                     .clone()
             })
             .collect();
+        let models = super::polytone_model::read_models(
+            pack_root,
+            types
+                .iter()
+                .filter_map(|(id, def)| Some((id, def.render.get("model")?))),
+        );
         let tints = types
             .iter()
             .filter_map(|(id, def)| {
@@ -236,8 +294,12 @@ impl Registry {
             configs,
             blocks,
             tints,
+            models,
+            tags,
             sound_names: Mutex::default(),
             sounds: Mutex::default(),
+            particle_modifiers,
+            modifiers_by_type: Mutex::default(),
         }
     }
 
@@ -245,6 +307,34 @@ impl Registry {
         self.types.is_empty()
             && self.block_emitters.iter().all(Option::is_none)
             && self.entity_modifiers.is_empty()
+            && self.particle_modifiers.is_empty()
+    }
+
+    /// Whether any pack modifies vanilla or mod particles (`particle_modifiers`).
+    pub(super) fn modifies_particles(&self) -> bool {
+        !self.particle_modifiers.is_empty()
+    }
+
+    /// The particle modifiers aimed at a particle type (`minecraft:flame`), in the order read;
+    /// `#tags` in `targets` are particle type tags.
+    fn modifiers_for(&self, id: &str) -> Arc<[usize]> {
+        let mut cache = self
+            .modifiers_by_type
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(found) = cache.get(id) {
+            return found.clone();
+        }
+        let found: Arc<[usize]> = (0..self.particle_modifiers.len())
+            .filter(|&i| {
+                self.particle_modifiers[i]
+                    .0
+                    .targets
+                    .matches(id, |tag| self.tags.contains("particle_type", tag, id))
+            })
+            .collect();
+        cache.insert(id.to_owned(), found.clone());
+        found
     }
 
     /// A sound id as the engine's sound queue holds it.
@@ -278,8 +368,8 @@ impl Registry {
         }
     }
 
-    /// The entity modifiers aimed at an entity type (`minecraft:player`); entity tags aren't
-    /// resolved here.
+    /// The entity modifiers aimed at an entity type (`minecraft:player`); `#tags` in `targets`
+    /// are entity type tags.
     fn entity_emitters(&self, entity: &str) -> Arc<[Arc<EntityEmitters>]> {
         let mut cache = self
             .entity_emitters
@@ -290,7 +380,10 @@ impl Registry {
             .or_insert_with(|| {
                 self.entity_modifiers
                     .iter()
-                    .filter(|m| m.targets.matches(entity, |_| false))
+                    .filter(|m| {
+                        m.targets
+                            .matches(entity, |tag| self.tags.contains("entity_type", tag, entity))
+                    })
                     .cloned()
                     .collect()
             })
@@ -402,14 +495,14 @@ enum Subject<'a> {
 }
 
 /// What one expression runs against: its subject, the frame and the level.
-struct Ctx<'a> {
+struct Ctx<'a, 'l> {
     subject: Subject<'a>,
     random: &'a mut LegacyRandom,
     custom: &'a mut f64,
     customs: &'a mut BTreeMap<String, f64>,
     frame: &'a Frame,
     registry: &'a Registry,
-    level: Option<&'a ParticleLevel<'a>>,
+    level: Option<&'a ParticleLevel<'l>>,
     blocks: Vec<[i32; 3]>,
 }
 
@@ -427,7 +520,7 @@ fn axis(name: &str) -> usize {
     usize::from(name.as_bytes()[0] - b'x')
 }
 
-impl Ctx<'_> {
+impl Ctx<'_, '_> {
     fn position(&self) -> [f64; 3] {
         match &self.subject {
             Subject::Particle(p) => p.position,
@@ -595,7 +688,7 @@ impl Ctx<'_> {
     }
 }
 
-impl Host for Ctx<'_> {
+impl Host for Ctx<'_, '_> {
     fn root(&mut self, root: Root) -> V {
         match root {
             Root::Object => V::Object(SELF),
@@ -662,7 +755,7 @@ impl Host for Ctx<'_> {
             (CAMERA, "x" | "y" | "z") => num(frame.camera[axis(name)]),
             (CAMERA, "viewDistance") => num(f64::from(frame.render_distance * 16)),
             (CAMERA, _) => self.positional(ParticleLevel::block_at(frame.camera), name, args),
-            (GLOBAL, "rain") => num(f64::from(frame.rain)),
+            (GLOBAL, "rain") => num(frame.global_rain()),
             (GLOBAL, "time") => num(frame.game_time as f64),
             (GLOBAL, "dayTime") => num(frame.day_time as f64),
             (GLOBAL, "skyType") => num(f64::from(frame.sky_type)),
@@ -686,7 +779,7 @@ impl Host for Ctx<'_> {
                 // `r.noise(x, y)`: one simplex noise (named noises aren't read yet).
                 let mut coords = args.iter().filter(|v| !matches!(v, V::Str(_))).map(V::num);
                 let (x, y) = (coords.next().unwrap_or(0.0), coords.next().unwrap_or(0.0));
-                num(f64::from(crate::environment::polytone_noise().get2(x, y)))
+                num(crate::environment::polytone_noise().get(x, y))
             }
             (id, _) if id >= BLOCKS => {
                 let at = *self
@@ -712,6 +805,26 @@ impl Host for Ctx<'_> {
                 .ok_or_else(|| format!("no config {id}")),
             _ => Err(format!("{name} is not available here")),
         }
+    }
+
+    /// A particle's own fields, as `particle_method` answers them.
+    fn field(&mut self, root: Root, field: horizon_polytone::expr::Field) -> Option<V> {
+        use horizon_polytone::expr::Field as F;
+        let Subject::Particle(p) = &self.subject else {
+            return None;
+        };
+        if root != Root::Object {
+            return None;
+        }
+        Some(V::Num(match field {
+            F::Age => f64::from(p.age),
+            F::Life => f64::from(p.lifetime),
+            F::Custom => *self.custom,
+            F::X => p.position[0],
+            F::Y => p.position[1],
+            F::Z => p.position[2],
+            F::Temperature | F::Downfall => return None,
+        }))
     }
 }
 
@@ -761,7 +874,7 @@ fn state_matches(predicate: &Json, ctx: &Ctx, at: [i32; 3]) -> bool {
     }
 }
 
-/// Whether `biomes` (an id, a list of ids, or a tag, which isn't resolved here) holds the biome
+/// Whether `biomes` (an id, a `#tag`, or a list of them) holds the biome
 /// at `at`.
 fn biome_matches(biomes: &Json, ctx: &Ctx, at: [i32; 3]) -> bool {
     let Some(biome) = ctx.biome(at) else {
@@ -774,9 +887,14 @@ fn biome_matches(biomes: &Json, ctx: &Ctx, at: [i32; 3]) -> bool {
             format!("minecraft:{s}")
         }
     };
+    // An id, or a `#tag` of biomes.
+    let holds = |entry: &str| match entry.strip_prefix('#') {
+        Some(tag) => ctx.registry.tags.contains("worldgen/biome", tag, &biome),
+        None => id(entry) == biome,
+    };
     match biomes {
-        Json::String(s) => id(s) == biome,
-        Json::Array(list) => list.iter().filter_map(Json::as_str).any(|s| id(s) == biome),
+        Json::String(s) => holds(s),
+        Json::Array(list) => list.iter().filter_map(Json::as_str).any(holds),
         _ => true,
     }
 }
@@ -977,6 +1095,40 @@ const INITIALIZED: [&str; 13] = [
     "dz",
 ];
 
+/// Whether no block's collision shape overlaps `bb` (where the query fails, nothing does).
+pub(super) fn unobstructed(level: &ParticleLevel<'_>, bb: horizon_core::geometry::Aabb) -> bool {
+    let mut scene = crate::collisions::SceneCollisions {
+        world: level.world,
+        binding: level.collision,
+        subject: None,
+    };
+    scene.cells_without_collision(bb) || scene.unobstructed(bb).unwrap_or(true)
+}
+
+impl ParticleEngine {
+    /// Whether a pending Polytone particle joins the world. One with physics whose box starts
+    /// inside a block's collision never does, and its type's `limit` is then counted among those
+    /// that joined, so one that never joins takes no place (measured on the mod: with `limit` 1,
+    /// one born inside a block and one clear of it in the same tick, the clear one shows).
+    pub(super) fn polytone_joins(&self, p: &Particle, level: &ParticleLevel<'_>) -> bool {
+        if !p.spawn_check {
+            return true;
+        }
+        if !unobstructed(level, p.bb) {
+            return false;
+        }
+        let Some(name) = p.polytone_type.as_deref() else {
+            return true;
+        };
+        let def = self.polytone.as_ref().and_then(|r| r.get(name));
+        let limit = def.and_then(|d| d.limit.filter(|_| d.gpu.is_none()));
+        limit.is_none_or(|limit| {
+            let same = |q: &&Particle| !q.removed && q.polytone_type.as_deref() == Some(name);
+            self.particles.iter().filter(same).count() < limit as usize
+        })
+    }
+}
+
 impl super::ParticleController for Controller {
     fn tick(&mut self, p: &mut Particle, level: &ParticleLevel<'_>) -> ParticleUpdate {
         let mut update = ParticleUpdate::default();
@@ -1091,7 +1243,8 @@ pub(super) fn make(
     velocity: [f64; 3],
     seed: i64,
 ) -> Option<Particle> {
-    // `limit`: at most that many of the type alive at once.
+    // `limit`: at most that many of the type alive at once. A pending one with physics may never
+    // join (`polytone_joins`), so it takes no place until it does.
     // (A GPU particle's `limit` is its ring of records instead.)
     if let Some(limit) = def.limit
         && def.gpu.is_none()
@@ -1099,7 +1252,7 @@ pub(super) fn make(
         let alive = engine
             .particles
             .iter()
-            .chain(&engine.pending)
+            .chain(engine.pending.iter().filter(|p| !p.spawn_check))
             .filter(|p| !p.removed && p.polytone_type.as_deref() == Some(name))
             .count();
         if alive >= limit as usize {
@@ -1107,10 +1260,11 @@ pub(super) fn make(
         }
     }
     // `exclusion_radius`: none spawns within that distance of a live one of its type (rain
-    // splashes, one per patch of ground).
+    // splashes, one per patch of ground from tick to tick). Only those already in the world count: measured on
+    // the mod, two spawned in the same tick a block apart both show, with or without physics.
     if def.exclusion_radius > 0.0 && def.gpu.is_none() {
         let r2 = def.exclusion_radius * def.exclusion_radius;
-        let crowded = engine.particles.iter().chain(&engine.pending).any(|p| {
+        let crowded = engine.particles.iter().any(|p| {
             !p.removed
                 && p.polytone_type.as_deref() == Some(name)
                 && (0..3)
@@ -1128,13 +1282,19 @@ pub(super) fn make(
     particle.gravity = 0.0;
     particle.has_physics = def.has_physics;
     let mut frames = 0;
-    // A model particle (`model`) isn't drawn yet: it still ticks and emits. A GPU particle is
-    // drawn from its record instead (`polytone_gpu`).
+    // A model particle draws its model's faces; one whose model is missing still ticks and
+    // emits. A GPU particle is drawn from its record instead (`polytone_gpu`).
+    let model = registry.models.get(name).cloned();
     let hidden = def.render_type == RenderType::Invisible
-        || def.render.contains_key("model")
+        || (def.render.contains_key("model") && model.is_none())
         || def.gpu.is_some();
-    match engine.mod_sets.get(name) {
-        Some(&(set, _)) => {
+    // A mod's sprite set, or for a type replacing a vanilla one, that type's.
+    let set = engine.mod_sets.get(name).map(|&(set, _)| set).or_else(|| {
+        let vanilla = name.strip_prefix("minecraft:")?;
+        engine.sets.get(&ParticleType::from_name(vanilla)?).copied()
+    });
+    match set {
+        Some(set) => {
             let sprites = engine.set_sprites.get(set as usize)?;
             frames = sprites.len();
             particle.set = Some(set);
@@ -1146,9 +1306,15 @@ pub(super) fn make(
             particle.sprite = Sprite::Index(*sprites.get(pick).or(sprites.first())?);
         }
         None if hidden => {}
+        None if model.is_some() => {}
         None => return None,
     }
     particle.no_render = hidden;
+    if let Some(model) = model {
+        // The sprite lookup that admits a particle to drawing: its first face's.
+        particle.sprite = Sprite::Named(model.quads[0].sprite.clone());
+        particle.model = Some(model);
+    }
     particle.orientation = super::polytone_gpu::Orientation::parse(&def.rotation_mode);
     particle.additive = def.render_type == RenderType::AdditiveTranslucent;
     // `light_level`: the block light the particle gives itself (wiki "Custom Particle Types"),
@@ -1195,6 +1361,10 @@ pub(super) fn make(
     particle.polytone_type =
         (def.limit.is_some() || def.exclusion_radius > 0.0).then(|| Arc::from(name));
     particle.bb = super::aabb_at(position, particle.bb_width, particle.bb_height);
+    // A particle with physics whose box starts inside a block's collision never joins the world:
+    // it is not drawn and none of its emitters run (measured on the mod: one spawned just under a
+    // block, where falling leaves start, never shows; one 0.01 clear of it does).
+    particle.spawn_check = def.has_physics;
     particle.controller = Some(Box::new(Controller {
         def: def.clone(),
         registry: registry.clone(),
@@ -1207,6 +1377,108 @@ pub(super) fn make(
     }));
     Some(particle)
 }
+
+/// A particle modifier's `filter`: the blocks and items (an id or a list each) whose particles
+/// it changes.
+struct Filter {
+    blocks: Vec<String>,
+    items: Vec<String>,
+}
+
+impl Filter {
+    fn read(json: &Json) -> Self {
+        let ids = |key: &str| -> Vec<String> {
+            let id = |s: &str| {
+                if s.contains(':') {
+                    s.to_owned()
+                } else {
+                    format!("minecraft:{s}")
+                }
+            };
+            match &json[key] {
+                Json::String(s) => vec![id(s)],
+                Json::Array(list) => list.iter().filter_map(Json::as_str).map(id).collect(),
+                _ => Vec::new(),
+            }
+        };
+        Self {
+            blocks: ids("block"),
+            items: ids("item"),
+        }
+    }
+
+    /// Whether a particle carrying `source` (a block's or an item's id) passes.
+    fn passes(&self, source: Option<&str>) -> bool {
+        source.is_some_and(|s| self.blocks.iter().chain(&self.items).any(|id| id == s))
+    }
+}
+
+/// Runs the packs' particle modifiers aimed at `id` on a particle that was just made: each
+/// expression once, against the particle as its constructor left it (`size` scales it, `speed`
+/// sets its power, as vanilla's `Particle.scale` and `setPower`).
+pub(super) fn modify(registry: &Registry, id: &str, source: Option<&str>, p: &mut Particle) {
+    let modifiers = registry.modifiers_for(id);
+    if modifiers.is_empty() {
+        return;
+    }
+    let Ok(frame) = registry.frame.read() else {
+        return;
+    };
+    let mut random = std::mem::replace(&mut p.random, LegacyRandom::new(0));
+    let (mut custom, mut customs) = (0.0, BTreeMap::new());
+    for &i in modifiers.iter() {
+        let (modifier, tint, filter) = &registry.particle_modifiers[i];
+        if filter.as_ref().is_some_and(|f| !f.passes(source)) {
+            continue;
+        }
+        let mut ctx = Ctx {
+            subject: Subject::Particle(p),
+            random: &mut random,
+            custom: &mut custom,
+            customs: &mut customs,
+            frame: &frame,
+            registry,
+            level: None,
+            blocks: Vec::new(),
+        };
+        // Every expression reads the particle before this modifier changes it.
+        let value =
+            |ctx: &mut Ctx, key: &str| modifier.fields.get(key).and_then(|prog| eval(prog, ctx));
+        let values = MODIFIED.map(|key| value(&mut ctx, key));
+        let tinted = tint.as_ref().and_then(|t| t.sample(&mut ctx));
+        drop(ctx);
+        let [color, red, green, blue, alpha, life, size, speed] = values;
+        if let Some(rgb) = tinted {
+            p.rgba[..3].copy_from_slice(&rgb);
+        }
+        if let Some(c) = color {
+            let c = c as i64;
+            for (channel, shift) in [16, 8, 0].into_iter().enumerate() {
+                p.rgba[channel] = ((c >> shift) & 0xff) as f32 / 255.0;
+            }
+        }
+        for (channel, v) in [red, green, blue, alpha].into_iter().enumerate() {
+            if let Some(v) = v {
+                p.rgba[channel] = v as f32;
+            }
+        }
+        if let Some(life) = life {
+            p.lifetime = life as i32;
+        }
+        if let Some(size) = size {
+            p.scale(size as f32);
+        }
+        if let Some(speed) = speed {
+            p.set_power(speed as f32);
+        }
+    }
+    p.random = random;
+}
+
+/// The fields a particle modifier sets, in the order `modify` applies them.
+const MODIFIED: [&str; 8] = [
+    "color", "red", "green", "blue", "alpha", "life", "size", "speed",
+];
 
 impl ParticleEngine {
     /// The emitters of the packs' entity modifiers aimed at `entity` (its type, as
@@ -1251,6 +1523,19 @@ impl ParticleEngine {
         }
     }
 
+    /// Whether the packs' block modifiers stop `state`'s own particles (`disable_particles`): its
+    /// `Block.animateTick` doesn't run.
+    pub fn polytone_disables_particles(
+        &self,
+        state: horizon_world::registry::BlockStateId,
+    ) -> bool {
+        self.polytone
+            .as_ref()
+            .and_then(|r| r.block_emitters.get(state.0 as usize))
+            .and_then(Option::as_ref)
+            .is_some_and(|modifiers| modifiers.iter().any(|m| m.disable_particles))
+    }
+
     /// The block emitters of the packs' block modifiers aimed at the block at `at`, run from a
     /// block animate tick (`Block.animateTick`, as torches spawn their flames).
     pub fn polytone_animate(&mut self, level: &ParticleLevel<'_>, at: [i32; 3]) {
@@ -1291,6 +1576,31 @@ impl ParticleEngine {
     }
 }
 
+impl ParticleEngine {
+    /// Sets (or clears) the resource packs' Polytone custom particle types.
+    pub fn set_polytone(&mut self, registry: Option<Arc<Registry>>) {
+        let registry = registry.filter(|r| !r.is_empty());
+        let same = match (&self.polytone, &registry) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.polytone_gpu.clear();
+            self.polytone_overrides = registry
+                .iter()
+                .flat_map(|r| {
+                    ParticleType::ALL.iter().filter_map(|&ty| {
+                        let id = format!("minecraft:{}", ty.name());
+                        r.get(&id).is_some().then_some((ty, id))
+                    })
+                })
+                .collect();
+        }
+        self.polytone = registry;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1328,14 +1638,14 @@ mod tests {
     fn pack(files: &[(&str, serde_json::Value)]) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
+        let root = horizon_os::env::temp_dir().join(format!(
             "horizon-polytone-particles-{}-{n}",
-            std::process::id()
+            horizon_os::process::id()
         ));
         for (path, json) in files {
             let path = root.join(path);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, json.to_string()).unwrap();
+            horizon_os::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            horizon_os::fs::write(path, json.to_string()).unwrap();
         }
         root
     }
@@ -1417,6 +1727,22 @@ mod tests {
     }
 
     #[test]
+    fn disable_particles_stops_only_its_blocks_own_particles() {
+        let blocks = blocks();
+        let root = pack(&[(
+            "assets/minecraft/polytone/block_modifiers/torch.json",
+            serde_json::json!({"disable_particles": true}),
+        )]);
+        let engine = engine(Registry::read(&root, Default::default(), blocks));
+        let state = |name| blocks.default_state(name).unwrap();
+        assert!(engine.polytone_disables_particles(state("minecraft:torch")));
+        assert!(!engine.polytone_disables_particles(state("minecraft:air")));
+        // Without a Polytone pack nothing is stopped.
+        let plain = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
+        assert!(!plain.polytone_disables_particles(state("minecraft:torch")));
+    }
+
+    #[test]
     fn a_block_emitter_spawns_a_custom_particle_its_values_seed() {
         let blocks = blocks();
         let root = spark_pack();
@@ -1426,6 +1752,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let mut engine = engine(Registry::read(&root, Default::default(), blocks));
         // Air has no emitters; the torch fires its first emitter only.
@@ -1440,7 +1767,7 @@ mod tests {
         assert_eq!((p.lifetime, p.size), (10, 0.5));
         assert_eq!(&p.rgba[..2], &[0.75, 0.5]);
         assert!(matches!(p.sprite, Sprite::Index(10)));
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     /// `light_level` is a floor under the block light a custom particle is drawn with (as the
@@ -1465,6 +1792,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let mut engine = engine(Registry::read(&root, Default::default(), blocks));
         engine.polytone_animate(&level, [1, 64, 1]);
@@ -1473,7 +1801,7 @@ mod tests {
         assert_eq!(p.light_coords(0.0, 240, 0), (240, 128));
         // A brighter block light is kept.
         assert_eq!(p.light_coords(0.0, 0, 208), (0, 208));
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1486,6 +1814,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let mut engine = engine(Registry::read(&root, Default::default(), blocks));
         engine.polytone_animate(&level, [1, 64, 1]);
@@ -1500,7 +1829,7 @@ mod tests {
         assert!(matches!(p.sprite, Sprite::Index(10)));
         engine.tick_particle(&mut p, &level);
         assert!(p.removed, "removed once o.age >= 4");
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1531,6 +1860,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let registry = Registry::read(&root, Default::default(), blocks);
         let frame = registry.frame.clone();
@@ -1550,7 +1880,7 @@ mod tests {
         // `limit` 1: no second one while the first lives.
         engine.polytone_entity(&level, "minecraft:player", feet);
         assert_eq!(engine.pending.len(), 1);
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1559,7 +1889,8 @@ mod tests {
         let root = pack(&[
             (
                 "assets/test/polytone/custom_particles/splash.json",
-                serde_json::json!({"has_physics": false, "exclusion_radius": 1, "render_type": "invisible"}),
+                serde_json::json!({"has_physics": false, "exclusion_radius": 1, "render_type": "invisible",
+                    "initializer": {"lifetime": "100"}}),
             ),
             (
                 "assets/test/polytone/custom_particles/drop.json",
@@ -1569,7 +1900,8 @@ mod tests {
                 "assets/minecraft/polytone/entity_modifiers/player.json",
                 serde_json::json!({"emitters": [
                     {"particle": "test:splash", "x": "0", "chance": "1"},
-                    // 0.5 from the first: excluded.
+                    // 0.5 from the first, in the same tick: the first isn't in the world yet,
+                    // so it spawns (measured on the mod).
                     {"particle": "test:splash", "x": "0.5", "chance": "1"},
                     // 3 away: spawns.
                     {"particle": "test:splash", "x": "3", "chance": "1"},
@@ -1584,14 +1916,23 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let registry = Registry::read(&root, Default::default(), blocks);
         let mut engine = engine(registry);
         engine.polytone_entity(&level, "minecraft:player", [1.0, 64.0, 1.0]);
         let mut xs: Vec<f64> = engine.pending.iter().map(|p| p.position[0]).collect();
         xs.sort_by(f64::total_cmp);
-        assert_eq!(xs, [1.0, 1.5, 4.0]);
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(xs, [1.0, 1.5, 1.5, 4.0]);
+        // Once they are in the world, the next tick's splashes near them are excluded; ones
+        // farther than the radius from all of them spawn, again without excluding each other.
+        engine.tick(&level);
+        let splashes = |p: &&Particle| p.polytone_type.as_deref() == Some("test:splash");
+        engine.polytone_entity(&level, "minecraft:player", [1.0, 64.0, 1.0]);
+        assert_eq!(engine.pending.iter().filter(splashes).count(), 0);
+        engine.polytone_entity(&level, "minecraft:player", [9.0, 64.0, 1.0]);
+        assert_eq!(engine.pending.iter().filter(splashes).count(), 3);
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     /// Measured in Java: a custom particle's `movement_aligned` quad has its texture's top
@@ -1617,6 +1958,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let mut engine = engine(Registry::read(&root, Default::default(), blocks));
         let rect = crate::hud::Rect {
@@ -1634,7 +1976,7 @@ mod tests {
         // The camera 5 blocks south, at the particle's height.
         let camera = DVec3::new(p.position[0], p.position[1], p.position[2] + 5.0);
         let mut out = Vec::new();
-        engine.render(camera, 0.0, 0.0, 0.0, &|_| 0xF0, &mut out);
+        engine.render(camera, glam::Quat::IDENTITY, 0.0, &|_| 0xF0, &mut out);
         assert_eq!(out.len(), 4);
         for v in &out {
             // The texture's top row (v 0) under the centre, its bottom row over it.
@@ -1644,7 +1986,7 @@ mod tests {
                 assert!(v.pos[1] > 0.0, "bottom row at {:?}", v.pos);
             }
         }
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     /// An `additive_translucent` custom particle takes the fog in Java, as vanilla's particle
@@ -1669,6 +2011,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let mut engine = engine(Registry::read(&root, Default::default(), blocks));
         let rect = crate::hud::Rect {
@@ -1685,8 +2028,7 @@ mod tests {
         let mut out = Vec::new();
         engine.render(
             DVec3::new(1.0, 64.0, 6.0),
-            0.0,
-            0.0,
+            glam::Quat::IDENTITY,
             0.0,
             &|_| 0xF0,
             &mut out,
@@ -1699,7 +2041,7 @@ mod tests {
                 .iter()
                 .all(|v| v.layer & 0xffff == crate::gfx::ADDITIVE_PARTICLE_OVERLAY)
         );
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     /// A particle's emitter spawns while the live particles tick: its children's
@@ -1730,6 +2072,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let mut engine = engine(Registry::read(&root, Default::default(), blocks));
         engine.polytone_entity(&level, "minecraft:player", [1.0, 70.0, 1.0]);
@@ -1743,7 +2086,7 @@ mod tests {
             .filter(|p| p.polytone_type.as_deref() == Some("test:ray"))
             .count();
         assert_eq!(rays, 1);
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1778,6 +2121,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let mut engine = engine(Registry::read(&root, Default::default(), blocks));
         let rect = crate::hud::Rect {
@@ -1798,8 +2142,7 @@ mod tests {
         let mut out = Vec::new();
         engine.render(
             DVec3::new(1.0, 70.0, 1.0),
-            0.0,
-            0.0,
+            glam::Quat::IDENTITY,
             0.0,
             &|_| 0xF0,
             &mut out,
@@ -1818,7 +2161,7 @@ mod tests {
             0,
             "gone once its 3 ticks are over"
         );
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1844,6 +2187,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let registry = Arc::new(Registry::read(&root, Default::default(), blocks));
         // The chunk's biome is id 0: plains, whose foliage is #336699.
@@ -1874,7 +2218,70 @@ mod tests {
             (sounds[0].0, sounds[0].2, sounds[0].3),
             ("minecraft:block.note_block.harp", 0.5, 1.0)
         );
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn custom_colours_recolour_their_particle_type() {
+        let root = pack(&[(
+            "assets/obs/polytone/colors.json",
+            serde_json::json!({"particle": {"minecraft:flame": "0x0000ff"}}),
+        )]);
+        let registry = Registry::read(&root, Default::default(), blocks());
+        let colour = |kind: &str| {
+            let mut p = Particle::blank(ParticleType::Flame, [0.0; 3]);
+            modify(&registry, kind, None, &mut p);
+            p.rgba
+        };
+        assert_eq!(colour("minecraft:flame"), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(colour("minecraft:smoke"), [1.0; 4]);
+        horizon_os::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn particle_modifiers_scale_power_and_recolour_their_particles_once() {
+        let root = pack(&[
+            (
+                "assets/minecraft/polytone/particle_modifiers/flame.json",
+                serde_json::json!({"size": "2", "life": "LIFETIME + 5", "red": "0.5", "speed": "2"}),
+            ),
+            (
+                "assets/pack/polytone/particle_modifiers/smoky.json",
+                serde_json::json!({"targets": ["minecraft:smoke"], "color": "0x336699"}),
+            ),
+        ]);
+        let registry = Registry::read(&root, Default::default(), blocks());
+        let flame = || {
+            let mut p = Particle::blank(ParticleType::Flame, [0.0; 3]);
+            p.size = 0.1;
+            p.lifetime = 10;
+            p.velocity = [0.25, f64::from(0.1f32), -0.5];
+            p
+        };
+        let mut p = flame();
+        modify(&registry, "minecraft:flame", None, &mut p);
+        // `size` multiplies, `speed` is vanilla's power: x and z doubled, a y of 0.1 kept.
+        assert_eq!((p.size, p.lifetime, p.rgba[0]), (0.2, 15, 0.5));
+        assert_eq!(p.velocity, [0.5, f64::from(0.1f32), -1.0]);
+        // Another type's modifier, by its targets: the packed colour.
+        let mut p = flame();
+        modify(&registry, "minecraft:smoke", None, &mut p);
+        assert_eq!(
+            &p.rgba[..3],
+            &[
+                0x33 as f32 / 255.0,
+                0x66 as f32 / 255.0,
+                0x99 as f32 / 255.0
+            ]
+        );
+        assert_eq!((p.size, p.lifetime), (0.1, 10));
+        // No modifier aimed at it: untouched.
+        let mut p = flame();
+        modify(&registry, "minecraft:soul_fire_flame", None, &mut p);
+        assert_eq!(
+            (p.size, p.lifetime, p.velocity),
+            (0.1, 10, [0.25, f64::from(0.1f32), -0.5])
+        );
     }
 
     /// The freepack's light rays come from an emitter with physics that rests beside a leaf and
@@ -1899,6 +2306,7 @@ mod tests {
             facts: &scene.facts,
             collision: &scene.collision,
             player: None,
+            cached_chunk: std::cell::Cell::new(None),
         };
         let mut engine = engine(Registry::read(&root, Default::default(), blocks));
         engine.polytone_entity(&level, "minecraft:player", [1.5, 70.0, 1.5]);
@@ -1911,6 +2319,323 @@ mod tests {
         p.stopped_by_collision = true;
         engine.tick_particle(&mut p, &level);
         assert!(p.removed);
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `scene`, with the torch a full block of collision: something a particle's box can start in.
+    fn solid_scene(blocks: &'static BlockRegistry) -> Scene {
+        use horizon_core::geometry::{Axis, VoxelShape};
+        let tag = |shape: VoxelShape| {
+            let sizes = shape.sizes();
+            let occupied = (0..sizes[2])
+                .flat_map(|z| {
+                    (0..sizes[1]).flat_map(move |y| (0..sizes[0]).map(move |x| (x, y, z)))
+                })
+                .map(|(x, y, z)| u8::from(shape.is_full(x as i32, y as i32, z as i32)))
+                .collect();
+            let (min, max) = shape.discrete_bounds();
+            let axes = shape
+                .cube_coordinate_axes()
+                .iter()
+                .enumerate()
+                .fold(0, |mask, (i, on)| mask | (i8::from(*on) << i));
+            let mut fields = vec![
+                ("occupied", Tag::ByteArray(occupied)),
+                ("cube", Tag::Byte(i8::from(shape.is_cube()))),
+                ("cube_axes", Tag::Byte(axes)),
+                ("discrete_min", Tag::IntArray(min.to_vec())),
+                ("discrete_max", Tag::IntArray(max.to_vec())),
+            ];
+            for (axis, name) in [(Axis::X, "x"), (Axis::Y, "y"), (Axis::Z, "z")] {
+                let bits = shape.coordinates(axis).iter().map(|v| v.to_bits() as i64);
+                fields.push((name, Tag::LongArray(bits.collect())));
+            }
+            Tag::compound(fields)
+        };
+        let names = || Tag::List(STATES.iter().map(|s| Tag::String((*s).into())).collect());
+        let cached = CachedCollisionRegistry::from_nbt(
+            &Tag::compound([
+                ("DataVersion", Tag::Int(DATA_VERSION)),
+                ("states", names()),
+                (
+                    "shapes",
+                    Tag::List(vec![tag(VoxelShape::empty()), tag(VoxelShape::block())]),
+                ),
+                ("cached_shapes", Tag::IntArray(vec![0, 1])),
+            ]),
+            blocks,
+        )
+        .unwrap();
+        Scene {
+            collision: BlockCollisionRegistry::new(Arc::new(cached)).unwrap(),
+            ..scene(blocks)
+        }
+    }
+
+    #[test]
+    fn a_particle_with_physics_born_inside_a_block_never_joins() {
+        let blocks = blocks();
+        let leaf = |physics| {
+            serde_json::json!({"has_physics": physics, "render_type": "invisible",
+                "initializer": {"lifetime": "20", "hitbox_size": "0.08"},
+                "particle_emitters": [{"particle": "test:mark", "chance": "1"}]})
+        };
+        let root = pack(&[
+            (
+                "assets/test/polytone/custom_particles/leaf.json",
+                leaf(true),
+            ),
+            (
+                "assets/test/polytone/custom_particles/ghost.json",
+                leaf(false),
+            ),
+            (
+                "assets/test/polytone/custom_particles/mark.json",
+                serde_json::json!({"render_type": "invisible", "has_physics": false}),
+            ),
+            (
+                "assets/minecraft/polytone/entity_modifiers/player.json",
+                serde_json::json!({"emitters": [{"particle": "test:leaf", "chance": "1"}]}),
+            ),
+            (
+                "assets/test/polytone/custom_particles/wide.json",
+                serde_json::json!({"has_physics": true, "render_type": "invisible",
+                    "initializer": {"lifetime": "20", "hitbox_size": 10},
+                    "particle_emitters": [{"particle": "test:mark", "chance": "1"}]}),
+            ),
+            (
+                "assets/test/polytone/custom_particles/parent.json",
+                serde_json::json!({"has_physics": true, "render_type": "invisible",
+                    "initializer": {"lifetime": "20", "hitbox_size": "0.08"},
+                    "particle_emitters": [{"particle": "test:wide", "chance": "1", "y": "-0.05"}]}),
+            ),
+            (
+                "assets/minecraft/polytone/entity_modifiers/skeleton.json",
+                serde_json::json!({"emitters": [{"particle": "test:parent", "chance": "1", "x": "-4.5"}]}),
+            ),
+            (
+                "assets/minecraft/polytone/entity_modifiers/creeper.json",
+                serde_json::json!({"emitters": [{"particle": "test:wide", "chance": "1", "x": "-4.5"}]}),
+            ),
+            (
+                "assets/minecraft/polytone/entity_modifiers/zombie.json",
+                serde_json::json!({"emitters": [{"particle": "test:ghost", "chance": "1"}]}),
+            ),
+        ]);
+        let scene = solid_scene(blocks);
+        let level = ParticleLevel {
+            world: &scene.world,
+            facts: &scene.facts,
+            collision: &scene.collision,
+            player: None,
+            cached_chunk: std::cell::Cell::new(None),
+        };
+        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        // The solid block is at (1, 64, 1): its bottom face is y 64.
+        // Spawns one particle, lets the engine take it in and tick it: whether it joined, and
+        // how many particles it emitted.
+        let mut spawn = |entity: &str, y: f64| {
+            engine.particles.clear();
+            engine.pending.clear();
+            engine.polytone_entity(&level, entity, [1.5, y, 1.5]);
+            engine.tick(&level);
+            let joined = engine.particles.len();
+            engine.tick(&level);
+            (
+                joined,
+                engine.particles.len() + engine.pending.len() - joined,
+            )
+        };
+        // The solid block is at (1, 64, 1): its bottom face is y 64.
+        // 0.05 under the block, a 0.08 box reaches into it: it never joins, nothing emitted.
+        assert_eq!(spawn("minecraft:player", 63.95), (0, 0));
+        // 0.01 clear of it, it joins and emits.
+        assert_eq!(spawn("minecraft:player", 63.91), (1, 1));
+        // Without physics nothing collides.
+        assert_eq!(spawn("minecraft:zombie", 63.95), (1, 1));
+        // A wide box reaching a block from five blocks away does not join either.
+        assert_eq!(spawn("minecraft:creeper", 60.0), (0, 0));
+        // Nor does one a clear particle emits there: the small one joins, its wide copy never.
+        assert_eq!(spawn("minecraft:skeleton", 60.0), (1, 0));
+        horizon_os::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Measured on the mod: with `limit` 1, one particle born inside a block and one clear of it
+    /// in the same tick, the clear one shows. The one that never joins takes no place.
+    #[test]
+    fn a_particle_that_never_joins_takes_no_place_under_its_limit() {
+        let blocks = blocks();
+        let lim = |x: &str| serde_json::json!({"particle": "test:lim", "chance": "1", "x": x});
+        let root = pack(&[
+            (
+                "assets/test/polytone/custom_particles/lim.json",
+                serde_json::json!({"has_physics": true, "render_type": "invisible", "limit": 1,
+                    "initializer": {"lifetime": "20", "hitbox_size": "0.08"}}),
+            ),
+            // The first inside the block's reach, the second three blocks clear of it.
+            (
+                "assets/minecraft/polytone/entity_modifiers/player.json",
+                serde_json::json!({"emitters": [lim("0"), lim("3")]}),
+            ),
+            // Two clear of it: the limit still keeps one.
+            (
+                "assets/minecraft/polytone/entity_modifiers/zombie.json",
+                serde_json::json!({"emitters": [lim("3"), lim("6")]}),
+            ),
+            // `exclusion_radius` with physics: the one inside the block doesn't keep the clear
+            // one a block away from spawning.
+            (
+                "assets/test/polytone/custom_particles/exc.json",
+                serde_json::json!({"has_physics": true, "render_type": "invisible",
+                    "exclusion_radius": 2,
+                    "initializer": {"lifetime": "20", "hitbox_size": "0.08"}}),
+            ),
+            (
+                "assets/minecraft/polytone/entity_modifiers/skeleton.json",
+                serde_json::json!({"emitters": [
+                    {"particle": "test:exc", "chance": "1", "x": "0"},
+                    {"particle": "test:exc", "chance": "1", "x": "1"}]}),
+            ),
+        ]);
+        let scene = solid_scene(blocks);
+        let level = ParticleLevel {
+            world: &scene.world,
+            facts: &scene.facts,
+            collision: &scene.collision,
+            player: None,
+            cached_chunk: std::cell::Cell::new(None),
+        };
+        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut joined = |entity: &str| {
+            engine.particles.clear();
+            engine.pending.clear();
+            // The solid block is at (1, 64, 1): 0.05 under it, a 0.08 box reaches into it.
+            engine.polytone_entity(&level, entity, [1.5, 63.95, 1.5]);
+            engine.tick(&level);
+            engine
+                .particles
+                .iter()
+                .map(|p| p.position[0])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(joined("minecraft:player"), vec![4.5]);
+        assert_eq!(joined("minecraft:zombie"), vec![4.5]);
+        assert_eq!(joined("minecraft:skeleton"), vec![2.5]);
+        horizon_os::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_pack_custom_particle_replaces_the_vanilla_type_of_its_id() {
+        let root = pack(&[(
+            "assets/minecraft/polytone/custom_particles/flame.json",
+            serde_json::json!({"has_physics": false, "initializer": {"lifetime": "33", "size": "0.75"}}),
+        )]);
+        let mut engine = engine(Registry::read(&root, Default::default(), blocks()));
+        // The vanilla flame's sprite set (what the pack's particles/flame.json lists).
+        engine.sets.insert(ParticleType::Flame, 1);
+        engine.set_sprites.push(vec![20, 21]);
+        engine.create(
+            &ParticleOptions::simple(ParticleType::Flame),
+            [1.0, 65.0, 1.0],
+            [0.0; 3],
+        );
+        assert_eq!(engine.pending.len(), 1);
+        let p = &engine.pending[0];
+        assert!(
+            p.controller.is_some(),
+            "the pack's particle, not vanilla's flame"
+        );
+        assert_eq!((p.lifetime, p.size), (33, 0.75));
+        assert!(matches!(p.sprite, Sprite::Index(20)));
+        horizon_os::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn block_and_biome_tags_pick_where_an_emitter_runs() {
+        let blocks = blocks();
+        let root = pack(&[
+            (
+                "assets/test/polytone/custom_particles/spark.json",
+                serde_json::json!({"has_physics": false}),
+            ),
+            (
+                "assets/test/polytone/block_modifiers/shiny.json",
+                serde_json::json!({
+                    "targets": ["#test:shiny"],
+                    "particle_emitters": [{
+                        "particle": "test:spark", "chance": "1", "biomes": "#test:warm",
+                        "spawn_location": "lower_corner", "y": "1"
+                    }]
+                }),
+            ),
+            (
+                "data/test/tags/block/shiny.json",
+                serde_json::json!({"values": ["minecraft:torch"]}),
+            ),
+            (
+                "data/test/tags/worldgen/biome/warm.json",
+                serde_json::json!({"values": ["#test:hot", "minecraft:plains"]}),
+            ),
+            (
+                "data/test/tags/worldgen/biome/hot.json",
+                serde_json::json!({"values": ["minecraft:desert"]}),
+            ),
+        ]);
+        let scene = scene(blocks);
+        let level = ParticleLevel {
+            world: &scene.world,
+            facts: &scene.facts,
+            collision: &scene.collision,
+            player: None,
+            cached_chunk: std::cell::Cell::new(None),
+        };
+        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        // The test chunk's biome is the table's first: a cold one first, then a warm one.
+        let first = |name: &str| {
+            Arc::new(crate::biome::Biomes::from_jsons(&[(
+                name,
+                serde_json::json!({}),
+            )]))
+        };
+        let registry = engine.polytone.clone().unwrap();
+        registry.set_biomes(&first("minecraft:snowy_plains"));
+        engine.polytone_animate(&level, [1, 64, 1]);
+        assert!(engine.pending.is_empty(), "outside #test:warm");
+        // `#test:warm` holds the desert through the nested `#test:hot`.
+        registry.set_biomes(&first("minecraft:desert"));
+        engine.polytone_animate(&level, [1, 64, 1]);
+        assert_eq!(engine.pending.len(), 1);
+        assert_eq!(engine.pending[0].position, [1.0, 65.0, 1.0]);
+        horizon_os::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_filtered_modifier_changes_only_the_blocks_and_items_it_names() {
+        let root = pack(&[
+            (
+                "assets/minecraft/polytone/particle_modifiers/block.json",
+                serde_json::json!({"size": "3", "filter": {"block": ["stone", "minecraft:granite"]}}),
+            ),
+            (
+                "assets/minecraft/polytone/particle_modifiers/item.json",
+                serde_json::json!({"life": "50", "filter": {"item": "minecraft:apple"}}),
+            ),
+        ]);
+        let registry = Registry::read(&root, Default::default(), blocks());
+        let run = |id: &str, source: Option<&str>| {
+            let mut p = Particle::blank(ParticleType::Block, [0.0; 3]);
+            p.size = 0.1;
+            p.lifetime = 10;
+            modify(&registry, id, source, &mut p);
+            (p.size, p.lifetime)
+        };
+        assert_eq!(run("minecraft:block", Some("minecraft:stone")), (0.3, 10));
+        assert_eq!(run("minecraft:block", Some("minecraft:granite")), (0.3, 10));
+        assert_eq!(run("minecraft:block", Some("minecraft:dirt")), (0.1, 10));
+        // A particle that carries no block (the filter can't pass).
+        assert_eq!(run("minecraft:block", None), (0.1, 10));
+        assert_eq!(run("minecraft:item", Some("minecraft:apple")), (0.1, 50));
+        assert_eq!(run("minecraft:item", Some("minecraft:bread")), (0.1, 10));
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 }

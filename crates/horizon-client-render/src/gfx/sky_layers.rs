@@ -459,7 +459,11 @@ mod tests {
         // The bottom face (side 0, third) is the grid's top left, at y = -100.
         let bottom = &cube[12..18];
         assert!(bottom.iter().all(|v| (v[1] + 100.0).abs() < 1.0e-3));
-        assert!(bottom.iter().all(|v| v[3] <= 1.0 / 3.0 + 1.0e-4 && v[4] <= 0.5));
+        assert!(
+            bottom
+                .iter()
+                .all(|v| v[3] <= 1.0 / 3.0 + 1.0e-4 && v[4] <= 0.5)
+        );
         // The top face (side 1, second) is the grid's top middle, at y = 100.
         let top = &cube[6..12];
         assert!(top.iter().all(|v| (v[1] - 100.0).abs() < 1.0e-3));

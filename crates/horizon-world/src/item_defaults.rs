@@ -91,7 +91,8 @@ pub fn shared(root: &Path) -> io::Result<Arc<Defaults>> {
         {
             drop(cache);
             let result = Ok(other);
-            let mut published = horizon_os::sync::lock(&flight.result).unwrap_or_else(|e| e.into_inner());
+            let mut published =
+                horizon_os::sync::lock(&flight.result).unwrap_or_else(|e| e.into_inner());
             *published = Some(result.clone());
             flight.ready.notify_all();
             horizon_os::sync::lock(in_flight())
@@ -103,7 +104,8 @@ pub fn shared(root: &Path) -> io::Result<Arc<Defaults>> {
         cache.push((root.to_owned(), Arc::downgrade(value)));
     }
     {
-        let mut published = horizon_os::sync::lock(&flight.result).unwrap_or_else(|e| e.into_inner());
+        let mut published =
+            horizon_os::sync::lock(&flight.result).unwrap_or_else(|e| e.into_inner());
         *published = Some(result.clone());
         flight.ready.notify_all();
     }

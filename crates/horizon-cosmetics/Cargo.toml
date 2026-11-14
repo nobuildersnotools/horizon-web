@@ -8,6 +8,7 @@ description = "Cosmetic items drawn on players by Horizon clients: the item form
 
 [dependencies]
 horizon-os = { path = "../horizon-os" }
+horizon-addresses = { path = "../horizon-addresses" }
 base64 = "0.22"
 glam = "0.30"
 png = "0.18"

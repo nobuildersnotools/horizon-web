@@ -1,6 +1,7 @@
 //! Data packs (`<world>/datapacks`: folders and zips with `pack.mcmeta`) and
 //! the parts of them commands use: `.mcfunction` functions (with macros and
 //! line continuation), function tags and predicates.
+mod slot_sources;
 use crate::zip::Zip;
 use horizon_os::fs::PathExt;
 use horizon_world::{
@@ -145,19 +146,41 @@ pub fn discover(world: &Path) -> Vec<DataPack> {
 /// `FolderRepositorySource.loadPacks`: packs in Create World's temporary
 /// folder or a world's data-pack directory, with required folder metadata.
 pub fn discover_folder(dir: &Path) -> Vec<DataPack> {
+    discover_folder_with(dir, &crate::packs::DirectoryValidator::game())
+}
+/// [`discover_folder`] under an explicit `allowed_symlinks.txt` validator.
+pub(crate) fn discover_folder_with(
+    dir: &Path,
+    validator: &crate::packs::DirectoryValidator,
+) -> Vec<DataPack> {
     let Ok(entries) = horizon_os::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut packs = Vec::new();
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let path = e.path();
+        // `PackDetector.detectPackResources`: a link, or a pack holding one, is
+        // not a pack unless the validator allows the target; the id stays the
+        // entry's name while the contents come from the target.
+        let path = match crate::packs::detected_pack_path(&e.path(), validator) {
+            Ok(Some(path)) => path,
+            Ok(None) => continue,
+            Err(err) => {
+                log::warn!(
+                    "Failed to read properties of '{}', ignoring: {err}",
+                    e.path().display()
+                );
+                continue;
+            }
+        };
         if path.fs_is_dir() && folder_metadata_present(&path) {
             packs.push(DataPack {
                 id: format!("file/{name}"),
                 source: Source::Dir(path),
             });
-        } else if name.ends_with(".zip")
+        } else if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with(".zip"))
             && let Ok(z) = Zip::open(&path)
             && z.contains("pack.mcmeta")
         {
@@ -642,7 +665,15 @@ pub fn parse_function(id: &str, text: &str) -> Result<Function, String> {
             });
         }
         if let Some(m) = line.strip_prefix('$') {
-            for p in macro_parameters(m)? {
+            let names = macro_parameters(m)?;
+            // `StringTemplate.fromString`: a `$` line with no `$(…)` is not a
+            // macro, and fails the whole file rather than running unchanged.
+            if names.is_empty() {
+                return Err(format!(
+                    "Can't parse function line {number}: '{m}': No variables in macro"
+                ));
+            }
+            for p in names {
                 if !parameters.contains(&p) {
                     parameters.push(p);
                 }
@@ -668,6 +699,10 @@ pub struct DataStore {
     pub predicates: BTreeMap<String, serde_json::Value>,
     /// `item_modifier` files, for `/item modify`.
     pub item_modifiers: BTreeMap<String, serde_json::Value>,
+    /// `slot_source` definitions, evaluated against a command's live accessor.
+    pub slot_sources: BTreeMap<String, serde_json::Value>,
+    /// Slot-source tags belong to the same loaded snapshot as their definitions.
+    pub slot_source_tags: BTreeMap<String, Vec<(String, bool)>>,
     /// The content tables' raw files from the packs after the built-in one:
     /// `recipe/`, `recipe_filter/`, `loot_table/`, `advancement/`, `dialog/`, `damage_type/`, `data_maps/`, `enchantment/` and `tags/…/` files, by
     /// `<kind-dir>/<ns>:<path>`, each id's files in pack order. The tables
@@ -727,6 +762,7 @@ impl DataStore {
                 "predicate",
                 "recipe",
                 "recipe_filter",
+                "slot_source",
                 "tags",
                 "trade_set",
                 "villager_trade",
@@ -763,6 +799,21 @@ impl DataStore {
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     s.item_modifiers.insert(id, v);
+                } else if let Some(id) = resource_id(&f, "tags/slot_source", ".json")
+                    && let Some(bytes) = pack.read(&f)
+                    && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                {
+                    let entries = tag_entries(&v);
+                    let slot = s.slot_source_tags.entry(id).or_default();
+                    if v["replace"].as_bool() == Some(true) {
+                        slot.clear();
+                    }
+                    slot.extend(entries);
+                } else if let Some(id) = resource_id(&f, "slot_source", ".json")
+                    && let Some(bytes) = pack.read(&f)
+                    && let Ok(v) = serde_json::from_slice(&bytes)
+                {
+                    s.slot_sources.insert(id, v);
                 } else if !builtin
                     && let Some(id) = content_id(&f)
                     && let Some(bytes) = pack.read(&f)
@@ -1029,9 +1080,11 @@ mod tests {
 
     #[test]
     fn folder_metadata_is_required_before_contents_are_discovered() {
-        let root =
-            std::env::temp_dir().join(format!("horizon-folder-metadata-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = horizon_os::env::temp_dir().join(format!(
+            "horizon-folder-metadata-{}",
+            horizon_os::process::id()
+        ));
+        let _ = horizon_os::fs::remove_dir_all(&root);
         for (name, metadata) in [
             ("broken", Some("{")),
             ("root_empty", Some("{}")),
@@ -1058,14 +1111,14 @@ mod tests {
             ),
         ] {
             let dir = root.join(name);
-            std::fs::create_dir_all(dir.join("data/h146/function")).unwrap();
-            std::fs::write(
+            horizon_os::fs::create_dir_all(dir.join("data/h146/function")).unwrap();
+            horizon_os::fs::write(
                 dir.join(format!("data/h146/function/{name}.mcfunction")),
                 "scoreboard players set admitted h146 1\n",
             )
             .unwrap();
             if let Some(metadata) = metadata {
-                std::fs::write(dir.join("pack.mcmeta"), metadata).unwrap();
+                horizon_os::fs::write(dir.join("pack.mcmeta"), metadata).unwrap();
             }
         }
         let packs = discover_folder(&root);
@@ -1101,8 +1154,8 @@ mod tests {
         // Builtin and feature construction still have their independent paths.
         let resources = root.join("resources");
         let feature = resources.join("data/minecraft/datapacks/feature");
-        std::fs::create_dir_all(&feature).unwrap();
-        std::fs::write(
+        horizon_os::fs::create_dir_all(&feature).unwrap();
+        horizon_os::fs::write(
             feature.join("pack.mcmeta"),
             r#"{"pack":{"description":"feature"}}"#,
         )
@@ -1115,7 +1168,7 @@ mod tests {
             ["feature"]
         );
         assert_eq!(DataPack::builtin(&resources).id, "vanilla");
-        std::fs::remove_dir_all(root).unwrap();
+        horizon_os::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1129,49 +1182,52 @@ mod tests {
 
     #[test]
     fn a_pack_that_cannot_be_copied_is_reported() {
-        let root = std::env::temp_dir().join(format!("hz-datapack-copy-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = horizon_os::env::temp_dir()
+            .join(format!("hz-datapack-copy-{}", horizon_os::process::id()));
+        let _ = horizon_os::fs::remove_dir_all(&root);
         let pack = root.join("pack");
-        std::fs::create_dir_all(pack.join("data")).unwrap();
-        std::fs::write(pack.join("pack.mcmeta"), "{}").unwrap();
-        std::fs::write(pack.join("data/functions.mcfunction"), "").unwrap();
+        horizon_os::fs::create_dir_all(pack.join("data")).unwrap();
+        horizon_os::fs::write(pack.join("pack.mcmeta"), "{}").unwrap();
+        horizon_os::fs::write(pack.join("data/functions.mcfunction"), "").unwrap();
         // A file where the pack's folder goes: every copy under it fails.
         let blocked = root.join("blocked");
-        std::fs::write(&blocked, "").unwrap();
+        horizon_os::fs::write(&blocked, "").unwrap();
         assert!(!copy_pack(&pack, &blocked));
         let dir = root.join("packs");
         assert!(copy_pack(&pack, &dir));
         assert!(dir.join("pack/pack.mcmeta").is_file());
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_game_folder_s_new_world_packs_go_into_new_worlds_only() {
-        let root = std::env::temp_dir().join(format!("hz-new-world-packs-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = horizon_os::env::temp_dir()
+            .join(format!("hz-new-world-packs-{}", horizon_os::process::id()));
+        let _ = horizon_os::fs::remove_dir_all(&root);
         let (game, world, old) = (root.join("game"), root.join("new"), root.join("old"));
         assert!(seed_create_world(&game).is_none());
         assert_eq!(install_new_world_packs(&game, &world), Ok(()));
         assert!(!world.join("datapacks").exists());
         for pack in ["void", "islands"] {
             let dir = game.join(NEW_WORLD_PACKS).join(pack);
-            std::fs::create_dir_all(dir.join("data/v/function")).unwrap();
-            std::fs::write(dir.join("pack.mcmeta"), r#"{"pack":{"description":""}}"#).unwrap();
-            std::fs::write(dir.join("data/v/function/a.mcfunction"), "say a").unwrap();
+            horizon_os::fs::create_dir_all(dir.join("data/v/function")).unwrap();
+            horizon_os::fs::write(dir.join("pack.mcmeta"), r#"{"pack":{"description":""}}"#)
+                .unwrap();
+            horizon_os::fs::write(dir.join("data/v/function/a.mcfunction"), "say a").unwrap();
         }
         let (temp, ids) = seed_create_world(&game).unwrap();
         assert_eq!(ids, ["file/islands", "file/void"]);
         assert!(temp.join("void/data/v/function/a.mcfunction").is_file());
-        let _ = std::fs::remove_dir_all(&temp);
+        let _ = horizon_os::fs::remove_dir_all(&temp);
         install_new_world_packs(&game, &world).unwrap();
         let ids: Vec<String> = discover(&world).into_iter().map(|p| p.id).collect();
         assert_eq!(ids, ["file/islands", "file/void"]);
         // A world that exists already keeps the packs it has.
-        std::fs::create_dir_all(&old).unwrap();
-        std::fs::write(old.join("level.dat"), "").unwrap();
+        horizon_os::fs::create_dir_all(&old).unwrap();
+        horizon_os::fs::write(old.join("level.dat"), "").unwrap();
         install_new_world_packs(&game, &old).unwrap();
         assert!(discover(&old).is_empty());
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = horizon_os::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1300,6 +1356,56 @@ mod tests {
         assert_eq!(plain.instantiate(None).unwrap(), ["say 1"]);
     }
 
+    /// `StringTemplate.fromString` throws "No variables in macro" for a `$`
+    /// line with no `$(…)`, so `FunctionBuilder.addMacro` fails and
+    /// `ServerFunctionLibrary.reload` leaves the whole file out: `/function`
+    /// reports it unknown instead of running the line unchanged.
+    #[test]
+    fn a_macro_line_without_a_variable_drops_the_whole_file() {
+        let dir = horizon_os::env::temp_dir()
+            .join(format!("hz-datapack-macro-{}", horizon_os::process::id()));
+        let _ = horizon_os::fs::remove_dir_all(&dir);
+        let pack = dir.join("datapacks/macros");
+        let write = |p: &str, t: &str| {
+            let path = pack.join(p);
+            horizon_os::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            horizon_os::fs::write(path, t).unwrap();
+        };
+        write(
+            "pack.mcmeta",
+            "{\"pack\":{\"description\":\"Macros\",\"pack_format\":1}}",
+        );
+        // A plain line before and after does not save the file.
+        write(
+            "data/t/function/novar.mcfunction",
+            "say before\n$say hello\nsay after\n",
+        );
+        write("data/t/function/lone.mcfunction", "$\n");
+        // A `$` not followed by `(` is text, not a variable.
+        write(
+            "data/t/function/dollar.mcfunction",
+            "$say $(who) costs $5\n",
+        );
+        write("data/t/function/plain.mcfunction", "say plain\n");
+        let packs = discover(&dir);
+        let store = DataStore::load(&[&packs[0]]);
+        for id in ["t:novar", "t:lone"] {
+            assert!(!store.functions.contains_key(id), "{id} was registered");
+            assert!(
+                store
+                    .errors
+                    .iter()
+                    .any(|(e, m)| e == id && m.contains("No variables in macro")),
+                "{id} has no load error: {:?}",
+                store.errors
+            );
+        }
+        let dollar = &store.functions["t:dollar"];
+        assert_eq!(dollar.parameters, ["who"]);
+        assert!(store.functions.contains_key("t:plain"));
+        let _ = horizon_os::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn packs_provide_functions_and_tags() {
         let dir =
@@ -1377,7 +1483,7 @@ mod tests {
             .map(|i| (format!("t:f{}", i % 25_000), true))
             .collect();
         store.function_tags.insert("t:big".into(), big);
-        let start = std::time::Instant::now();
+        let start = horizon_os::time::Instant::now();
         let got = store.tag_functions("t:big");
         assert_eq!(got.len(), 25_000);
         assert_eq!(got[0], "t:f0");

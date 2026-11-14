@@ -276,8 +276,11 @@ fn concrete_powder_color(dye: &str) -> u32 {
         _ => 0x191919,
     }
 }
-/// `RedstoneWireBlock.COLORS`.
+/// `RedstoneWireBlock.COLORS`, or a pack's.
 fn redstone_color(power: u8) -> [f32; 3] {
+    if let Some(c) = crate::pack_palette::redstone(power) {
+        return [16, 8, 0].map(|shift| ((c >> shift) & 255) as f32 / 255.0);
+    }
     let f = f32::from(power) / 15.0;
     let r = f * 0.6 + if f > 0.0 { 0.4 } else { 0.3 };
     let g = (f * f * 0.7 - 0.5).clamp(0.0, 1.0);
@@ -484,6 +487,14 @@ impl AnimateContext<'_> {
     fn state(&self, p: [i32; 3]) -> BlockStateId {
         self.world.block(p[0], p[1], p[2])
     }
+    /// `BlockState.is(Block)` (`TypedInstance.is(T)`): the same block, whatever
+    /// its properties.
+    fn is_block(&self, a: BlockStateId, b: BlockStateId) -> bool {
+        self.registry
+            .state(a)
+            .zip(self.registry.state(b))
+            .is_some_and(|(a, b)| a.name == b.name)
+    }
     fn is_air(&self, p: [i32; 3]) -> bool {
         self.facts.is_air(self.state(p))
     }
@@ -599,13 +610,17 @@ fn do_animate_tick(
         return;
     }
     let state = ctx.state(pos);
-    block_animate_tick(tables, engine, ctx, state, pos, center);
+    // A Polytone block modifier's `disable_particles` stops the block's own animate tick.
+    if !engine.polytone_disables_particles(state) {
+        block_animate_tick(tables, engine, ctx, state, pos, center);
+    }
     // Resource packs' Polytone block emitters (#11486): nothing without such a pack.
     let level = ParticleLevel {
         world: ctx.world,
         facts: ctx.facts,
         collision: ctx.collision,
         player: None,
+        cached_chunk: std::cell::Cell::new(None),
     };
     engine.polytone_animate(&level, pos);
     let facts = ctx.facts.get(state);
@@ -624,7 +639,10 @@ fn do_animate_tick(
             } else {
                 T::DrippingLava
             };
-            let top_solid = ctx.sturdy(pos);
+            // `trySpawnDripParticles(.., state.isFaceSturdy(this, pos, DOWN))`:
+            // the fluid block's own down face, not whether it is a full cube (a
+            // waterlogged bottom slab's face is sturdy and has no fluid below).
+            let top_solid = facts.sturdy_full & 1 != 0;
             try_spawn_drip(tables, engine, ctx, [x, y - 1, z], drip, top_solid);
         }
     }
@@ -1018,8 +1036,9 @@ fn block_animate_tick(
                     pitch,
                 );
             }
-            let along_z = ctx.state([pos[0] - 1, pos[1], pos[2]]) == state
-                || ctx.state([pos[0] + 1, pos[1], pos[2]]) == state;
+            // `is(this)` compares the block, so a portal of the other axis counts.
+            let along_z = ctx.is_block(ctx.state([pos[0] - 1, pos[1], pos[2]]), state)
+                || ctx.is_block(ctx.state([pos[0] + 1, pos[1], pos[2]]), state);
             for _ in 0..4 {
                 let r = engine.random();
                 let mut p = [
@@ -1833,13 +1852,15 @@ fn dripstone_drip(
     };
     let above = ctx.facts.get(ctx.state([root[0], root[1] + 1, root[2]]));
     // Mud above the root counts as a water source unless water evaporates here.
-    let (fluid, source) = if &*above.name == "minecraft:mud" && !ctx.ultrawarm {
-        (Fluid::Water, true)
+    let fluid = if &*above.name == "minecraft:mud" && !ctx.ultrawarm {
+        Fluid::Water
     } else {
-        (above.fluid, above.fluid_level >= 8 && !above.fluid_falling)
+        above.fluid
     };
-    // canFillCauldron: only a water or lava source passes below a 2% roll.
-    if roll >= 0.02 && !(fluid != Fluid::None && source) {
+    // canFillCauldron is `fluid == Fluids.LAVA || fluid == Fluids.WATER`: the
+    // fluid above the root by its type, not by whether it is still a source, so
+    // a flowing fluid drips under the same 2% roll a source does.
+    if roll >= 0.02 && fluid == Fluid::None {
         return;
     }
     // getDripParticle: no fluid drips what the dimension's default says.
@@ -1988,8 +2009,10 @@ pub fn campfire_particles<'a>(
         }
     }
 }
-/// `CampfireBlock.makeParticles` (always visible, overriding the limiter);
-/// `smoking` adds the plain smoke puff at the logs.
+/// `CampfireBlock.makeParticles`: the cosy or signal smoke through
+/// `addAlwaysVisibleParticle(.., true, ..)` (it overrides the limiter but still
+/// rolls the Particles option); `smoking` adds the plain smoke puff at the logs
+/// through `addParticle`, so the limiter can drop it.
 pub fn make_campfire_smoke(
     engine: &mut ParticleEngine,
     pos: [i32; 3],
@@ -2008,7 +2031,13 @@ pub fn make_campfire_smoke(
     } else {
         T::CampfireCosySmoke
     };
-    engine.create(&ParticleOptions::simple(ty), [x, y, z], [0.0, 0.07, 0.0]);
+    engine.add_with(
+        &ParticleOptions::simple(ty),
+        [x, y, z],
+        [0.0, 0.07, 0.0],
+        true,
+        true,
+    );
     if smoking {
         let r = engine.random();
         let dx = r.next_double() / 4.0 * sign(r);
@@ -2018,13 +2047,49 @@ pub fn make_campfire_smoke(
             f64::from(pos[1]) + 0.4,
             f64::from(pos[2]) + 0.5 + dz,
         ];
-        engine.create(&ParticleOptions::simple(T::Smoke), at, [0.0, 0.005, 0.0]);
+        add(engine, T::Smoke, at, [0.0, 0.005, 0.0]);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// `CampfireBlock.makeParticles` through `ClientLevel.doAddParticle`: the
+    /// cosy smoke overrides the limiter, the plain smoke does not, so it is
+    /// dropped beyond 32 blocks and at Particles: Minimal, and at Decreased
+    /// each puff is dropped when `calculateParticleLevel`'s `nextInt(3)` is 0.
+    #[test]
+    fn doused_campfire_smoke_goes_through_the_particle_limiter() {
+        use horizon_core::random::RandomSource as _;
+        use std::collections::{HashMap, HashSet};
+        let run = |level: u8, camera: [f64; 3]| {
+            let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
+            engine.seed_randoms(5, 9, 0);
+            engine.created_requests = Some(Vec::new());
+            engine.particle_level = level;
+            engine.camera = camera;
+            for _ in 0..20 {
+                make_campfire_smoke(&mut engine, [0, 64, 0], false, true);
+            }
+            let made = engine.created_requests.take().unwrap();
+            let count = |ty| made.iter().filter(|(o, ..)| o.ty == ty).count();
+            (count(T::CampfireCosySmoke), count(T::Smoke))
+        };
+        let near = [0.5, 65.0, 0.5];
+        assert_eq!(run(0, near), (20, 20), "All");
+        assert_eq!(run(2, near), (20, 0), "Minimal");
+        assert_eq!(run(0, [100.5, 65.0, 0.5]), (20, 0), "100 blocks away");
+        // Decreased: per puff the cosy smoke's roll, then the plain smoke's.
+        let mut level = LegacyRandom::new(9);
+        let kept = (0..20)
+            .filter(|_| {
+                level.next_int_bound(3).unwrap();
+                level.next_int_bound(3).unwrap() != 0
+            })
+            .count();
+        assert!(0 < kept && kept < 20);
+        assert_eq!(run(1, near), (20, kept), "Decreased");
+    }
     #[test]
     fn classifies_animated_blocks() {
         let none = |_: &str| None;
@@ -2053,6 +2118,141 @@ mod tests {
             classify("minecraft:red_candle_cake", &lit),
             Animate::CandleCake
         );
+    }
+    /// `NetherPortalBlock.animateTick` picks the curtain's axis with
+    /// `getBlockState(pos.west()).is(this)`, and `is` compares the block: a
+    /// portal of the other axis still counts, so its particles leave the z
+    /// faces. Horizon compared the whole state, axis included.
+    #[test]
+    fn nether_portal_curtain_follows_a_neighbour_of_the_other_axis() {
+        use crate::{assets::Assets, chunk::Chunk};
+        use horizon_world::chunk::BlockState as StateSpec;
+        use std::{
+            collections::{HashMap, HashSet},
+            sync::Arc,
+        };
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("block-behaviours.json").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let registry = assets.registry;
+        let facts = BlockFacts::load(&root, registry).unwrap();
+        let biomes = Biomes::load(&root).unwrap();
+        let collision = crate::collisions::load(&root, registry).unwrap();
+        let tables = AnimateTables::load(&root, registry, &biomes).unwrap();
+        let portal = |axis: &str| {
+            registry
+                .resolve(&StateSpec {
+                    name: "minecraft:nether_portal".to_owned(),
+                    properties: [("axis".to_owned(), axis.to_owned())].into_iter().collect(),
+                })
+                .unwrap()
+        };
+        let state = portal("x");
+        // The four particle requests `block_animate_tick` asks the level for, the
+        // animated portal at (0, 64, 0) with nothing west or east of it but
+        // `neighbour` (an x offset, a state).
+        let run = |neighbour: Option<(i32, BlockStateId)>| {
+            let mut world = World::new(facts.air, 0);
+            for cx in -1..=0 {
+                world.chunks.insert((cx, 0), Arc::new(Chunk::empty(cx, 0)));
+            }
+            world.set(0, 64, 0, state).unwrap();
+            if let Some((dx, neighbour)) = neighbour {
+                world.set(dx, 64, 0, neighbour).unwrap();
+            }
+            let raining_at = |_: [i32; 3]| false;
+            let height = |_: [i32; 3]| 0;
+            let no_offset = |_: BlockStateId, _: i32, _: i32| -> Option<[f64; 3]> { None };
+            let no_gateway = |_: BlockStateId, _: [i32; 3]| 0;
+            let ctx = AnimateContext {
+                world: &world,
+                facts: &facts,
+                collision: &collision,
+                biomes: &biomes,
+                registry,
+                raining_at: &raining_at,
+                height_no_leaves: &height,
+                firefly_bush_sounds: false,
+                creaking_active: false,
+                sky_darken: 0,
+                marker: None,
+                model_offset: &no_offset,
+                gateway_particles: &no_gateway,
+                thundering: false,
+                ultrawarm: false,
+            };
+            let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
+            engine.seed_randoms(5, 9, 0);
+            engine.created_requests = Some(Vec::new());
+            engine.camera = [0.5, 65.0, 0.5];
+            block_animate_tick(&tables, &mut engine, &ctx, state, [0, 64, 0], [0, 64, 0]);
+            let made = engine.created_requests.take().unwrap();
+            assert!(made.iter().all(|(options, ..)| options.ty == T::Portal));
+            made.into_iter().map(|(_, p, v)| (p, v)).collect::<Vec<_>>()
+        };
+        // The same draws in vanilla's order: the ambient sound's `nextInt(100)`
+        // (with its pitch when that is 0), then x/y/z doubles, the three floats,
+        // the flip and the branch's float.
+        let expected = |along_z: bool| {
+            let (fx, fy, fz) = (0.0, 64.0, 0.0);
+            let mut r = LegacyRandom::new(5);
+            if r.next_int_bound(100).unwrap() == 0 {
+                let _ = r.next_float();
+            }
+            (0..4)
+                .map(|_| {
+                    let mut p = [
+                        fx + r.next_double(),
+                        fy + r.next_double(),
+                        fz + r.next_double(),
+                    ];
+                    let mut v = [
+                        f64::from(r.next_float() - 0.5) * 0.5,
+                        f64::from(r.next_float() - 0.5) * 0.5,
+                        f64::from(r.next_float() - 0.5) * 0.5,
+                    ];
+                    let flip = f64::from(r.next_int_bound(2).unwrap() * 2 - 1);
+                    let push = f64::from(r.next_float() * 2.0) * flip;
+                    if along_z {
+                        p[2] = fz + 0.5 + 0.25 * flip;
+                        v[2] = push;
+                    } else {
+                        p[0] = fx + 0.5 + 0.25 * flip;
+                        v[0] = push;
+                    }
+                    (p, v)
+                })
+                .collect::<Vec<_>>()
+        };
+        // The repro's pair (a portal of the other axis east) and the same west,
+        // against no portal neighbour at all.
+        for (label, neighbour, along_z) in [
+            (
+                "a portal of the other axis east still takes the z faces",
+                Some((1, portal("z"))),
+                true,
+            ),
+            (
+                "a portal of the other axis west still takes the z faces",
+                Some((-1, portal("z"))),
+                true,
+            ),
+            (
+                "with no portal west or east the curtain runs along x",
+                None,
+                false,
+            ),
+        ] {
+            assert_eq!(run(neighbour), expected(along_z), "{label}");
+        }
     }
     #[test]
     fn redstone_colours_match_wire_table() {

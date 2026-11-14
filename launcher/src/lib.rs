@@ -8,6 +8,7 @@ pub mod data_location;
 pub mod datapacks;
 pub mod desktop;
 pub mod desktop_seams;
+pub mod downloads;
 pub mod export;
 #[cfg(unix)]
 pub mod game_app;
@@ -50,7 +51,6 @@ pub mod setup_args;
 pub mod shop;
 pub mod shortcut;
 pub mod signed;
-pub mod skins;
 pub mod sources;
 pub mod tailscale;
 pub mod telemetry;

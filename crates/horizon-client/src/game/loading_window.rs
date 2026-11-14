@@ -32,10 +32,12 @@ pub(super) fn build_renderer(
     prepared: Option<horizon_client::gfx::PreparedTextures>,
     api: horizon_client::graphics::GraphicsApi,
     translucent_batching: bool,
-    // HDR with Smooth Gradients (`Graphics::wide_frame`): a 16-bit frame where HDR output is
-    // offered (`Renderer::new`).
-    wide_frame: bool,
+    vsync: bool,
+    // HDR and Smooth Gradients pick the frame, with what the window's display reported to the
+    // renderer before (`display`, `Renderer::new`).
+    settings: &horizon_client::graphics::Graphics,
     shader_pack: shader_packs::PickedPack,
+    display: horizon_client::gfx::DisplayReading,
     filtering: (i32, i32),
 ) -> Result<Renderer> {
     let assets = &pack.render;
@@ -73,12 +75,16 @@ pub(super) fn build_renderer(
         previous,
         api,
         translucent_batching,
-        wide_frame,
         shader_pack.draws_flat,
-        shader_pack.linear,
-        shader_pack.hdr_float,
+        settings,
+        shader_pack.frame(),
+        display,
     ))
     .ok_or("the renderer waited for the browser")??;
+    // The loading renderer may have been built before the saved graphics settings were
+    // adopted. Configure the world swapchain before its first gameplay frame instead of
+    // waiting for `Game::apply_settings` after the handoff.
+    renderer.set_present_mode(vsync, settings.present_mode);
     renderer.hud.sprite_animations = atlas
         .sprite_animations
         .iter()
@@ -86,12 +92,13 @@ pub(super) fn build_renderer(
         .collect();
     renderer
         .hud
-        .set_text_shader(&renderer.device, atlas.text_shader.as_deref());
+        .set_text_shader(&renderer.device, atlas.text_shaders.gui.as_deref());
     pack.item_renderer
         .prepare_glint_atlas(renderer.device.limits().max_texture_dimension_2d, filtering)?;
     renderer.set_lines_shader(atlas.lines_shader.as_deref());
+    renderer.set_world_text_shaders(&atlas.text_shaders);
     renderer.set_sky_shaders(atlas.sky_shader.as_deref(), atlas.stars_shader.as_deref());
-    renderer.set_custom_sky(&pack.custom_sky);
+    renderer.set_custom_sky(&*pack.custom_sky);
     renderer.set_shared_material_maps(&atlas.material_maps);
     let cit_glints = pack.item_renderer.cit.as_ref().map(|c| &c.glint_textures);
     renderer
@@ -165,11 +172,11 @@ pub(super) async fn open_loading_renderer(
         api,
         // It draws no terrain.
         false,
-        // An 8-bit frame, which HDR output takes as well.
         false,
-        false,
-        false,
-        false,
+        // An 8-bit frame, which HDR output takes as well: HDR off until the settings apply.
+        &horizon_client::graphics::Graphics::default(),
+        Default::default(),
+        previous.map(|r| r.display_reading()).unwrap_or_default(),
     )
     .await?;
     if let Some(atlas) = atlas {
@@ -356,6 +363,8 @@ pub(super) fn start_game<'a>(
                 fps_cap: None,
                 offscreen: game.options.offscreen,
                 game_dir: horizon_os::env::current_dir()?,
+                set: game.options.benchmark_set.clone(),
+                profile: game.options.benchmark_profile,
             },
         );
     }

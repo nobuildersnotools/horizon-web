@@ -2,6 +2,7 @@
 //! scoped threads each step runs on, and the core, gameplay and pack tables
 //! read from the prepared resources.
 use super::*;
+use horizon_os::fs::PathExt;
 
 pub(super) const STAGE_LINES: [&str; 10] = [
     "Loading menu",
@@ -87,7 +88,7 @@ pub(super) fn named_scope<'scope, T: Send + 'scope>(
         scope.spawn(f)
     }
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::Builder::new()
+    horizon_os::thread::Builder::new()
         // Linux keeps 15 bytes of a thread name: a short prefix keeps them apart
         // ("horizon-load-core" and "horizon-load-collision" would both read
         // "horizon-load-co").
@@ -130,6 +131,7 @@ impl<'scope, T: Send + 'scope> Step<'scope, T> {
 /// `load_resources` binds them into the pack tables and `WorldCore`.
 pub(super) struct CoreTables {
     pub(super) assets: Assets,
+    pub(super) entity_models: Option<Arc<horizon_client::mobs::EntityModelDocument>>,
     pub(super) item_defaults: Arc<horizon_world::item_defaults::Defaults>,
     pub(super) render: RenderAssets,
     pub(super) item_renderer: horizon_client::item_render::ItemRenderer,
@@ -167,16 +169,24 @@ pub(super) fn load_core(
     // read and the block facts; on a cold cache that read was most of a
     // second on the critical path, and warm it is still ~30 ms.
     // A server draws nothing and parses no models, so it skips this.
-    let (assets, parsed_models) = horizon_os::thread::scope(|scope| {
+    let (assets, parsed_models, entity_models) = horizon_os::thread::scope(|scope| {
         let models = (parallel && !headless).then(|| {
             scope.spawn(|| {
                 let _step = startup::step("core.models_parse");
                 horizon_client::model_library::ParsedModels::load(root)
             })
         });
+        let entity_models = (!headless).then(|| {
+            Step::spawn(scope, parallel, "entity_models", || {
+                startup::time("core.entity_models", || {
+                    horizon_client::mobs::EntityModelDocument::load(root).ok()
+                })
+            })
+        });
         let assets = startup::time("core.assets", || Assets::load(root));
         let models = models.map(|m| m.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
-        (assets, models)
+        let entity_models = entity_models.and_then(|step| step.join()).map(Arc::new);
+        (assets, models, entity_models)
     });
     let assets = match assets {
         Ok(assets) => assets,
@@ -184,8 +194,9 @@ pub(super) fn load_core(
     };
     progress.set(1);
     let registry = assets.registry;
-    let (render, gameplay, visibility, biomes, environment, collision) =
-        horizon_os::thread::scope(|scope| {
+    let entity_models_for_render = entity_models.clone();
+    let (render, gameplay, visibility, biomes, environment, collision) = horizon_os::thread::scope(
+        |scope| {
             let assets = &assets;
             let render = Step::spawn(scope, parallel, "render", move || {
                 // A server reads no block sprites' pixels, which only the
@@ -209,6 +220,10 @@ pub(super) fn load_core(
                 let item_renderer = startup::time("core.item_models", || {
                     if headless {
                         horizon_client::item_render::ItemRenderer::load_for_server(root, library)
+                    } else if let Some(document) = entity_models_for_render.as_deref() {
+                        horizon_client::item_render::ItemRenderer::load_with_library_and_entity_models(
+                            root, library, document,
+                        )
                     } else {
                         horizon_client::item_render::ItemRenderer::load_with_library(root, library)
                     }
@@ -257,7 +272,8 @@ pub(super) fn load_core(
                 environment.join(),
                 collision.join(),
             )
-        });
+        },
+    );
     // The packs' failure first: it rolls back whatever else failed.
     let (render, item_renderer, item_defaults) = match render {
         Ok(render) => render,
@@ -267,6 +283,7 @@ pub(super) fn load_core(
     progress.set(3);
     Ok(Ok(CoreTables {
         item_defaults,
+        entity_models,
         gameplay,
         biomes: biomes?,
         environment: environment?,
@@ -378,8 +395,8 @@ pub(super) fn load_resources(
             Some(ui)
         }
     };
-    let (core, loaded_gui, entity_models) = loop {
-        let (ui, core, entity_models) = horizon_os::thread::scope(|scope| {
+    let (core, loaded_gui) = loop {
+        let (ui, core) = horizon_os::thread::scope(|scope| {
             let core = Step::spawn(scope, parallel, "core", || {
                 // A failed pack starts core again from the game's own
                 // resources, which the world's preload must read: with packs
@@ -389,22 +406,12 @@ pub(super) fn load_resources(
                     load_core(&root, headless, parallel, progress, early)
                 })
             });
-            // The handoff's entity models, the rest worker's mob models and
-            // its transformers all read this one document. A server draws
-            // none of them.
-            let entity_models = (!headless).then(|| {
-                Step::spawn(scope, parallel, "entity_models", || {
-                    startup::time("core.entity_models", || {
-                        horizon_client::mobs::EntityModelDocument::load(&root).ok()
-                    })
-                })
-            });
             let ui = load_ui(&root).map(|ui| offer(ui, &root));
-            (ui, core.join(), entity_models.and_then(|step| step.join()))
+            (ui, core.join())
         });
         let packs = root != vanilla_root;
         let failure = match (ui, core) {
-            (Ok(gui), Ok(Ok(core))) => break (core, gui, entity_models),
+            (Ok(gui), Ok(Ok(core))) => break (core, gui),
             (Err(e), _) if packs => e.to_string(),
             (_, Ok(Err(e))) if packs => e,
             (_, Ok(Err(e))) => {
@@ -423,9 +430,9 @@ pub(super) fn load_resources(
         root = vanilla_root.to_path_buf();
     };
     log::info!("load core tables: {:.2}s", started.elapsed().as_secs_f32());
-    let entity_models = entity_models.map(Arc::new);
     let CoreTables {
         assets,
+        entity_models,
         item_defaults,
         render,
         item_renderer,
@@ -508,7 +515,6 @@ pub(super) fn load_resources(
         let handle = horizon_os::thread::Builder::new()
             .name("world-rest-loader".into())
             .spawn(move || {
-                let _item_defaults = item_defaults;
                 let _step = startup::step("rest");
                 let rest = load_world_rest(
                     &root,
@@ -517,6 +523,7 @@ pub(super) fn load_resources(
                     &behaviour_json,
                     &gameplay_projection,
                     entity_models.as_deref(),
+                    item_defaults.as_ref(),
                     visibility,
                     &progress,
                     started,
@@ -548,6 +555,7 @@ pub(super) fn load_resources(
             &behaviour_json,
             &gameplay_projection,
             entity_models.as_deref(),
+            item_defaults.as_ref(),
             visibility,
             progress,
             started,

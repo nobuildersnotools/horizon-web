@@ -26,7 +26,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
-
 pub(super) struct Toast {
     icon: String,
     frame: Frame,
@@ -60,7 +59,7 @@ impl Toast {
             last_changed: 0,
         }
     }
-    /// A mod's own toast (`native_add_toast`, API @API:add_toast@): drawn as an `AdvancementToast`
+    /// A mod's own toast (`native_add_toast`, API 581): drawn as an `AdvancementToast`
     /// with `label` in the frame label's place and `description` as its
     /// title, yellow (pink, with the challenge sound, for a challenge).
     pub(super) fn of_mod(icon: &str, label: Text, description: Text, challenge: bool) -> Self {
@@ -214,6 +213,10 @@ impl adv::World for View<'_, '_> {
             .unwrap_or_default();
         (name, props)
     }
+    fn block_property_values(&self, block: &str, property: &str) -> Option<Vec<String>> {
+        let values = self.0.pack.assets.registry.property_values(block, property);
+        (!values.is_empty()).then(|| values.into_iter().map(str::to_owned).collect())
+    }
     fn fluid(&self, p: [i32; 3]) -> Option<String> {
         match self
             .0
@@ -227,15 +230,10 @@ impl adv::World for View<'_, '_> {
             _ => None,
         }
     }
+    /// `Level.canSeeSky`: sky light 15 at the position, whatever stands
+    /// above it, as `MobWorld` reads it for the spawn rules.
     fn can_see_sky(&self, p: [i32; 3]) -> bool {
-        (p[1] + 1..p[1] + 200).all(|y| {
-            !self
-                .0
-                .res
-                .facts()
-                .get(self.0.world.block(p[0], y, p[2]))
-                .full_collision
-        })
+        self.0.mob_world_base(&[]).can_see_sky(p[0], p[1], p[2])
     }
     fn light(&self, p: [i32; 3]) -> i32 {
         let l = self.0.world.light(p[0], p[1], p[2]);
@@ -802,6 +800,7 @@ impl Game<'_> {
             let mut tag = horizon_client::entity_nbt::mob_to_nbt(m, uuid, raw, registry, |other| {
                 self.persist.uuid_of(other)
             });
+            self.put_last_hurt_by_mob(m, &mut tag);
             let riders = passengers.iter().filter_map(|r| r.nbt.clone()).collect();
             super::persist::add_passengers(&mut tag, riders);
             tag
@@ -1019,15 +1018,15 @@ impl Game<'_> {
     }
     /// `AdvancementRewards.grant`'s pickup: volume 0.2 at the player's feet,
     /// pitch `(nextFloat - nextFloat) * 0.7 + 1`, times 2. `playSound(null, …)`
-    /// so the player hears it. The draws are the level random, which is the
-    /// stream item pickup already uses for this pitch.
+    /// so the player hears it. The draws are the player's own random
+    /// (`player.getRandom()`), which no level draw shares.
     fn advancement_pickup_sound(&mut self) {
         let Some(p) = self.player.as_ref() else {
             return;
         };
         let at = [p.position.x, p.position.y, p.position.z];
-        let pitch =
-            ((self.world.random.next_float() - self.world.random.next_float()) * 0.7 + 1.0) * 2.0;
+        let mut random = horizon_client::random_source::entity();
+        let pitch = ((random.next_float() - random.next_float()) * 0.7 + 1.0) * 2.0;
         self.audio
             .play("minecraft:entity.item.pickup", Some(at), 0.2, pitch);
     }
@@ -1161,7 +1160,7 @@ impl Game<'_> {
         self.adv.last_inventory = key;
         // Native mods hear the change before any criterion is looked at, so
         // they do with no `inventory_changed` advancement in the tree too
-        // (`native_player_inventory_changed`, API @API:player_inventory_changed@).
+        // (`native_player_inventory_changed`, API 579).
         if self.remote.is_none()
             && !self.no_player_here()
             && !horizon_client::mod_api::mods().is_empty()
@@ -1251,7 +1250,7 @@ impl Game<'_> {
         }
         self.check_inventory_trigger();
         // ServerPlayer.tick: PlayerTrigger.TICK every tick.
-        let me = self.player_entity_for("minecraft:tick");
+        let me = self.player_entity_if_listened("minecraft:tick");
         self.trigger("minecraft:tick", |c, w| {
             let ctx = adv::Entities {
                 this: Some(&me),
@@ -1285,7 +1284,7 @@ impl Game<'_> {
         }
         self.tick_marks();
         if self.ticks.is_multiple_of(20) {
-            let me = self.player_entity_for("minecraft:location");
+            let me = self.player_entity_if_listened("minecraft:location");
             self.trigger("minecraft:location", |c, w| {
                 let ctx = adv::Entities {
                     this: Some(&me),
@@ -1885,7 +1884,6 @@ impl Game<'_> {
             adv::conditions(&c["player"], &ctx, w) && adv::block(c, pos, w)
         });
     }
-
     /// `TargetBlockTrigger`: signal and projectile conditions are evaluated in
     /// the shooter's context, including distance from the shooter.
     pub(super) fn trigger_target_hit(&mut self, projectile: &EntityView, strength: i32) {
@@ -1907,7 +1905,6 @@ impl Game<'_> {
                 && adv::conditions(&c["projectile"], &target, w)
         });
     }
-
     /// `ItemUsedOnLocationTrigger` (placed_block, item_used_on_block).
     pub(super) fn trigger_block(&mut self, name: &str, pos: [i32; 3], stack: &ItemStack) {
         let me = self.player_entity_for(name);
@@ -2178,16 +2175,24 @@ impl Game<'_> {
     /// Overworld position the player went into the Nether from (`at`) is kept
     /// for the way back, and any other trip drops it.
     pub(super) fn trigger_dimension(&mut self, from: Dim, to: Dim, at: [f64; 3]) {
-        let (from_id, to_id) = (from.id().to_owned(), to.id().to_owned());
-        self.trigger("minecraft:changed_dimension", move |c, _| {
-            c["from"].as_str().is_none_or(|f| adv::full(f) == from_id)
-                && c["to"].as_str().is_none_or(|t| adv::full(t) == to_id)
-        });
+        self.trigger_changed_dimension(from, to);
         if from == Dim::Overworld && to == Dim::Nether {
             self.adv.marks.nether = Some(at);
         } else if !(from == Dim::Nether && to == Dim::Overworld) {
             self.adv.marks.nether = None;
         }
+    }
+    /// `CriteriaTriggers.CHANGED_DIMENSION` alone, without the
+    /// `enteredNetherPosition` bookkeeping of
+    /// `ServerPlayer.triggerDimensionChangeTriggers`: a respawn after the
+    /// credits triggers the criterion (`END` → `OVERWORLD`, whatever level
+    /// the point is in) and leaves that position as it is.
+    pub(super) fn trigger_changed_dimension(&mut self, from: Dim, to: Dim) {
+        let (from_id, to_id) = (from.id().to_owned(), to.id().to_owned());
+        self.trigger("minecraft:changed_dimension", move |c, _| {
+            c["from"].as_str().is_none_or(|f| adv::full(f) == from_id)
+                && c["to"].as_str().is_none_or(|t| adv::full(t) == to_id)
+        });
     }
     /// `ToastManager.SLOT_COUNT`.
     pub(super) const TOAST_SLOTS: usize = 5;
@@ -2548,6 +2553,40 @@ impl Game<'_> {
 /// with its siblings and styles, as a plugin's `{"text":"","extra":[...]}` needs.
 pub(super) fn text_of(v: &Value) -> Text {
     horizon_client::scoreboard::comp_text(v)
+}
+/// An advancement's display as a server mod reads it: its title and
+/// description as text (the components as the datapack wrote them), its
+/// frame (`task`, `goal` or `challenge`), and whether it is announced in
+/// chat and hidden until earned.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AdvancementDisplay {
+    pub title: Text,
+    pub description: Text,
+    pub frame: String,
+    pub announce_to_chat: bool,
+    pub hidden: bool,
+}
+
+impl Game<'_> {
+    /// The display of the advancement `id` in the loaded tree; None for an
+    /// id the tree does not have, or one with no display. API 591.
+    pub(super) fn native_advancement_display(&mut self, id: &str) -> Option<AdvancementDisplay> {
+        let tree = self.advancement_tree();
+        let advancement = &tree.list[*tree.by_id.get(id)?];
+        let display = advancement.display.as_ref()?;
+        Some(AdvancementDisplay {
+            title: text_of(&display.title),
+            description: text_of(&display.description),
+            frame: match &display.frame {
+                Frame::Task => "task",
+                Frame::Goal => "goal",
+                Frame::Challenge => "challenge",
+            }
+            .to_owned(),
+            announce_to_chat: display.announce,
+            hidden: display.hidden,
+        })
+    }
 }
 
 #[cfg(test)]
