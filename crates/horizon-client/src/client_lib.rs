@@ -2,6 +2,9 @@
 //! bindings between the validated simulation pieces and the game loop.
 #![forbid(unsafe_code)]
 extern crate self as horizon_client;
+// The browser's stand-in for ureq: the same calls, every request failing as if offline.
+#[cfg(target_arch = "wasm32")]
+extern crate horizon_ureq_web as ureq;
 pub mod advancements;
 pub mod ambience;
 pub mod animate_tick;

@@ -389,8 +389,14 @@ pub(super) fn start_game<'a>(
         return Ok(None);
     }
     if game.options.execution_role == execution_role::ExecutionRole::DedicatedServer {
-        game.run_dedicated()?;
-        return Ok(None);
+        // A browser can't host a dedicated server: its code stays out of the page.
+        #[cfg(target_arch = "wasm32")]
+        return Err("a dedicated server can't run in the browser".into());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            game.run_dedicated()?;
+            return Ok(None);
+        }
     }
     match game.options.world.clone() {
         _ if game.options.server.is_some() => {

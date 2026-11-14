@@ -4,6 +4,7 @@ members = [
     "crates/horizon-addresses",
     "crates/horizon-core",
     "crates/horizon-os",
+    "crates/horizon-ureq-web",
     "crates/horizon-dualsense",
     "crates/horizon-narrator",
     "crates/horizon-threads",

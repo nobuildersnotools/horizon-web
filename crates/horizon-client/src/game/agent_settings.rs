@@ -77,6 +77,7 @@ impl Game<'_> {
     }
 
     /// An agent's command arrived.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))] // Only the control socket calls it.
     pub(super) fn agent_command_seen(&mut self) {
         self.agent_last = Some(horizon_os::time::Instant::now());
     }

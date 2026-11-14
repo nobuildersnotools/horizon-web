@@ -8,6 +8,9 @@
 //! player model it rides on and a few simple looping animations; a name tag
 //! style is a small mark and a line colour, with no model. This crate
 //! reads and checks items and poses them; the game draws them.
+// The browser's stand-in for ureq: the same calls, every request failing as if offline.
+#[cfg(target_arch = "wasm32")]
+extern crate horizon_ureq_web as ureq;
 
 pub mod account;
 mod emote;

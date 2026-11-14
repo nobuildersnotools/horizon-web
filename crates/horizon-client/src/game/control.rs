@@ -223,19 +223,9 @@ impl Game<'_> {
         self.poll_repro(event_loop);
         self.poll_profile();
         self.advance_agent();
-        for request in self.ui_wait.ready() {
-            self.answer(request, event_loop);
-        }
-        while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
-            // Once per line received, not once per handler: a deferred `ui`
-            // comes back through `ui_wait` and must not be traced twice.
-            self.note_socket_line(&request.line);
-            self.agent_command_seen();
-            self.answer(request, event_loop);
-            if self.pending_save.is_some() {
-                break;
-            }
-        }
+        // The browser has no control socket (horizon-ctl): its commands stay out of the page.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.answer_socket(event_loop);
         // A recording made from the F3 keys or the Settings page has no socket,
         // and still wants its events.
         if self.control.is_some() || self.repro.recording_active() {
@@ -249,6 +239,25 @@ impl Game<'_> {
         }
     }
 
+    /// The control socket's requests, waiting and new.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn answer_socket(&mut self, event_loop: &dyn EventLoopCtl) {
+        for request in self.ui_wait.ready() {
+            self.answer(request, event_loop);
+        }
+        while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
+            // Once per line received, not once per handler: a deferred `ui`
+            // comes back through `ui_wait` and must not be traced twice.
+            self.note_socket_line(&request.line);
+            self.agent_command_seen();
+            self.answer(request, event_loop);
+            if self.pending_save.is_some() {
+                break;
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn answer(&mut self, request: horizon_client::control::Request, event_loop: &dyn EventLoopCtl) {
         let reply = match self.control_command(&request.line, &request.reply, event_loop) {
             Ok(Some(value)) => value,

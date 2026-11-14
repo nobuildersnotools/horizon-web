@@ -4,6 +4,9 @@
 //! looking players up by name. The game's dedicated server
 //! (`horizon-client --dedicated`) reads them, and `horizon-server` manages
 //! them; this crate needs neither a window nor the game.
+// The browser's stand-in for ureq: the same calls, every request failing as if offline.
+#[cfg(target_arch = "wasm32")]
+extern crate horizon_ureq_web as ureq;
 pub mod chat_guard;
 pub mod duration;
 pub mod eula;

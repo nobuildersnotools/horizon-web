@@ -38,6 +38,7 @@ impl UiWait {
             })
     }
     /// The commands that can run now.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))] // Only the control socket calls it.
     pub(super) fn ready(&mut self) -> Vec<Request> {
         if self.stale() {
             return Vec::new();

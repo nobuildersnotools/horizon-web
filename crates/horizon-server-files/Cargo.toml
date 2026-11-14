@@ -16,12 +16,14 @@ getrandom = "0.3"
 # Online mode: finding accounts by name (the services' profiles endpoint).
 # Secure chat: the services' public keys arrive base64-encoded.
 base64 = "0.22"
-ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [lints]
 workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
-ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
-rustls-pki-types = { version = "1", features = ["web"] }
+# The browser's stand-in for ureq: every request fails as if offline (the crate root names it `ureq`).
+horizon-ureq-web = { path = "../horizon-ureq-web" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Not in the browser, which has no HTTP client for it: `horizon-ureq-web` stands in there.
+ureq = { version = "2", default-features = false, features = ["tls"] }

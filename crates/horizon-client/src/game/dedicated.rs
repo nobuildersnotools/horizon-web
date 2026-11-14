@@ -6,6 +6,8 @@
 //! its simulation and the play-state hub that LAN hosting uses, configured
 //! from server.properties, with the operator, whitelist and ban lists and a
 //! console on standard input.
+// The browser has no dedicated server or control socket: this is unused there.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 use super::{Game, Options, lan::LanSettings, world_loading::WorldRequest};
 use horizon_client::{
     Result,

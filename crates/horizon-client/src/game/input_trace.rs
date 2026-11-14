@@ -8,6 +8,8 @@
 //!
 //! The events are also what a repro recording writes to `inputs.jsonl`
 //! (game/repro.rs).
+// The browser has no dedicated server or control socket: this is unused there.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 use super::{Game, Screen};
 use horizon_client::{Result, keybinds};
 use horizon_os::time::{Duration, Instant};

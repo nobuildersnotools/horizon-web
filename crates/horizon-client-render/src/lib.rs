@@ -1,6 +1,9 @@
 //! The client's world data, rendering and screens: chunks, meshing, light, streaming, the renderer,
 //! the HUD, menus and settings. Gameplay (horizon-client) builds on it; nothing here reaches gameplay.
 #![forbid(unsafe_code)]
+// The browser's stand-in for ureq: the same calls, every request failing as if offline.
+#[cfg(target_arch = "wasm32")]
+extern crate horizon_ureq_web as ureq;
 pub mod android_gamepad;
 pub mod android_runtime;
 pub mod assets;
