@@ -3,20 +3,153 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Horizon</title>
+<meta name="theme-color" content="#100d23">
+<meta name="description" content="Horizon: Minecraft Java Edition, rebuilt in Rust and running in your browser.">
+<title>Horizon — Browser Edition</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  body > canvas { display: block; width: 100vw !important; height: 100vh !important; outline: none; }
-  #status {
-    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: #ddd; font: 16px/1.5 system-ui, sans-serif; text-align: center; padding: 16px;
-    pointer-events: none; white-space: pre-line;
+  :root {
+    color-scheme: dark;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #100d23;
+    color: #f4f2ff;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #100d23;
+  }
+
+  body {
+    isolation: isolate;
+    background:
+      radial-gradient(ellipse at 50% 105%, rgba(108, 72, 179, .38), transparent 49%),
+      radial-gradient(ellipse at 78% 12%, rgba(113, 64, 139, .2), transparent 38%),
+      linear-gradient(180deg, #100d23 0%, #21153d 58%, #56305d 100%);
+  }
+
+  /* A quiet, blocky skyline gives the boot screen a Horizon-shaped place to land. */
+  body::before,
+  body::after {
+    position: fixed;
+    z-index: -1;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    content: "";
+    pointer-events: none;
+  }
+
+  body::before {
+    height: min(43vh, 360px);
+    opacity: .8;
+    background:
+      linear-gradient(90deg, transparent 0 7%, #34224e 7% 13%, transparent 13% 18%, #392450 18% 25%, transparent 25% 31%, #33224d 31% 38%, transparent 38% 44%, #392450 44% 51%, transparent 51% 58%, #34224e 58% 65%, transparent 65% 72%, #392450 72% 79%, transparent 79% 86%, #34224e 86% 93%, transparent 93%),
+      linear-gradient(180deg, transparent 0 24%, #392450 24% 100%);
+    clip-path: polygon(0 58%, 7% 58%, 7% 34%, 13% 34%, 13% 51%, 18% 51%, 18% 24%, 25% 24%, 25% 46%, 31% 46%, 31% 32%, 38% 32%, 38% 55%, 44% 55%, 44% 29%, 51% 29%, 51% 49%, 58% 49%, 58% 19%, 65% 19%, 65% 48%, 72% 48%, 72% 33%, 79% 33%, 79% 54%, 86% 54%, 86% 28%, 93% 28%, 93% 43%, 100% 43%, 100% 100%, 0 100%);
+  }
+
+  body::after {
+    height: min(25vh, 210px);
+    opacity: .75;
+    background: linear-gradient(180deg, #251b42, #19142f);
+    clip-path: polygon(0 47%, 12% 25%, 25% 45%, 40% 15%, 55% 48%, 70% 22%, 85% 43%, 100% 17%, 100% 100%, 0 100%);
+  }
+
+  body > canvas {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    display: block;
+    width: 100vw !important;
+    height: 100vh !important;
+    outline: none;
+  }
+
+  #status {
+    position: fixed;
+    z-index: 2;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 88px 24px 96px;
+    color: #d7d1ed;
+    font-size: clamp(14px, 1.5vw, 16px);
+    line-height: 1.65;
+    text-align: center;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    background:
+      radial-gradient(ellipse at 50% 50%, rgba(16, 13, 35, .18), rgba(16, 13, 35, .48) 72%),
+      radial-gradient(1px 1px at 12% 18%, rgba(255,255,255,.7) 99%, transparent),
+      radial-gradient(1px 1px at 83% 23%, rgba(255,255,255,.55) 99%, transparent),
+      radial-gradient(1px 1px at 72% 42%, rgba(255,255,255,.5) 99%, transparent),
+      radial-gradient(1px 1px at 21% 38%, rgba(255,255,255,.45) 99%, transparent);
+    pointer-events: none;
+    animation: boot-in 600ms cubic-bezier(.23, 1, .32, 1) both;
+  }
+
+  #status::before {
+    position: absolute;
+    top: clamp(24px, 5vh, 48px);
+    left: clamp(24px, 5vw, 64px);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #f4f2ff;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: .16em;
+    content: "HORIZON  /  BROWSER EDITION";
+  }
+
+  #status::after {
+    position: absolute;
+    bottom: clamp(28px, 6vh, 56px);
+    left: 50%;
+    width: min(180px, 42vw);
+    height: 3px;
+    content: "";
+    transform: translateX(-50%);
+    background: linear-gradient(90deg, transparent, #9b83ff 35%, #c1a8ff 50%, #9b83ff 65%, transparent);
+    background-size: 220% 100%;
+    animation: loading-shimmer 1.8s ease-in-out infinite;
+  }
+
   #status:empty { display: none; }
+
+  @keyframes loading-shimmer {
+    from { background-position: 100% 0; }
+    to { background-position: -120% 0; }
+  }
+
+  @keyframes boot-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @media (max-width: 520px) {
+    #status { padding-right: 22px; padding-left: 22px; }
+    #status::before { top: 24px; left: 22px; font-size: 11px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #status { animation: none; }
+    #status::after { animation: none; background: #9b83ff; }
+  }
 </style>
 </head>
 <body>
-<div id="status">Starting…</div>
+<div id="status" role="status" aria-live="polite" aria-atomic="true">Starting…</div>
 <script type="module" src="main.js"></script>
 </body>
 </html>
