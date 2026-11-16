@@ -60,7 +60,8 @@ def folder(out: Path) -> None:
         (fs / "res" / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(res / rel, fs / "res" / rel)
         count += 1
-    files = ("pkg/horizon-client_bg.wasm", "fs/boot.tar.gz")
+    files = ("pkg/horizon-client_bg.wasm", "fs/boot.tar.gz", "pkg/horizon-client.js", "main.js", "worker.js",
+             "fs/manifest.txt")
     (site / "build.json").write_text("{" + ", ".join(f'"{f}": "{digest(site / f)}"' for f in files) + "}\n")
     size = sum(p.stat().st_size for p in site.rglob("*") if p.is_file())
     print(f"{site}: {size / 1e6:.0f} MB ({count} files fetched when read)")

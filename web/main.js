@@ -24,23 +24,29 @@ async function webgpu() {
 // Starts the service worker and, on a first visit, waits briefly for it to
 // take over the page, so the large files it fetches are kept.
 // A host that sends no isolation headers (a static host) gets them from the
-// service worker: once it controls the page, a reload makes it isolated.
+// service worker: once it is active, a reload through it makes the page
+// isolated. That also covers a first install slower than the wait and a hard
+// reload, which skips the worker (it never takes over that page).
 async function cacheWorker() {
     const workers = navigator.serviceWorker;
     if (!workers) return;
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    let active = false;
     try {
         await workers.register("sw.js");
         if (!workers.controller) {
             await Promise.race([
                 new Promise((resolve) => workers.addEventListener("controllerchange", resolve, { once: true })),
-                new Promise((resolve) => setTimeout(resolve, 3000)),
+                wait(3000),
             ]);
         }
+        active = !!workers.controller ||
+            (!window.crossOriginIsolated && !!(await Promise.race([workers.ready, wait(30000)]))?.active);
     } catch (e) {
         console.warn(`Horizon: no service worker, files won't be kept for later visits: ${e}`);
         return;
     }
-    if (!window.crossOriginIsolated && workers.controller && !sessionStorage.getItem("horizon-isolating")) {
+    if (!window.crossOriginIsolated && active && !sessionStorage.getItem("horizon-isolating")) {
         sessionStorage.setItem("horizon-isolating", "1");
         location.reload();
         await new Promise(() => {});
@@ -48,14 +54,21 @@ async function cacheWorker() {
     sessionStorage.removeItem("horizon-isolating");
 }
 
-// The large files' addresses with their content hash (build.json), which the
-// service worker keeps them by.
+// The large files' and the page's scripts' addresses with their content hash
+// (build.json), which the service worker keeps them by. Every file that must
+// match the WebAssembly is asked for by its hash, so a browser or CDN cache
+// that kept an older one (only the wasm's address changed) can't pair it with
+// this build's module.
 async function versioned() {
     const files = await fetch("build.json", { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : {}))
         .catch(() => ({}));
     const at = (path) => (files[path] ? `${path}?v=${files[path]}` : path);
-    return { wasm: at("pkg/horizon-client_bg.wasm"), boot: at("fs/boot.tar.gz") };
+    // The workers load the same glue as the page (horizon-os's workers.rs).
+    const glue = files["pkg/horizon-client.js"];
+    globalThis.horizonWorkerScript = glue ? `worker.js?v=${files["worker.js"] ?? ""}&glue=${glue}` : "worker.js";
+    return { wasm: at("pkg/horizon-client_bg.wasm"), boot: at("fs/boot.tar.gz"), glue: `./${at("pkg/horizon-client.js")}`,
+        manifest: at("fs/manifest.txt") };
 }
 
 async function download(url, label) {
@@ -223,13 +236,13 @@ async function served() {
     if (!window.crossOriginIsolated) throw new Error("the page can't share memory with the game's threads");
     const files = await versioned();
     status.textContent = "Loading the game…";
-    const glue = await import("./pkg/horizon-client.js");
+    const glue = await import(files.glue);
     // Runs the game's main, which only registers the game to start.
     await glue.default({ module_or_path: files.wasm });
     const gz = await download(files.boot, "Downloading resources");
     const tar = new Uint8Array(
         await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
-    const manifest = await (await fetch("fs/manifest.txt")).text();
+    const manifest = await (await fetch(files.manifest)).text();
     return { glue, tar, manifest, base: "fs/res/" };
 }
 

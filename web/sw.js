@@ -47,7 +47,16 @@ async function hashed(event, url) {
 async function fresh(event) {
     const cache = await caches.open(CACHE);
     try {
-        const response = await fetch(event.request);
+        // Asks the server whether the browser's copy is still current, so a
+        // deploy reaches the page at once: a host that sends no Cache-Control
+        // for the page lets the browser keep it by its age alone. A
+        // navigation's request can't take options, so it is asked for anew.
+        const navigate = event.request.mode === "navigate";
+        const response = await (navigate
+            ? fetch(event.request.url, { cache: "no-cache", credentials: "same-origin" })
+            : fetch(event.request, { cache: "no-cache" }));
+        // A navigation can't be answered with a followed redirect.
+        if (navigate && response.redirected) return Response.redirect(response.url, 302);
         if (response.ok) event.waitUntil(cache.put(event.request, response.clone()));
         return response;
     } catch (e) {

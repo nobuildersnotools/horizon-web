@@ -158,10 +158,18 @@ world `Test` in creative mode at start.
   output (rumble, adaptive triggers, lights) needs HID, which pages don't
   have: `horizon-dualsense` builds without it, as on iOS.
 - **Caching** (`web/sw.js`): `build.sh` writes `build.json` with the content
-  hashes of the WebAssembly and `boot.tar.gz`, and the page asks for them as
-  `…?v=<hash>`. The service worker keeps those until a build changes them;
-  everything else goes to the network first and falls back to its copy offline.
-  Files fetched when read (`fs/res/`) aren't kept.
+  hashes of the WebAssembly, `boot.tar.gz`, `manifest.txt` and every script
+  that must match the module (`main.js`, the wasm-bindgen glue, `worker.js`),
+  and the page asks for them as `…?v=<hash>` (`index.html` reads `build.json`
+  for `main.js`; the workers get the glue's hash in their script's address).
+  A host or CDN that caches scripts for hours can then never pair an old glue
+  with a new module (`LinkError: memory import has N pages`). The service
+  worker keeps hashed files until a build changes them; everything else is
+  revalidated with the server and falls back to its copy offline. Files
+  fetched when read (`fs/res/`) aren't kept. On a static host the worker also
+  adds COOP/COEP to its answers: once it is active the page reloads through
+  it (once per session), also after a first install slower than 3 s or a hard
+  reload, which skips the worker.
 - **Multiplayer**: pages have no TCP, so the client reaches a server through a
   WebSocket to the server's own port (`horizon_os::net`): `ws://host:port/`,
   or `wss:` when the page is `https:`. The socket lives on the page, whose

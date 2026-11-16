@@ -48,6 +48,20 @@ bindgen=(wasm-bindgen --target web --no-typescript --out-dir "$dist/pkg")
 # Function names (5 MB) only make stack traces readable: the release build drops them.
 [ "$profile" = release ] && bindgen+=(--remove-name-section)
 "${bindgen[@]}" "$target_dir/wasm32-unknown-unknown/$profile/horizon-client.wasm"
+# The glue imports its snippets (`inline_js`) from folders named per crate, not
+# per content: ask for each by its hash, so a cache can't hand the page an
+# older one, and a changed snippet changes the glue's own hash (build.json).
+python3 - "$dist/pkg/horizon-client.js" <<'PY'
+import hashlib, re, sys
+from pathlib import Path
+glue = Path(sys.argv[1])
+def stamp(m):
+    rel = m.group(3)
+    h = hashlib.sha256((glue.parent / rel).read_bytes()).hexdigest()[:16]
+    return f"{m.group(1)}{m.group(2)}{rel}?v={h}{m.group(2)}"
+# Only the import statements: the module's import object keeps the plain names.
+glue.write_text(re.sub(r"""(\bfrom\s*)(['"])(\./snippets/[^'"?]+\.js)\2""", stamp, glue.read_text()))
+PY
 wasm="$dist/pkg/horizon-client_bg.wasm"
 if [ "$profile" = release ] && [ "${WASM_OPT:-1}" != 0 ]; then
     if command -v wasm-opt > /dev/null; then
@@ -79,7 +93,9 @@ def digest(rel):
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()[:16]
-files = {rel: digest(rel) for rel in ("pkg/horizon-client_bg.wasm", "fs/boot.tar.gz")}
+files = {rel: digest(rel) for rel in (
+    "pkg/horizon-client_bg.wasm", "fs/boot.tar.gz", "pkg/horizon-client.js", "main.js", "worker.js",
+    "fs/manifest.txt")}
 (dist / "build.json").write_text(json.dumps(files) + "\n")
 PY
 ls -l "$dist/pkg"/*.wasm

@@ -17,6 +17,11 @@
 </head>
 <body>
 <div id="status">Starting…</div>
-<script type="module" src="main.js"></script>
+<script type="module">
+// main.js by its content hash (build.json): a cache that kept an older one
+// would pair it with this build's game.
+const files = await fetch("build.json", { cache: "no-store" }).then((r) => r.json()).catch(() => ({}));
+await import(files["main.js"] ? `./main.js?v=${files["main.js"]}` : "./main.js");
+</script>
 </body>
 </html>
