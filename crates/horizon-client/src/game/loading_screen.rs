@@ -160,6 +160,7 @@ impl Loading {
             });
         let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
         let boot_step = startup::step("renderer.boot");
+        let rays = shader_packs::picked_pack_shape(&self.settings).ray_tracing;
         #[cfg(target_arch = "wasm32")]
         {
             let slot = std::rc::Rc::new(RefCell::new(None));
@@ -167,7 +168,7 @@ impl Loading {
             let (opening, api) = (window.clone(), self.settings.horizon.api);
             wasm_bindgen_futures::spawn_local(async move {
                 let renderer =
-                    open_loading_renderer(opening, offscreen, None, None, None, api).await;
+                    open_loading_renderer(opening, offscreen, None, None, None, api, rays).await;
                 *out.borrow_mut() = Some(renderer);
             });
             self.opening = Some(slot);
@@ -182,6 +183,7 @@ impl Loading {
                 None,
                 None,
                 self.settings.horizon.api,
+                rays,
             ) {
                 Ok(r) => self.renderer = Some(r),
                 Err(e) => {
@@ -248,6 +250,7 @@ impl Loading {
             Some(&bundle.panorama),
             self.renderer.as_ref(),
             self.settings.horizon.api,
+            shader_packs::picked_pack_shape(&self.settings).ray_tracing,
         ) {
             Ok(r) => {
                 horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);

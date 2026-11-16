@@ -232,7 +232,7 @@ impl<P: Copy, S: Copy> Lines<P, S> {
 pub(crate) fn backdrop(batch: &mut HudBatch, atlas: &HudAtlas, in_world: bool) {
     let (w, h) = (batch.width, batch.height);
     ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
-    style::veil(batch, atlas, [0.0, 0.0, w, h]);
+    style::veil_over(batch, atlas, [0.0, 0.0, w, h], in_world);
 }
 
 /// The mark and the screen's name over the search field.
@@ -266,7 +266,7 @@ pub(crate) fn page_tab(
         crate::widgets::target_as(rect, crate::widgets::Kind::Tab(open));
     }
     if open {
-        style::open(batch, atlas, rect, true);
+        style::open_page(batch, atlas, rect);
     }
     let color = match (open || hover, has) {
         (true, _) => style::white(),
@@ -293,13 +293,22 @@ pub(crate) fn search_field(
     let rect = cols.search();
     style::well(batch, atlas, rect);
     search.focused = focused;
-    let [x, y, _, h] = rect;
+    let [x, y, w, h] = rect;
     let clear = cols.clear();
     (search.x, search.y) = (x + 5.0, y + ((h - 8.0) / 2.0).floor());
     search.width = clear[0] - search.x;
     search.text_color = style::white();
-    // The clear button isn't the field's: a click at the field's end must not press it.
-    let frame = [x, y, clear[0] - x, h];
+    // The whole field, but for the clear button while it shows: a click there must not press it.
+    let frame = [
+        x,
+        y,
+        if search.value.is_empty() {
+            w
+        } else {
+            clear[0] - x
+        },
+        h,
+    ];
     search.frame = Some(frame);
     search.draw(batch, atlas, None);
     if ui::hovered(cursor, x, y, frame[2], h) {
@@ -336,10 +345,10 @@ pub(crate) fn search_field(
 /// The plate, with the open page's name (or the search's) over its list.
 pub(crate) fn plate(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, heading: &str) {
     let [px, py, pw, _] = cols.plate;
-    style::panel(batch, atlas, cols.plate);
+    style::sheet(batch, atlas, cols.plate);
     let heading = Text::literal(style::fit(atlas, heading, pw - 24.0));
     batch.text_styled(atlas, &heading, px + 12.0, py + 10.0, style::white(), true);
-    style::rule(batch, atlas, [px + 8.0, py + 24.0, pw - 16.0, 1.0], true);
+    style::heading_rule(batch, atlas, [px + 8.0, py + 24.0, pw - 16.0, 1.0]);
 }
 
 /// The list, clipped to its view: each group's panel, then its names and rows on it. `row`
@@ -385,7 +394,7 @@ pub(crate) fn list<P: Copy, S: Copy>(
         };
         if !after_name {
             let rule = [cols.list_x + 8.0, y, cols.list_w - 16.0, 1.0];
-            style::rule(batch, atlas, rule, false);
+            style::rule(batch, atlas, rule);
         }
         row(batch, setting, y);
     }
@@ -535,16 +544,16 @@ pub(crate) fn row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32
         // Where the control starts, and the value's text for a slider at rest.
         let start = match (switch, slider) {
             (Some(_), _) => right - style::CONTROL_H,
-            (None, Some(_)) if active => tx,
+            (None, Some(_)) if active || style::vanilla_surfaces() => tx,
             (None, Some(_)) => right - vw,
-            (None, None) => right - vw - 18.0,
+            (None, None) => right - style::value_w(atlas, value),
         };
         match (switch, slider) {
-            (Some(on), _) => style::checkbox(batch, atlas, right, y, on, live),
+            (Some(on), _) => style::checkbox(batch, atlas, right, y, on, (lit, live)),
             // A slider shows its track, the value on it, while it is pointed at, focused or held.
             (None, Some(position)) => {
                 let value = Text::literal(value);
-                if active {
+                if active || style::vanilla_surfaces() {
                     style::slider(batch, atlas, control, &value, position, (lit, live));
                 } else {
                     batch.text_styled(atlas, &value, start, ty, soft, true);
@@ -556,7 +565,7 @@ pub(crate) fn row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32
                     Some(true) => value.with_color(crate::text::YELLOW),
                     _ => value,
                 };
-                let chip = [start, y + 3.0, vw + 18.0, 14.0];
+                let chip = style::value_rect(start, right, y);
                 style::button(batch, atlas, chip, &value, (lit, live, false));
             }
             (None, None) => {
@@ -564,7 +573,7 @@ pub(crate) fn row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32
                 style::cycler(
                     batch,
                     atlas,
-                    [start, y + 3.0, vw + 18.0, 14.0],
+                    style::value_rect(start, right, y),
                     &value,
                     (lit, live),
                 );
@@ -1905,7 +1914,7 @@ impl<S: Screen> Shell<S> {
         if let Some((strip, shown)) = &list.strip {
             // The row's page is open: lit as the list's open page is.
             if list.lit == Some(*shown) {
-                style::open(batch, atlas, strip.area, true);
+                style::open_page(batch, atlas, strip.area);
             }
             tabs::draw(batch, atlas, strip);
         }
@@ -2238,7 +2247,7 @@ impl<S: Screen> Shell<S> {
         let [x, y, w, _] = cols.dock;
         let left = x + DOCK_INSET;
         let top = y + DOCK_NAME_Y;
-        style::panel(batch, atlas, cols.dock);
+        style::sheet(batch, atlas, cols.dock);
         let row = described.map(|i| &view.rows[i]);
         let why = row.and_then(|row| row.why.as_deref().filter(|_| !row.live));
         let said = row.map(|row| self.strip_text(row));

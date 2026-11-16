@@ -59,7 +59,6 @@ use std::{
     sync::Arc,
 };
 use winit::{event::MouseButton, keyboard::KeyCode};
-
 #[path = "remote_abilities.rs"]
 mod abilities;
 #[path = "remote_poll.rs"]
@@ -1116,6 +1115,7 @@ impl Game<'_> {
             level: 0,
             progress: 0.0,
             total: 0,
+            score: 0,
         };
         // The connected client never opens a server world (single player also
         // joins here), so load the registries its argument parsers and local
@@ -1310,7 +1310,6 @@ impl Game<'_> {
         self.stats = Default::default();
         Ok(())
     }
-
     /// Prepare a client session and remote state to receive packets from a studio replay.
     pub(super) fn init_remote_for_replay(&mut self) -> Result<()> {
         self.reset_tutorial();
@@ -1371,12 +1370,12 @@ impl Game<'_> {
         self.carried = None;
         self.using = None;
         self.end_mod_use();
-
         self.set_mode_id(0);
         self.experience = Experience {
             level: 0,
             progress: 0.0,
             total: 0,
+            score: 0,
         };
         self.ui.registries = Default::default();
         self.build_registries();
@@ -1393,7 +1392,6 @@ impl Game<'_> {
         self.apply_settings();
         self.clear_waypoints();
         self.boss_overlay.reset();
-
         let chat_tree = self.chat_tree_for(None);
         let services_keys = Arc::new(std::sync::Mutex::new(ServicesKeys::Ready(Vec::new())));
 
@@ -2239,6 +2237,7 @@ impl Game<'_> {
                 Arc::new(ChunkFormat::new(&r.dimension, biomes, bits).in_column(column));
             r.registries = registries;
         }
+        self.invalidate_tagged_shader_ids();
     }
     /// Switch to a (possibly new) dimension: a fresh client level.
     fn enter_remote_dimension(
@@ -2485,7 +2484,7 @@ impl Game<'_> {
         let Some(entity) = self.world.block_entities.get(&key) else {
             return;
         };
-        if entity.id() != name || fields.is_empty() {
+        if entity.id() != name || fields.is_empty() && !matches!(entity, BlockEntity::Conduit(_)) {
             return;
         }
         let mut full = fields.clone();
@@ -3317,7 +3316,8 @@ impl Game<'_> {
                 if p.keep & 2 == 0 {
                     self.riding = None;
                     // KEEP_ENTITY_DATA copies the old player's synched data
-                    // (its shared flags) to the new one; without it they reset.
+                    // (its shared flags, its score) to the new one; without it they reset.
+                    self.experience.score = 0;
                     if let Some(r) = self.remote.as_mut() {
                         r.own_invisible = false;
                         r.own_on_fire = false;
@@ -3919,6 +3919,7 @@ impl Game<'_> {
                                     let _ = pl.internal_set_absorption(*amount);
                                 }
                             }
+                            (18, Value::Int(score)) => self.experience.score = *score,
                             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: the server
                             // starts or stops this player's use, as an axe that
                             // disables the raised shield does (Player.disableShield's
@@ -4522,6 +4523,7 @@ impl Game<'_> {
                     level: p.level,
                     progress: p.progress,
                     total: p.total,
+                    score: self.experience.score,
                 }
             }
             // ClientPacketListener.handleSetTime: the game time, then
@@ -5370,7 +5372,6 @@ impl Game<'_> {
             self.gui.atlas.object_skins_revision,
         ));
     }
-
     pub(super) fn remote_tab_players(
         &mut self,
     ) -> Option<(Vec<horizon_client::tab_list::TabPlayer>, bool, Vec<u128>)> {
@@ -5919,11 +5920,11 @@ impl Game<'_> {
         };
         let at = Vec3::new(p[0], p[1], p[2]);
         // ItemEntity's constructor draws bobOffs from the item's own random.
-        let mut random = (*horizon_client::mobs::entity_random(id as u32, at)).clone();
-        let bob_offset = random.next_float() * std::f32::consts::PI * 2.0;
+        let mut random = horizon_client::mobs::entity_random(id as u32, at);
+        let bob = super::item_entities::bob_offset(at, random.next_float(), self.clock.still());
         self.dropped.push(ItemEntity {
             random,
-            ..ItemEntity::new(id as u32, stack, at, velocity, bob_offset)
+            ..ItemEntity::new(id as u32, stack, at, velocity, bob)
         });
     }
     /// `Entity.lerpMotion` (and `recreateFromPacket`'s motion) for the
@@ -6224,9 +6225,9 @@ impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.tick_remote_level()?;
-        // The rockets boosting this player tick after it, also while it waits
-        // for chunks.
+        // Its rockets tick after the player (even waiting for chunks), then ParticleEngine.tick.
         self.tick_own_rockets();
+        self.tick_remote_particle_engine();
         // Client mods tick on any server, single player's own included.
         self.native_net.to_server = 0;
         self.native_tick();
@@ -6342,7 +6343,7 @@ impl Game<'_> {
         }
         self.tick_hand();
         if running {
-            self.tick_particles();
+            self.tick_particle_spawns(); // ParticleEngine.tick: tick_remote, after the rockets.
         } else if self.clock.still() {
             self.settle_rain_fog();
         }
@@ -7322,7 +7323,7 @@ impl Game<'_> {
             let mut items = std::mem::take(&mut self.dropped);
             items.retain_mut(|item| {
                 // The server decides entity collisions. This copy predicts block movement.
-                let (_, discarded) =
+                let (_, discarded, _) =
                     self.tick_item_with_block_contacts(item, None, &[], true, &mut |splash| {
                         entered.push(splash);
                     });
@@ -7902,7 +7903,7 @@ impl Game<'_> {
     }
     /// MultiPlayerGameMode.destroyBlock: the predicted break.
     fn predict_break(&mut self, pos: [i32; 3], state: BlockStateId, sequence: i32) {
-        self.tutorial_destroy(state, 1.0);
+        self.player_broke_block(state);
         // BlockStatePredictionHandler.retainKnownServerState.
         let here = self.player_position();
         if let Some(r) = self.remote.as_mut() {
@@ -8248,7 +8249,7 @@ impl Game<'_> {
                 pos: hit.pos,
                 face: i32::from(face_direction(hit.face)),
                 cursor,
-                inside: hit.face == [0; 3],
+                inside: hit.inside,
                 world_border: false,
                 sequence: seq,
             }));
@@ -8407,7 +8408,6 @@ impl Game<'_> {
                 // BlockItem.useOn: a consumable that could not be placed is used
                 // (Item.use), which the server does for this same packet. CONSUME
                 // does not swing, and a full player's FAIL still ends the click.
-                // Adventure's can_place_on leaves the placing to the server.
                 if !reacts
                     && placed.is_none()
                     && self.may_build()
@@ -8688,20 +8688,21 @@ impl Game<'_> {
     /// Run BlockItem.place on a disposable level: where it placed and the
     /// blocks it set. The real level supplies collision shapes and
     /// building-blocking entities; random draws, scheduled ticks and events
-    /// stay in the preview.
+    /// stay in the preview. `ItemStack.useOn` runs it in adventure mode only
+    /// when the used stack's `can_place_on` names the clicked block.
     pub(super) fn remote_can_place(
         &mut self,
         hit: &super::Hit,
         stack: &ItemStack,
     ) -> Option<DryPlace> {
-        if !self.may_build() {
+        if !self.may_build() && !self.stack_can_place_on_in_adventure(stack, hit.pos) {
             return None;
         }
         let ctx = horizon_world::level::PlaceContext {
             clicked_pos: horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
             face: horizon_core::geometry::Direction::ALL[face_direction(hit.face) as usize],
             hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-            inside: hit.face == [0; 3],
+            inside: hit.inside,
             yaw: self.yaw,
             pitch: self.pitch,
             sneaking: self.remote_shift_down(),
@@ -9892,6 +9893,7 @@ impl Game<'_> {
         if let [(Some(slot), button, input)] = ops {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
+        let split = self.split_click(ops);
         let (container, menu) = self.remote_menu();
         let mut clicks = Vec::with_capacity(ops.len());
         for &(slot, button, input) in ops {
@@ -9921,6 +9923,13 @@ impl Game<'_> {
             Some(true)
         });
         self.send_clicks(container, sent);
+        // The pad's own click, and only the pad's: the mouse's split doesn't buzz.
+        if self.input_made_pointer_event()
+            && let Some(split) = split
+            && self.split_done(split)
+        {
+            self.input_feedback(horizon_client::input_source::Feedback::ItemStackSplit);
+        }
         // LivingEntity.drop(.., Prediction.PREDICTED): the client swings its own
         // main hand; the server shows the swing only to the other players.
         if threw {
@@ -10118,10 +10127,10 @@ impl Game<'_> {
     ) {
         if let Some(r) = self.remote.as_mut() {
             r.menu = Some((container, "minecraft:merchant".to_owned()));
-            r.menu_title = Some(text);
+            r.menu_title = Some(text.clone());
         }
         let session = horizon_client::merchant::Session::new(Vec::new(), true);
-        self.open_remote_merchant(session, (!title.is_empty()).then_some(title));
+        self.open_remote_merchant(session, (!title.is_empty()).then_some(text));
     }
     /// ClientboundMerchantOffersPacket.
     fn remote_merchant_offers(&mut self, p: play::MerchantOffers) {
@@ -11850,6 +11859,7 @@ mod tests {
                 pos,
                 face: [0, 1, 0],
                 point: [f64::from(pos[0]) + 0.5, 70.0, 0.5],
+                inside: false,
             };
             let stack = ItemStack::new(name, 2);
             assert_eq!(game.items().get(name).unwrap().block, Some(target));
@@ -11872,6 +11882,7 @@ mod tests {
             pos: [0, 70, 0],
             face: [0, 1, 0],
             point: [0.5, 71.0, 0.5],
+            inside: false,
         };
         game.set_mode_id(2);
         let before = game.held().cloned();
@@ -13493,6 +13504,7 @@ mod tests {
             pos: [0, 63, 0],
             face: [0, 1, 0],
             point: [0.5, 64.0, 0.5],
+            inside: false,
         });
 
         let done = game.remote_use_block(Hand::Main);

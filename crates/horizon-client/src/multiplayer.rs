@@ -836,7 +836,7 @@ impl Screen {
                     quarter(h) + 96.0 + 18.0,
                     200.0,
                     &crate::lang::get_or("gui.done", "Done"),
-                    servers::parse_address(address).is_some(),
+                    servers::is_valid_address(address),
                     50,
                 ),
                 b(
@@ -877,7 +877,7 @@ impl Screen {
                     quarter(h) + 96.0 + 12.0,
                     200.0,
                     &crate::lang::get_or("selectServer.select", "Join Server"),
-                    servers::parse_address(address).is_some(),
+                    servers::is_valid_address(address),
                     52,
                 ),
                 b(
@@ -1257,7 +1257,7 @@ impl Screen {
                             featured_label(batch, atlas, k, nx, cy + 1.0);
                             // OnlineServerEntry: up to two lines of MOTD, the
                             // player count left of the status icon, all with
-                            // GuiGraphics.text's shadow.
+                            // GuiGraphicsExtractor.text's shadow.
                             let (motd, status, sprite) = match pings.get(&server.ip) {
                                 Some(Ping::Ok {
                                     motd, players, ms, ..
@@ -1573,12 +1573,10 @@ impl Screen {
     pub fn confirm(&self) -> Outcome {
         match self {
             Self::Page(form) => form.confirm(),
-            Self::Direct { address } if servers::parse_address(address).is_some() => {
-                Outcome::Connect {
-                    address: direct_address(address),
-                    lan: false,
-                }
-            }
+            Self::Direct { address } if servers::is_valid_address(address) => Outcome::Connect {
+                address: direct_address(address),
+                lan: false,
+            },
             Self::List {
                 servers,
                 selected,
@@ -2470,6 +2468,39 @@ mod tests {
             direct.confirm(),
             Outcome::Connect { lan: false, .. }
         ));
+    }
+
+    #[test]
+    fn done_and_join_server_follow_server_address_is_valid_address() {
+        let enabled = |screen: &Screen, id: u8| {
+            screen
+                .buttons(427.0, 240.0)
+                .iter()
+                .find(|b| b.5 == id)
+                .map(|b| b.4)
+        };
+        for (address, valid) in [
+            ("play.example.org:25570", true),
+            ("play..example.org", false),
+        ] {
+            let edit = Screen::Edit {
+                index: None,
+                name: "Server".into(),
+                address: address.into(),
+                focus: 1,
+                packs: None,
+            };
+            assert_eq!(enabled(&edit, 50), Some(valid), "Done: {address}");
+            let direct = Screen::Direct {
+                address: address.into(),
+            };
+            assert_eq!(enabled(&direct, 52), Some(valid), "Join Server: {address}");
+            assert_eq!(
+                matches!(direct.confirm(), Outcome::Connect { .. }),
+                valid,
+                "confirm: {address}"
+            );
+        }
     }
 
     #[test]

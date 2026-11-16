@@ -44,7 +44,7 @@ use horizon_client::{
 use horizon_core::{
     geometry::{Aabb, Direction, Vec3, traverse_blocks, trig::Mth},
     position::BlockPos,
-    random::{LevelRandom, RandomSource},
+    random::RandomSource,
 };
 use std::sync::Arc;
 
@@ -271,7 +271,7 @@ fn flame_geometry(
                 normal: [0; 4],
                 pos: p.to_array(),
                 uv,
-                // HDR output: the flames shine like fire (entity.wgsl fs_hdr_mark).
+                // HDR output: the flames shine like fire (entity.wgsl hdr_entity_mark).
                 layer: u32::from(horizon_client::mesher::INCANDESCENT) << 16,
                 color: 0xFFFF_FFFF,
                 light: packed,
@@ -614,7 +614,7 @@ impl Game<'_> {
                 at[2].floor() as i32,
             );
             let difficulty = self.local_difficulty(at);
-            spawning::finalize(&mut mob, &facts, &difficulty);
+            spawning::finalize(&mut mob, &facts, &difficulty, &mut self.world.random);
             if !scripted {
                 let reason = if persistent {
                     horizon_client::mobs::raider::Reason::Other
@@ -826,7 +826,7 @@ impl Game<'_> {
         );
         let difficulty = self.local_difficulty([at.x, at.y, at.z]);
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-            spawning::finalize(m, &facts, &difficulty);
+            spawning::finalize(m, &facts, &difficulty, &mut self.world.random);
             // `Raider.finalizeSpawn`, which the witch's conversion reaches too.
             horizon_client::mobs::raider::finalize(m, horizon_client::mobs::raider::Reason::Other);
             m.persistent = true;
@@ -1229,7 +1229,7 @@ impl Game<'_> {
             let start = mob_group::Start {
                 events,
                 // The level random, lent to the mobs and taken back after their ticks.
-                random: (*self.world.random).clone(),
+                random: self.world.random.clone(),
                 guests,
                 player: base.player.take(),
                 bindings,
@@ -1240,7 +1240,6 @@ impl Game<'_> {
             let difficulty = difficulty_reader(&self.world);
             let mut turns = mob_group::Turns {
                 base: &base,
-                despawn: base.despawn_view(),
                 ticking: &ticking,
                 nearest: &nearest,
                 single_player,
@@ -1327,7 +1326,7 @@ impl Game<'_> {
             guest_events,
             ..
         } = group;
-        self.world.random = LevelRandom::for_level(level_random);
+        self.world.random = level_random;
         if let Some(host) = self.lan.as_mut()
             && !guests.is_empty()
         {
@@ -2284,10 +2283,9 @@ impl Game<'_> {
                     let ctx = self.who_context(Some(Who::Mob(source)), None);
                     self.post_game_event(event, at, ctx);
                 }
-                // A mob's own `gameEvent(..)` calls: Armadillo.rollUp/rollOut's
-                // ENTITY_ACTION, Creeper.tick's PRIME_FUSE, Mob.ate's EAT, a fox's
-                // DRINK, the shulker's lid, an evoker's vexes (ENTITY_PLACE),
-                // Enderman.teleport's TELEPORT, onEquipItem's EQUIP/UNEQUIP.
+                // A mob's own `gameEvent(..)` calls: Armadillo.rollUp/rollOut's ENTITY_ACTION,
+                // PRIME_FUSE, EAT, a fox's DRINK, the shulker's lid, an evoker's vexes
+                // (ENTITY_PLACE), TELEPORT, EQUIP/UNEQUIP, updateFallFlying's ELYTRA_GLIDE.
                 MobEvent::GameEvent {
                     event, at, source, ..
                 } if matches!(
@@ -2302,6 +2300,7 @@ impl Game<'_> {
                         | "minecraft:teleport"
                         | "minecraft:equip"
                         | "minecraft:unequip"
+                        | "minecraft:elytra_glide"
                 ) =>
                 {
                     let ctx = self.who_context(Some(Who::Mob(source)), None);
@@ -3257,16 +3256,13 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::StartRiding { rider, vehicle } => {
-                    if horizon_client::mobs::riders::start_riding(&mut self.mobs, rider, vehicle) {
-                        // sendEventAndTriggers: the server players already on it.
-                        self.note_started_riding(vehicle);
-                    }
+                    self.start_riding_mob(rider, vehicle);
                 }
                 // Applied after the fish's tick (`apply_brain_events`).
                 MobEvent::StartFollowing { .. }
                 | MobEvent::SchoolSize { .. }
                 | MobEvent::PufferfishSting { .. } => {}
-                MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
+                e @ MobEvent::LeashBreak { .. } => self.leash_break_event(e),
                 MobEvent::NotifyLeashHolder { holder } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == holder) {
                         horizon_client::mobs::happy_ghast::notify_leash_holder(m);
@@ -5178,7 +5174,7 @@ impl Game<'_> {
             let mut arrow = p.clone();
             let amount = self.shot_damage(&mut arrow, None);
             let creative = p.owner == Some(Who::Player) && self.creative;
-            self.hurt_boat(i, amount, creative);
+            self.hurt_boat_by(i, amount, creative, super::nonliving_hurt::projectile_by(p));
             self.finish_arrow_hit(arrow, EntityHit::Hurt);
             return Ok(());
         }
@@ -7847,7 +7843,7 @@ fn breeding_credit(
 mod shulker_arrow_tests {
     use super::*;
     use horizon_client::arrows::{ArrowEvent, deflect_reverse};
-    use horizon_core::random::LegacyRandom;
+    use horizon_core::random::{EntityRandom, LegacyRandom};
 
     /// `AbstractArrow.onHitEntity` after `hurtOrSimulate` fails and the target
     /// still takes a projectile's side effects: `deflect(REVERSE, …, 0.2)`,
@@ -7867,7 +7863,7 @@ mod shulker_arrow_tests {
             Vec3::new(0.0, 1.0, 0.0),
             Some(Who::Player),
         )
-        .with_arrow_random(LegacyRandom::new(7));
+        .with_arrow_random(EntityRandom::own(LegacyRandom::new(7)));
         arrow.velocity = Vec3::new(3.0, -1.0, 2.0);
         arrow.yaw = 15.0;
         let mut oracle = LegacyRandom::new(7);
@@ -9053,6 +9049,45 @@ mod h169_glide_travel_tests {
             assert_eq!(source_damage_type(damage), "minecraft:fly_into_wall");
             assert_eq!(game.uuid_for(id), [169, 0, 0, 4]);
         });
+    }
+
+    #[test]
+    fn hostile_mobs_in_non_entity_ticking_chunks_do_not_despawn() {
+        if std::env::var_os("HORIZON_TEST_RESOURCES").is_none() {
+            return;
+        }
+        let mut game = crate::game::native_machines::tests::server_game();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.player = Some(
+            horizon_client::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5))
+                .unwrap(),
+        );
+        let cx = 20;
+        let pos_x = (cx * 16 + 8) as f64;
+        game.world.chunks.insert(
+            (cx, 0),
+            Arc::new(horizon_client::chunk::Chunk::empty(cx, 0)),
+        );
+        assert!(game.run_command(&format!(
+            "summon zombie {pos_x} 65.0 8.5 {{UUID:[I;16553,0,0,1],PersistenceRequired:0b}}"
+        )));
+        let mob_id = game
+            .mobs
+            .iter()
+            .find(|m| game.persist.uuid_of(m.id) == Some([16553, 0, 0, 1]))
+            .map(|m| m.id)
+            .expect("zombie spawned");
+
+        assert!(game.world.loaded(pos_x as i32, 8));
+        assert!(!game.entity_ticking_area()(pos_x as i32, 8));
+
+        game.tick_creature_entities().unwrap();
+
+        assert!(
+            game.mobs.iter().any(|m| m.id == mob_id),
+            "hostile mob in non-entity-ticking chunk must not despawn (#16553)"
+        );
     }
 }
 

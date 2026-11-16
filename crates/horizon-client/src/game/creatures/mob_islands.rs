@@ -35,7 +35,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Axis},
-    random::OrderedDraws,
+    random::{LevelRandom, OrderedDraws},
 };
 use std::{
     cell::Cell,
@@ -265,7 +265,7 @@ impl Islands<'_> {
                     .collect();
                 let group_start = Start {
                     events: Vec::new(),
-                    random: draws.lane(lane),
+                    random: LevelRandom::for_level(draws.lane(lane)),
                     guests: start.guests.clone(),
                     player: start.player.clone(),
                     bindings,
@@ -348,7 +348,7 @@ impl Islands<'_> {
             mobs,
             Vec::new(),
             Start {
-                random: draws.finish(),
+                random: LevelRandom::for_level(draws.finish()),
                 targets,
                 ..start
             },
@@ -395,12 +395,9 @@ impl Islands<'_> {
             };
             let mut base = rebuild();
             base.who_lookup = Some(&lookup);
-            // The despawn checks look up no mob, as the serial loop's.
-            let despawn = base.despawn_view();
             base.foreign = Some(&foreign);
             let mut turns = Turns {
                 base: &base,
-                despawn,
                 ticking: &*ticking,
                 nearest,
                 single_player,
@@ -1471,7 +1468,6 @@ mod tests {
                 let nearest = super::super::prep::MobsNearest::new(&players, &mobs, false);
                 let mut turns = Turns {
                     base: &base,
-                    despawn: base.despawn_view(),
                     ticking: &|_, _| true,
                     nearest: &nearest,
                     single_player: Some(None),
@@ -1483,7 +1479,7 @@ mod tests {
                 };
                 let start = Start {
                     events: Vec::new(),
-                    random: horizon_core::random::LegacyRandom::new(7),
+                    random: LevelRandom::for_level(horizon_core::random::LegacyRandom::new(7)),
                     guests: Vec::new(),
                     player: None,
                     bindings: Default::default(),
@@ -1547,7 +1543,7 @@ mod tests {
             .unwrap();
         let mobs = game.mobs.to_vec();
         let snapshot = mobs.iter().map(|m| m.seen(None)).collect::<Vec<_>>();
-        let mut random = horizon_core::random::LegacyRandom::new(7);
+        let mut random = LevelRandom::for_level(horizon_core::random::LegacyRandom::new(7));
         random.next_gaussian();
         let start = Start {
             events: Vec::new(),
@@ -1719,7 +1715,6 @@ mod tests {
         let nearest = super::super::prep::MobsNearest::new(&players, &mobs, false);
         let turns = Turns {
             base: &base,
-            despawn: base.despawn_view(),
             ticking: &|_, _| true,
             nearest: &nearest,
             single_player: Some(None),
@@ -1966,7 +1961,6 @@ mod tests {
         let ticking = |x: i32, _: i32| x.rem_euclid(1000) >= 1;
         let mut turns = Turns {
             base: &base,
-            despawn: base.despawn_view(),
             ticking: &ticking,
             nearest: &nearest,
             single_player: Some(None),
@@ -1976,7 +1970,7 @@ mod tests {
         };
         let start = Start {
             events: Vec::new(),
-            random: horizon_core::random::LegacyRandom::new(7),
+            random: LevelRandom::for_level(horizon_core::random::LegacyRandom::new(7)),
             guests: Vec::new(),
             player: None,
             bindings: Default::default(),

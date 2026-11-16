@@ -473,7 +473,7 @@ pub trait TrialSpawnerExt: Sized {
         pos: [i32; 3],
         state: TrialState,
         ominous: bool,
-        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        spawn: &mut dyn FnMut(&L, &mut R, &SpawnerSpawn) -> Option<Uuid>,
         eject: &mut dyn FnMut(&str, &mut R) -> bool,
         events: &mut Vec<TrialEvent>,
     ) -> TrialState;
@@ -485,7 +485,7 @@ pub trait TrialSpawnerExt: Sized {
         random: &mut R,
         pos: [i32; 3],
         state: TrialState,
-        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        spawn: &mut dyn FnMut(&L, &mut R, &SpawnerSpawn) -> Option<Uuid>,
         eject: &mut dyn FnMut(&str, &mut R) -> bool,
         events: &mut Vec<TrialEvent>,
     ) -> TrialState;
@@ -495,7 +495,7 @@ pub trait TrialSpawnerExt: Sized {
         l: &L,
         random: &mut R,
         pos: [i32; 3],
-        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        spawn: &mut dyn FnMut(&L, &mut R, &SpawnerSpawn) -> Option<Uuid>,
         events: &mut Vec<TrialEvent>,
     ) -> Option<Uuid>;
 }
@@ -892,7 +892,7 @@ impl TrialSpawnerExt for TrialSpawner {
         pos: [i32; 3],
         state: TrialState,
         ominous: bool,
-        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        spawn: &mut dyn FnMut(&L, &mut R, &SpawnerSpawn) -> Option<Uuid>,
         eject: &mut dyn FnMut(&str, &mut R) -> bool,
         events: &mut Vec<TrialEvent>,
     ) -> TrialState {
@@ -918,7 +918,7 @@ impl TrialSpawnerExt for TrialSpawner {
         random: &mut R,
         pos: [i32; 3],
         state: TrialState,
-        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        spawn: &mut dyn FnMut(&L, &mut R, &SpawnerSpawn) -> Option<Uuid>,
         eject: &mut dyn FnMut(&str, &mut R) -> bool,
         events: &mut Vec<TrialEvent>,
     ) -> TrialState {
@@ -1049,7 +1049,7 @@ impl TrialSpawnerExt for TrialSpawner {
         l: &L,
         random: &mut R,
         pos: [i32; 3],
-        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        spawn: &mut dyn FnMut(&L, &mut R, &SpawnerSpawn) -> Option<Uuid>,
         events: &mut Vec<TrialEvent>,
     ) -> Option<Uuid> {
         let data = self.next_or_create(random, events).clone();
@@ -1121,7 +1121,7 @@ impl TrialSpawnerExt for TrialSpawner {
             equipment: data.equipment.as_ref(),
             trial: true,
         };
-        let uuid = spawn(l, &request)?;
+        let uuid = spawn(l, random, &request)?;
         let flame = i32::from(self.is_ominous);
         events.push(TrialEvent::LevelEvent(3011, pos, flame));
         events.push(TrialEvent::LevelEvent(3012, block, flame));

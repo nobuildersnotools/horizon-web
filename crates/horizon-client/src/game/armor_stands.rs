@@ -11,7 +11,7 @@ use horizon_client::{
     entities::ArmorStand,
     items::ItemStack,
     mesher::Vertex,
-    mobs::{Mob, Part, anim::Poses},
+    mobs::{Mob, Part, Who, anim::Poses},
     trims::{TrimOverride, TrimRegistry, TrimTexture},
 };
 use horizon_core::{
@@ -576,7 +576,7 @@ impl Game<'_> {
             _ => 0,
         }
     }
-    /// `ArmorStand.interactAt` for the stand under the crosshair, or for the
+    /// `ArmorStand.interact` for the stand under the crosshair, or for the
     /// stand a guest's interact packet named (its client's click point).
     pub(super) fn interact_armor_stand(&mut self, target: Option<InteractTarget>) -> bool {
         let Some((i, d, point)) = (match target {
@@ -610,6 +610,7 @@ impl Game<'_> {
                 return false;
             }
             let id = stand.id;
+            let at = [stand.position.x, stand.position.y, stand.position.z];
             let name = stand.custom_name.as_ref().map(|name| name.plain());
             if alive {
                 // `Player.interactOn` gives a creative player the count back.
@@ -620,6 +621,11 @@ impl Game<'_> {
                     self.native_player_name_entity(player, &player_name, id, &name);
                 }
             }
+            // `Player.interactOn`: the tag consumed the use, so the stand
+            // posts `gameEvent(GameEvent.ENTITY_INTERACT)` from the player,
+            // alive or not (`NameTagItem` succeeds either way).
+            let ctx = self.who_context(Some(Who::Player), None);
+            self.post_game_event("minecraft:entity_interact", at, ctx);
             self.swing_arm();
             return true;
         }
@@ -627,7 +633,7 @@ impl Game<'_> {
         let slot = match &held {
             Some(h) => {
                 let slot = self.equipment_slot(h);
-                // ArmorStand.interactAt: a disabled slot, or a hand without
+                // ArmorStand.interact: a disabled slot, or a hand without
                 // arms, is FAIL.
                 if a.is_disabled(slot) {
                     return true;
@@ -729,6 +735,16 @@ impl Game<'_> {
         };
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
+        }
+        // ArmorStand.skipAttackInteraction: `mayInteract` at its block refuses
+        // the hit before any damage is worked out (so before its RNG draws).
+        let at = self.armor_stands[i].position;
+        if !self.may_interact_at(BlockPos::new(
+            at.x.floor() as i32,
+            at.y.floor() as i32,
+            at.z.floor() as i32,
+        )) {
+            return true;
         }
         let ((_, scale, crit, magic), admitted) =
             self.melee_damage_with_admission("minecraft:armor_stand", true);
@@ -908,6 +924,19 @@ impl Game<'_> {
             let travels = !self.armor_stands[i].marker && !self.armor_stands[i].no_gravity;
             if travels && obstacles.is_none() {
                 obstacles = Some(self.stand_entity_collisions());
+            }
+            // LivingEntity.baseTick: air below the max refills by 4 a tick
+            // (increaseAirSupply), in water too, as armor_stand is in the
+            // can_breathe_under_water tag. A stand's air is its loaded tag's.
+            let id = self.armor_stands[i].id;
+            if let Some(horizon_world::nbt::Tag::Compound(map)) = self.persist.raw.get_mut(&id)
+                && let Some(air) = map
+                    .get(&"Air".into())
+                    .and_then(horizon_client::nbt_path::int_value)
+                && air < 300
+            {
+                let air = (air + 4).min(300) as i16;
+                map.insert("Air".into(), horizon_world::nbt::Tag::Short(air));
             }
             let a = &mut self.armor_stands[i];
             a.previous = a.position;
@@ -1288,7 +1317,7 @@ impl Game<'_> {
             .raw
             .get(&id)
             .is_some_and(|tag| horizon_client::entity_nbt::flag(tag, "Invulnerable"));
-        // Entity.isInvulnerableTo: the flag, then EnchantmentHelper.isImmuneToDamage.
+        // Entity.isInvulnerableToBase: the flag, then EnchantmentHelper.isImmuneToDamage.
         let a = &self.armor_stands[i];
         if (invulnerable && !creative)
             || a.invisible
@@ -1459,7 +1488,7 @@ impl Game<'_> {
             let dragon = a.equipment[5]
                 .as_ref()
                 .is_some_and(|i| &*i.item == "minecraft:dragon_head");
-            if !self.standing_entity_in_view(
+            let Some(sight) = self.standing_entity_sight(
                 camera,
                 super::entity_culling::at(a.previous),
                 super::entity_culling::at(a.position),
@@ -1468,10 +1497,10 @@ impl Game<'_> {
                 height,
                 range,
                 if dragon { 0.5 } else { 0.0 },
-            ) {
+            ) else {
                 continue;
-            }
-            let culling = self.entity_cull_decision(a, alpha);
+            };
+            let culling = self.sighted_decision(sight, || self.entity_cull_decision(a, alpha));
             if culling.hides_entity() {
                 continue;
             }
@@ -1511,8 +1540,10 @@ impl Game<'_> {
                 self.armor_stand_vertices(a, base, packed, None, out);
                 None
             };
-            if !self.entity_glowing(a.id) {
-                self.cull_skinned(out, entity_start, skinned);
+            if culling.rays_only() {
+                self.ray_only(out, entity_start);
+            } else if !self.entity_glowing(a.id) {
+                self.culled_for_rays(|| self.cull_skinned(out, entity_start, skinned));
             }
         }
     }

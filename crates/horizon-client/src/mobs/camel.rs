@@ -4,8 +4,8 @@ use super::{
     Mob, MobEvent, MobWorld,
     anim::{Poses, State},
     goals::{
-        Breed, Cx, Float, FollowParent, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll,
-        Tempt, goal_clone,
+        AnimalPanic, Breed, Cx, Float, FollowParent, Goal, LookAtPlayer, MOVE, RandomLookAround,
+        Stroll, Tempt, goal_clone,
     },
 };
 use horizon_core::geometry::trig::Mth;
@@ -28,7 +28,7 @@ pub fn register(m: &mut Mob) {
     let g = &mut m.ai.goals;
     // CamelAi speed modifiers (times the 0.09 movement speed attribute).
     g.add(0, Float);
-    g.add(1, CamelPanic(Panic::new(4.0)));
+    g.add(1, CamelPanic(AnimalPanic::new(4.0)));
     g.add(2, Breed::new(1.0));
     g.add(3, Tempt::new(2.5, tempt, false));
     // CamelAi's `triggerIf(Predicate.not(Camel::refuseToMove), ...)` around
@@ -353,7 +353,7 @@ fn sound(m: &Mob, name: &'static str, events: &mut Vec<MobEvent>) {
 }
 /// `CamelAi.CamelPanic`: standing up at once to flee.
 #[derive(Clone, Debug)]
-struct CamelPanic(Panic);
+struct CamelPanic(AnimalPanic);
 impl Goal for CamelPanic {
     goal_clone!();
     fn flags(&self) -> u8 {
@@ -372,8 +372,14 @@ impl Goal for CamelPanic {
         stand_up_instantly(m);
         self.0.start(m, cx);
     }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx);
+    }
     fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.0.stop(m, cx);
+    }
+    fn every_tick(&self) -> bool {
+        self.0.every_tick()
     }
 }
 /// `CamelAi.RandomSitting`: after 20 seconds in a pose, sit or stand.
@@ -385,14 +391,16 @@ impl Goal for RandomSitting {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        // checkExtraStartConditions: not leashed, no controlling passenger
-        // (a player's or a mob's, a husk on its back), and room for the pose
-        // it would take (`Camel.canCamelChangePose`).
+        // `CamelAi.RandomSitting` checkExtraStartConditions: not leashed, no
+        // controlling passenger (a driver on a saddled camel, or a mob on its
+        // back: `Camel.hasControllingPassenger`), and room for the pose it
+        // would take (`Camel.canCamelChangePose`). A player on an unsaddled
+        // camel is only a passenger, so it kneels under them.
         !m.fluids.in_water
             && pose_time(m) >= 400
             && m.extra.leash.is_none()
             && m.on_ground
-            && m.rider.is_none()
+            && !super::equine::controlled(m)
             && !super::riders::mob_controlled(m, cx.w)
             && can_change_pose(m, cx.w)
             && m.random.next_int_bound(4).unwrap_or(1) == 0
@@ -541,6 +549,10 @@ pub fn anim(
 }
 
 #[cfg(test)]
+#[path = "camel_husk_tests.rs"]
+mod camel_husk_tests;
+
+#[cfg(test)]
 mod camel_pose_tests;
 
 #[cfg(test)]
@@ -601,7 +613,7 @@ mod tests {
             m.on_ground = true;
             let mut started = false;
             with_test_world(&seen, |w, _| {
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,
@@ -797,7 +809,7 @@ mod tests {
         };
         let partner = b.seen(None);
         let mut events = Vec::new();
-        let mut lr = horizon_core::random::LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let ran = with_test_world(&[partner], |w, _| {
             let mut cx = Cx {
                 w,
@@ -869,7 +881,7 @@ mod tests {
                 let mut blocked = sitting_camel(1, 0.5);
                 let mut open = sitting_camel(2, 5.5);
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w,
                     lr: &mut lr,

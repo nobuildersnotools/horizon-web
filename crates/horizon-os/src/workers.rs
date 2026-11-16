@@ -106,6 +106,10 @@ impl Thread {
     pub fn name(&self) -> Option<&str> {
         self.started.thread.get().and_then(|t| t.name())
     }
+    /// std's id of the thread, once its worker has started (none before).
+    pub fn id(&self) -> Option<std::thread::ThreadId> {
+        self.started.thread.get().map(std::thread::Thread::id)
+    }
 }
 
 struct Packet<T> {

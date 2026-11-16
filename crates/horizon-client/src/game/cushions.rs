@@ -179,11 +179,7 @@ impl Game<'_> {
     pub(super) fn cushion_spawn(&self, hit: &Hit) -> Option<(Vec3, Aabb)> {
         // CushionItem.recalculateContextForSpecialCollisionShapes: open containers
         // (cauldrons, hoppers and composters) use the collision ray's actual height.
-        let mut adjusted = Hit {
-            pos: hit.pos,
-            face: hit.face,
-            point: hit.point,
-        };
+        let mut adjusted = *hit;
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
         if self.items().block_in_tag(
             "minecraft:cushion_uses_collision_shape",
@@ -698,16 +694,16 @@ impl Game<'_> {
                 glam::DVec3::new(hi.x, hi.y, hi.z),
             );
             let range = default_range(hi - lo, self.view_scale());
-            if !self.entity_in_view(camera, (lo + hi) / 2.0, range, lo, hi) {
+            let Some(sight) = self.entity_sight(camera, (lo + hi) / 2.0, range, lo, hi) else {
                 continue;
-            }
+            };
             let Some(uv) = sprites
                 .get(&format!("entity/cushion/{}_cushion", c.color_name()))
                 .map(|r| [r.u0, r.v0, r.u1, r.v1])
             else {
                 continue;
             };
-            let culling = self.entity_cull_decision(c, 1.0);
+            let culling = self.sighted_decision(sight, || self.entity_cull_decision(c, 1.0));
             if culling.hides_entity() {
                 continue;
             }
@@ -734,7 +730,7 @@ impl Game<'_> {
                 0,
                 out,
             );
-            self.finish_entity_occlusion(culling, c, out, entity_start);
+            self.finish_lit_entity(culling, c, out, entity_start);
         }
     }
 }

@@ -463,7 +463,7 @@ impl Game<'_> {
             clicked_pos: BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
             face,
             hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-            inside: false,
+            inside: hit.inside,
             yaw: self.yaw,
             pitch: self.pitch,
             sneaking: self.keys.held(Mapping::Sneak),
@@ -512,7 +512,6 @@ impl Game<'_> {
                     self.command_block_placed(key, !data);
                 }
                 Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
-                Some(BlockEntity::JigsawBlock(_)) => self.jigsaw_block_placed(key),
                 Some(BlockEntity::TestBlock(_)) => self.test_block_placed(key),
                 Some(BlockEntity::Jukebox(_)) => self.jukebox_placed(target, &stack),
                 Some(BlockEntity::Sign(sign)) if !sign.waxed && sign.front.has_editable_text() => {
@@ -793,5 +792,13 @@ mod bow_enchantment_tests;
 mod sign_chain_tests;
 
 #[cfg(test)]
+#[path = "scaffolding_inside_tests.rs"]
+mod scaffolding_inside_tests;
+
+#[cfg(test)]
 #[path = "adventure_use_on_tests.rs"]
 mod adventure_use_on_tests;
+
+#[cfg(test)]
+#[path = "jigsaw_place_tests.rs"]
+mod jigsaw_place_tests;
