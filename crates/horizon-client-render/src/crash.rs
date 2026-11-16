@@ -116,7 +116,7 @@ fn contained_panic(info: &std::panic::PanicHookInfo) -> bool {
 
 /// Sets one line of the report's details (replacing the last value under `key`).
 pub fn set_detail(key: &'static str, value: impl Into<String>) {
-    let mut details = DETAILS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut details = horizon_os::sync::lock(&DETAILS).unwrap_or_else(|e| e.into_inner());
     let value = value.into();
     match details.iter_mut().find(|(k, _)| *k == key) {
         Some(entry) => entry.1 = value,
@@ -125,14 +125,15 @@ pub fn set_detail(key: &'static str, value: impl Into<String>) {
 }
 
 pub fn clear_detail(key: &'static str) {
-    DETAILS
-        .lock()
+    horizon_os::sync::lock(&DETAILS)
         .unwrap_or_else(|e| e.into_inner())
         .retain(|(k, _)| *k != key);
 }
 
 fn details() -> Vec<(&'static str, String)> {
-    DETAILS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    horizon_os::sync::lock(&DETAILS)
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// Vanilla picks a line from a list of jokes; these only say what happened.

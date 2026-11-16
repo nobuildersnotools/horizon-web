@@ -307,7 +307,7 @@ pub fn share_uniform(sections: &mut [Arc<Section>]) {
         }
         Some((s.blocks.uniform()?, s.biomes.uniform()?, light))
     };
-    let Ok(mut shared) = SHARED.lock() else {
+    let Ok(mut shared) = horizon_os::sync::lock(&SHARED) else {
         return;
     };
     let shared = shared.get_or_insert_with(Default::default);
@@ -324,7 +324,7 @@ pub fn share_uniform(sections: &mut [Arc<Section>]) {
 
 /// Forgets the shared sections, when the palette changes.
 fn forget_shared() {
-    if let Ok(mut shared) = SHARED.lock() {
+    if let Ok(mut shared) = horizon_os::sync::lock(&SHARED) {
         *shared = None;
     }
 }

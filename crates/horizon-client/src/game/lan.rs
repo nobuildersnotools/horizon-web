@@ -58,7 +58,7 @@ pub(super) fn sync_data(
     root: &std::path::Path,
     overlay: &horizon_world::loot::PackOverlay,
 ) -> std::result::Result<Arc<SyncData>, String> {
-    let mut sync = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    let mut sync = horizon_os::sync::lock(&SYNC).unwrap_or_else(|e| e.into_inner());
     cached_sync_data(&mut sync, root, overlay)
 }
 
@@ -91,7 +91,7 @@ pub(super) fn open_world_sync_data(
     overlay: &horizon_world::loot::PackOverlay,
     damage: &horizon_world::damage_source::Catalog,
 ) -> std::result::Result<(), String> {
-    let mut sync = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    let mut sync = horizon_os::sync::lock(&SYNC).unwrap_or_else(|e| e.into_inner());
     initialize_world_sync_data(&mut sync, root, overlay, damage)
 }
 
@@ -115,7 +115,7 @@ fn initialize_world_sync_data(
 /// Let go of what `sync_data` loaded: a preload no world used
 /// (game/world_loading.rs), or the previous session when another world opens.
 pub(super) fn forget_sync_data() {
-    *SYNC.lock().unwrap_or_else(|e| e.into_inner()) = SyncCache::default();
+    *horizon_os::sync::lock(&SYNC).unwrap_or_else(|e| e.into_inner()) = SyncCache::default();
 }
 
 /// Without a hub yet, retain this world's frozen registries through `/reload`
@@ -124,7 +124,10 @@ pub(super) fn reload_cached_sync_data(
     root: &std::path::Path,
     overlay: &horizon_world::loot::PackOverlay,
 ) -> std::result::Result<(), String> {
-    let kept = prepare_sync_reload(&mut SYNC.lock().unwrap_or_else(|e| e.into_inner()), overlay);
+    let kept = prepare_sync_reload(
+        &mut horizon_os::sync::lock(&SYNC).unwrap_or_else(|e| e.into_inner()),
+        overlay,
+    );
     if let Some(kept) = kept {
         reload_sync_data(root, overlay, &kept)?;
     }
@@ -160,7 +163,9 @@ pub(super) fn reload_sync_data(
         sync.features.clone_from(&kept.features);
         Arc::new(sync)
     });
-    SYNC.lock().unwrap_or_else(|e| e.into_inner()).data = Some((packs, sync.clone()));
+    horizon_os::sync::lock(&SYNC)
+        .unwrap_or_else(|e| e.into_inner())
+        .data = Some((packs, sync.clone()));
     sync
 }
 
@@ -214,7 +219,7 @@ impl SyncPreload {
             return;
         }
         if let Ok(read) = self.0.join() {
-            let mut sync = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+            let mut sync = horizon_os::sync::lock(&SYNC).unwrap_or_else(|e| e.into_inner());
             if !sync.world_packs && sync.data.is_none() {
                 sync.data = Some((false, read.map(Arc::new)));
             }

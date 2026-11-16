@@ -381,6 +381,10 @@ impl Resolver {
         // `fetchByName` refuses an invalid name without a fetch; like every
         // other empty answer that is the cached result.
         let resolved = matches!(key, NameOrId::Name(name) if !valid_player_name(name));
+        // The browser has no services to ask (every request fails offline),
+        // and each thread is a Web Worker loading the whole game module: a
+        // teleport to a spawn full of heads started dozens at once.
+        let resolved = resolved || cfg!(target_arch = "wasm32");
         self.entries.insert(
             key.clone(),
             Entry {

@@ -62,7 +62,7 @@ impl SharedStrings {
         if let Some(shared) = self.0.get(text) {
             return shared;
         }
-        let mut interned = INTERNED.lock().unwrap_or_else(|e| e.into_inner());
+        let mut interned = horizon_os::sync::lock(&INTERNED).unwrap_or_else(|e| e.into_inner());
         let interned = interned.get_or_insert_with(Interned::default);
         let shared = match interned.get(text) {
             Some(shared) => *shared,

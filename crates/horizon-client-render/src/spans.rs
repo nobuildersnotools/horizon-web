@@ -356,7 +356,7 @@ pub mod timeline {
 
     /// Starts recording, timed from `origin`; false when a timeline already runs (the process has one).
     pub fn start(origin: Instant) -> bool {
-        let mut run = RUN.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut run = horizon_os::sync::lock(&RUN).unwrap_or_else(PoisonError::into_inner);
         if run.is_some() {
             return false;
         }
@@ -371,14 +371,16 @@ pub mod timeline {
 
     /// Takes what the threads finished since the last call.
     pub fn drain() -> Vec<ThreadEvents> {
-        let run = RUN.lock().unwrap_or_else(PoisonError::into_inner);
+        let run = horizon_os::sync::lock(&RUN).unwrap_or_else(PoisonError::into_inner);
         run.as_ref().map_or_else(Vec::new, take_all)
     }
 
     /// Stops recording and returns what the threads finished since the last drain.
     pub fn finish() -> Vec<ThreadEvents> {
         ON.store(false, Ordering::Relaxed);
-        let run = RUN.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let run = horizon_os::sync::lock(&RUN)
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         run.as_ref().map_or_else(Vec::new, take_all)
     }
 
@@ -397,7 +399,7 @@ pub mod timeline {
 
     /// Takes a buffer for this thread: the one of an exited thread of the same name, else a new one.
     fn join() -> Option<Mine> {
-        let mut slot = RUN.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut slot = horizon_os::sync::lock(&RUN).unwrap_or_else(PoisonError::into_inner);
         let run = slot.as_mut()?;
         let name = horizon_os::thread::current()
             .name()

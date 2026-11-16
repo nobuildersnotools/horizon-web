@@ -349,8 +349,7 @@ fn kept_scratch() -> usize {
 
 /// A scratch from the pool, or a new one.
 fn take_scratch() -> LightScratch {
-    let taken = SCRATCH_POOL
-        .lock()
+    let taken = horizon_os::sync::lock(&SCRATCH_POOL)
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .pop();
     taken.unwrap_or_else(LightScratch::new)
@@ -358,9 +357,8 @@ fn take_scratch() -> LightScratch {
 
 /// Gives a scratch back to the pool, unless it already keeps [`kept_scratch`].
 fn give_scratch(scratch: LightScratch) {
-    let mut pool = SCRATCH_POOL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut pool =
+        horizon_os::sync::lock(&SCRATCH_POOL).unwrap_or_else(std::sync::PoisonError::into_inner);
     if pool.len() < kept_scratch() {
         pool.push(scratch);
     }
@@ -372,8 +370,7 @@ fn give_scratch(scratch: LightScratch) {
 /// moves on. The next job builds one again.
 pub fn release_scratch() {
     let pool = std::mem::take(
-        &mut *SCRATCH_POOL
-            .lock()
+        &mut *horizon_os::sync::lock(&SCRATCH_POOL)
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     );
     drop(pool);
@@ -2583,7 +2580,7 @@ pub(crate) mod tests {
                 });
             }
         });
-        assert!(SCRATCH_POOL.lock().unwrap().len() <= kept_scratch());
+        assert!(horizon_os::sync::lock(&SCRATCH_POOL).unwrap().len() <= kept_scratch());
     }
 
     #[test]

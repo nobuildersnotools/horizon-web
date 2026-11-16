@@ -22,10 +22,7 @@ pub mod system_menu;
 pub mod unwind;
 pub mod work;
 
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 /// The worker threads the machine offers this process: `available_parallelism`'s
 /// answer (its share of the cores — CPU affinity, a container's quota), resolved
@@ -36,21 +33,40 @@ use std::sync::{
 /// Each pool keeps its own share of the count (the streaming pool all but one,
 /// far decoration a third of it).
 pub fn worker_count() -> usize {
-    static COUNT: OnceLock<usize> = OnceLock::new();
-    *COUNT.get_or_init(|| {
-        parse_worker_count(std::env::var("HORIZON_WORKER_THREADS").ok())
-            .unwrap_or_else(|| horizon_os::thread::available_parallelism().map_or(1, |n| n.get()))
-    })
+    // An atomic, not a `OnceLock`: the page and a worker can ask at once on
+    // the web, and a `OnceLock` makes the second wait, which the page's
+    // thread can't (the browser traps it). Both work out the same count.
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+    match COUNT.load(Ordering::Relaxed) {
+        0 => {
+            let count = parse_worker_count(std::env::var("HORIZON_WORKER_THREADS").ok())
+                .unwrap_or_else(|| {
+                    horizon_os::thread::available_parallelism().map_or(1, |n| n.get())
+                });
+            match COUNT.compare_exchange(0, count, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => count,
+                Err(first) => first,
+            }
+        }
+        count => count,
+    }
 }
 
 /// `HORIZON_SERIAL_TICK=all`: every [`par_chunks_mut`] keeps its chunks on the
 /// calling thread, in order — the serial reference a parallel phase of the
 /// tick is checked against, tick by tick (#8158).
 pub fn serial_tick_all() -> bool {
-    static ALL: OnceLock<bool> = OnceLock::new();
-    *ALL.get_or_init(|| {
-        std::env::var("HORIZON_SERIAL_TICK").is_ok_and(|v| v.eq_ignore_ascii_case("all"))
-    })
+    // 0: not read yet, 1: off, 2: on. An atomic for the reason in `worker_count`.
+    static ALL: AtomicU8 = AtomicU8::new(0);
+    match ALL.load(Ordering::Relaxed) {
+        0 => {
+            let all =
+                std::env::var("HORIZON_SERIAL_TICK").is_ok_and(|v| v.eq_ignore_ascii_case("all"));
+            ALL.store(1 + u8::from(all), Ordering::Relaxed);
+            all
+        }
+        v => v == 2,
+    }
 }
 
 /// Runs `f` over `items` in chunks of `chunk`, in place. Helper threads take
