@@ -3,16 +3,21 @@
 //! filesystem and its clocks panic, they are a virtual filesystem (backed by
 //! files fetched from the page's origin) and the browser's clocks, with the
 //! same API so call sites read the same on both.
+// The browser heap's per-thread caches (alloc.rs): the web build is on nightly.
+#![cfg_attr(target_arch = "wasm32", feature(thread_local, stdarch_wasm_atomic_wait))]
 
 // The browser build runs its threads as Web Workers on shared memory, which
 // std only supports when it is rebuilt with atomics (web/build.sh).
 #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
 compile_error!("the browser build needs threads: build it with web/build.sh");
 
+#[cfg(target_arch = "wasm32")]
+pub mod alloc;
 pub mod env;
 pub mod fs;
 #[cfg(target_arch = "wasm32")]
 pub mod net;
+mod size_classes;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 #[cfg(target_arch = "wasm32")]

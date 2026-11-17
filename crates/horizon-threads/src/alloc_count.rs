@@ -134,7 +134,7 @@ pub fn process() -> Counts {
 #[cfg(not(target_arch = "wasm32"))]
 use mimalloc::MiMalloc as Inner;
 #[cfg(target_arch = "wasm32")]
-use std::alloc::System as Inner;
+use horizon_os::alloc::Heap as Inner;
 
 /// mimalloc that counts every block; a `realloc` counts as a free plus an allocation.
 pub struct CountingAllocator;

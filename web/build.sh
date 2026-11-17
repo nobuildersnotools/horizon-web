@@ -27,7 +27,9 @@ nightly=nightly-2026-10-14
 # worker, and the thread-local storage symbols wasm-bindgen sets up per thread.
 flags=(
     '--cfg getrandom_backend="wasm_js"'
-    -C target-feature=+atomics,+bulk-memory,+mutable-globals
+    # simd128: 128-bit vectors (glam's maths, autovectorized loops in noise,
+    # meshing and copies). Every browser with WebGPU has it.
+    -C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128
     -C link-arg=--shared-memory -C link-arg=--import-memory
     -C link-arg=--max-memory=4294967296
     # The page's own stack (workers get theirs from horizon_os): rustc's 1 MiB
@@ -66,7 +68,7 @@ wasm="$dist/pkg/horizon-client_bg.wasm"
 if [ "$profile" = release ] && [ "${WASM_OPT:-1}" != 0 ]; then
     if command -v wasm-opt > /dev/null; then
         # The features rustc's wasm32 target turns on, and the threaded build's atomics.
-        wasm-opt -O2 --enable-threads --enable-bulk-memory --enable-mutable-globals \
+        wasm-opt -O2 --enable-threads --enable-bulk-memory --enable-mutable-globals --enable-simd \
             --enable-sign-ext --enable-nontrapping-float-to-int --enable-reference-types \
             --enable-multivalue "$wasm" -o "$wasm.opt"
         mv "$wasm.opt" "$wasm"

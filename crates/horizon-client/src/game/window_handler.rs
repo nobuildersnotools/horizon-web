@@ -502,22 +502,23 @@ impl ApplicationHandler for Game<'_> {
     fn device_event(&mut self, event_loop: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
         // A lock the browser refused (resuming with Escape) leaves the pointer
         // free: its motion stops at the screen's edge, so it doesn't turn.
+        // Asked last: a fast mouse sends a motion per report, most of them while nothing turns.
         #[cfg(target_arch = "wasm32")]
-        let locked = horizon_os::web::pointer_locked();
+        let locked = horizon_os::web::pointer_locked;
         #[cfg(not(target_arch = "wasm32"))]
-        let locked = true;
+        let locked = || true;
         // A composited view renders offscreen but its keyboard/mouse owner still
         // controls a visible native window. A headless offscreen run never does.
         if self.pending_save.is_none()
             && !self.scripted_run()
             && !self.unclaimed_window
             && self.captured
-            && locked
             && self.focused
             && self.keyboard_mouse
             && (!self.options.offscreen || self.split_window)
             && self.screen == Screen::Playing
             && let DeviceEvent::MouseMotion { delta: (x, y) } = event
+            && locked()
         {
             // While the pad holds the radial menu open the mouse does nothing, as the right stick
             // doesn't turn the view: it neither cancels the menu nor takes control back, nor

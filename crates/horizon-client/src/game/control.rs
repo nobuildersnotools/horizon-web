@@ -226,6 +226,11 @@ impl Game<'_> {
         // The browser has no control socket (horizon-ctl): its commands stay out of the page.
         #[cfg(not(target_arch = "wasm32"))]
         self.answer_socket(event_loop);
+        // Instead the page keeps a few of `status`'s figures for scripts that measure it.
+        #[cfg(target_arch = "wasm32")]
+        if self.frames.is_multiple_of(15) {
+            horizon_os::web::set_status(self.web_status().to_string());
+        }
         // A recording made from the F3 keys or the Settings page has no socket,
         // and still wants its events.
         if self.control.is_some() || self.repro.recording_active() {
@@ -237,6 +242,25 @@ impl Game<'_> {
             self.ui.options.agent_status = self.agent_status_lines();
             self.ui.options.agent_recording = self.repro.recording_active();
         }
+    }
+
+    /// The loading and frame figures of `status` the page keeps (`horizon_status`).
+    #[cfg(target_arch = "wasm32")]
+    fn web_status(&self) -> Value {
+        let position = self.player.as_ref().map(|p| [p.position.x, p.position.y, p.position.z]);
+        let (cpu_ms, gpu_ms) = self.frame_stats.recent(15);
+        json!({
+            "cpu_ms": cpu_ms,
+            "gpu_ms": gpu_ms,
+            "fps": self.fps,
+            "frames": self.frames,
+            "position": position,
+            "render_distance": self.streaming.radius,
+            "chunks": self.world.chunks.len(),
+            "pending_chunks": self.streaming.pending() + self.pending_uploads.len() + self.remote_backlog(),
+            "meshed_sections": self.streaming.meshed_total,
+            "streaming": self.streaming.stages().into_iter().map(|(k, v)| (k.to_string(), v.into())).collect::<serde_json::Map<_, _>>(),
+        })
     }
 
     /// The control socket's requests, waiting and new.

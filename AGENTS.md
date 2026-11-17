@@ -313,7 +313,7 @@ saves are kept in the browser's OPFS; a service worker keeps the large files. De
 web/build.sh                       # the browser build into web/dist (release: LTO + wasm-opt; PROFILE=fast to iterate)
 python3 web/serve.py               # http://localhost:8080, cross-origin isolated
 # the browser build's check (the flags web/build.sh sets)
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' \
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128' \
   cargo +nightly-2026-10-14 -Z build-std=std,panic_abort clippy --target wasm32-unknown-unknown -p horizon-client --bin horizon-client --no-default-features --features audio,controllers -- -D warnings
 cargo clippy --workspace --all-targets -- -D warnings      # native must stay clean too
 ```

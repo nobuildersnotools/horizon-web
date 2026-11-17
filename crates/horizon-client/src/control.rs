@@ -808,6 +808,14 @@ impl FrameStats {
             .collect::<serde_json::Map<_, _>>()
             .into()
     }
+    /// The average CPU and GPU milliseconds of the last `n` frames recorded.
+    pub fn recent(&self, n: usize) -> (Option<f32>, Option<f32>) {
+        let average = |v: &[f32]| {
+            let last = &v[v.len().saturating_sub(n)..];
+            (!last.is_empty()).then(|| last.iter().sum::<f32>() / last.len() as f32)
+        };
+        (average(&self.cpu), average(&self.gpu))
+    }
     pub fn record_gpu(&mut self, millis: &[f32]) {
         if self.gpu.len() < Self::LIMIT {
             self.gpu.extend_from_slice(millis);

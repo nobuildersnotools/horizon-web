@@ -553,9 +553,9 @@ pub fn catch_stop_signals() {}
 pub type Allocator = heap_sample::SamplingAllocator;
 #[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
 pub type Allocator = mimalloc::MiMalloc;
-/// The browser's: Rust's own allocator (mimalloc is C).
+/// The browser's: dlmalloc, as std's there, with a cache per thread in front (mimalloc is C).
 #[cfg(target_arch = "wasm32")]
-pub type Allocator = std::alloc::System;
+pub type Allocator = horizon_os::alloc::Heap;
 /// The game's mimalloc allocator.
 pub const ALLOCATOR: Allocator = Allocator {};
 

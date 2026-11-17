@@ -4595,9 +4595,13 @@ impl Renderer {
                     &sprite_constants,
                 )
             });
-        let multi_draw = device
-            .features()
-            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+        // Not in the browser: WebGPU has no multi-draw (wgpu issues one indirect draw per
+        // section) and the browser checks every indirect draw's arguments on the GPU before
+        // the pass; draws from the CPU's list skip that and the list's upload.
+        let multi_draw = !cfg!(target_arch = "wasm32")
+            && device
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
             && indirect_execution;
         let batchable = translucent_batchable(&adapter.get_info(), multi_draw);
         crate::graphics::offer_translucent_batching(batchable);

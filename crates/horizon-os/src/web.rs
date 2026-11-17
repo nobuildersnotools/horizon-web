@@ -123,9 +123,17 @@ function lock(canvas) {
         if (p && p.catch) p.catch(() => {});
     } catch (e) {}
 }
+// Asked at every mouse motion (hundreds to thousands a second with a fast
+// mouse): kept from the lock's events, not looked up each time.
+let lockedCanvas = false;
+if (typeof document !== "undefined") {
+    document.addEventListener("pointerlockchange", () => {
+        lockedCanvas = !!document.pointerLockElement &&
+            document.pointerLockElement === document.querySelector("canvas");
+    });
+}
 export function horizon_pointer_locked() {
-    const canvas = document.querySelector("canvas");
-    return !!canvas && document.pointerLockElement === canvas;
+    return lockedCanvas;
 }
 export function horizon_pointer_lock(want) {
     wantLock = want;
@@ -429,4 +437,21 @@ pub fn take_picked_named(kind: &str) -> Option<(String, Vec<u8>)> {
     let picked = js_sys::Array::from(&horizon_take_picked());
     let name = picked.get(2).as_string().unwrap_or_default();
     Some((name, js_sys::Uint8Array::new(&picked.get(1)).to_vec()))
+}
+
+thread_local! {
+    static STATUS: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// What the game last said about itself (JSON: frames, chunks, loading
+/// queues), for scripts that measure the page from outside: the browser has
+/// no control socket.
+pub fn set_status(status: String) {
+    STATUS.with(|s| *s.borrow_mut() = status);
+}
+
+/// The game's last [`set_status`], from the page's console or a script.
+#[wasm_bindgen]
+pub fn horizon_status() -> String {
+    STATUS.with(|s| s.borrow().clone())
 }

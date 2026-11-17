@@ -98,8 +98,8 @@ world `Test` in creative mode at start.
   alone if that fails). With 40 ms of latency a new world's player spawned
   12 s after the title's first frame with a request per file, 4 s with the pack.
 - **Startup** (`web/main.js`): check for WebGPU, start the service worker, load
-  the WebAssembly, download and install the archive, load the player's saved
-  files, then `horizon_start()`. The resources load on a worker, as on native,
+  the WebAssembly while the archive downloads and unpacks beside it, install
+  the archive, load the player's saved files, then `horizon_start()`. The resources load on a worker, as on native,
   while the first renderer opens asynchronously (`Loading::resumed`, because
   the page can't wait for the GPU) and the loading screen draws: it shows
   0.4 s after start instead of after the 1.5 s load.
@@ -119,6 +119,22 @@ world `Test` in creative mode at start.
   `sleep` returns at once and `join` spins. std's `recv_timeout` and
   `wait_timeout_while` read a clock std doesn't have here: `horizon_os::sync`
   has versions that use the browser's.
+- **The heap** (`horizon-os/src/alloc.rs`, the game's allocator on the web):
+  std's allocator there is one dlmalloc behind one lock that only spins, so
+  every allocation of every thread queued on it, and a holder that was
+  preempted left the others spinning (some runs lost several cores to it).
+  Each thread now keeps the small blocks it frees (up to 4 KiB, in 32 size
+  classes) and takes them back without a lock, refilling and returning them
+  in batches; larger blocks go to dlmalloc, whose lock spins briefly and then
+  sleeps on workers (`memory.atomic.wait32`) and only spins on the page. Four
+  teleports at render distance 16 (fresh chunks each) took about half the
+  renderer's CPU time (73 → 35 CPU-seconds) and the module's memory peaked
+  25–45% lower. Its thread-local caches can't be read before wasm-bindgen has
+  set up a new thread's TLS block, which it allocates with this heap: until
+  then the thread goes straight to dlmalloc (`tls_ready`).
+- **WebAssembly SIMD** (`+simd128` in `web/build.sh`): every browser with
+  WebGPU runs it. It measured neutral on chunk loading; it stays for glam's
+  vector maths.
 - **Locks the page shares with workers**: std's `Mutex` waits once it has spun
   briefly, which traps on the page (`Atomics.wait cannot be called in this
   context`; winit swallows it and the frame loop stops). Those locks go through
@@ -235,6 +251,29 @@ world `Test` in creative mode at start.
   them (a streamer leaving the pool spins until its running jobs end). If no
   worker starts, the frame runs the pool's queued generation, lighting and
   meshing jobs itself (`Pool::pump`) for up to 12 ms per update.
+- **Terrain draws** (`gfx.rs`, `multi_draw`): WebGPU has no multi-draw, so wgpu
+  issued one `drawIndexedIndirect` per section, and the browser validates every
+  indirect draw's arguments on the GPU before the pass. The web draws sections
+  from the CPU's list instead (`drawIndexed`), as native does without
+  indirect first instance: about a quarter less CPU in the browser's GPU
+  process at render distance 24, and no draw list to upload each frame.
+- **Uploads stay on the staging belt** (`gfx/upload.rs`): a mapped buffer in
+  the browser is copied into the module and back out, but Chrome's
+  `writeBuffer` from the module's shared memory was slower still (it took
+  four times the belt's copies), so frames keep the belt.
+- **Mouse motion**: winit hands the game one event per coalesced pointer
+  report (hundreds to thousands a second with a fast mouse); the pointer lock's
+  state the game asks at each of them is kept from `pointerlockchange`, not
+  looked up in the page each time.
+- **Worker pools**: the save compression pool keeps the native size. With two
+  workers instead of six, chunks waiting to be saved piled up and the module's
+  memory doubled.
+- **Measuring**: the page has no control socket, so the game keeps a few of
+  `status`'s figures in `horizon.horizon_status()` (frames, CPU and GPU frame
+  milliseconds, chunks, loading queues, position), for scripts driving a
+  headless browser. The first session after a new build runs on V8's
+  baseline code until its optimizing compiler has caught up in the
+  background: compare later sessions.
 - **Shaders**: browsers enforce WGSL rules that native wgpu doesn't
   (derivative uniformity, parentheses between `<<` and `|`); `hud.wgsl` and the
   entity shader turn the uniformity check off, which changes nothing they draw.

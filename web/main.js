@@ -236,14 +236,19 @@ async function served() {
     if (!window.crossOriginIsolated) throw new Error("the page can't share memory with the game's threads");
     const files = await versioned();
     status.textContent = "Loading the game…";
+    // The resources download and unpack while the module downloads and
+    // compiles (a first visit waited for one, then the other).
+    const tar = download(files.boot, "Downloading resources")
+        .then((gz) => new Response(gz.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+    const manifest = fetch(files.manifest).then((r) => r.text());
+    // A failure while the module loads leaves these unread: not unhandled.
+    tar.catch(() => {});
+    manifest.catch(() => {});
     const glue = await import(files.glue);
+    globalThis.horizon = glue; // horizon.horizon_status() and the like, from the console
     // Runs the game's main, which only registers the game to start.
     await glue.default({ module_or_path: files.wasm });
-    const gz = await download(files.boot, "Downloading resources");
-    const tar = new Uint8Array(
-        await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
-    const manifest = await (await fetch(files.manifest)).text();
-    return { glue, tar, manifest, base: "fs/res/" };
+    return { glue, tar: new Uint8Array(await tar), manifest: await manifest, base: "fs/res/" };
 }
 
 async function main() {

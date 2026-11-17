@@ -73,9 +73,12 @@ type Main = Box<dyn FnOnce() + Send>;
 #[wasm_bindgen]
 pub fn horizon_worker_entry(ptr: u32) {
     IN_WORKER.with(|w| w.set(true));
+    crate::alloc::this_thread_may_wait();
     // SAFETY: `ptr` is the `Box<Main>` that `Builder::spawn` leaked for this worker.
     let main = unsafe { Box::from_raw(ptr as *mut Main) };
     main();
+    // The worker closes once this returns: the blocks it kept go back to the heap.
+    crate::alloc::release_thread_cache();
 }
 
 /// A spawned thread, usable before its worker has started (which needs the
