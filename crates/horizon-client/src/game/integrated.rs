@@ -149,7 +149,10 @@ impl Integrated {
         &self,
         dimension: &str,
     ) -> Option<Arc<horizon_client::vanillagen::VanillaTerrain>> {
-        self.flags.terrain.lock().ok()?.get(dimension).cloned()
+        horizon_os::sync::lock(&self.flags.terrain)
+            .ok()?
+            .get(dimension)
+            .cloned()
     }
     /// The server's load progress and chunk status map.
     pub fn load_view(&self) -> &Arc<horizon_client::level_loading::ServerLoadView> {
@@ -164,15 +167,13 @@ impl Integrated {
     }
     /// Asks for the debug entries' server lines at `at`, or stops asking.
     pub(super) fn request_debug(&self, at: Option<(Dim, [i32; 3])>) {
-        if let Ok(mut want) = self.flags.debug_at.lock() {
+        if let Ok(mut want) = horizon_os::sync::lock(&self.flags.debug_at) {
             *want = at;
         }
     }
     /// The debug entries' server lines of the last tick.
     pub(super) fn debug(&self) -> super::debug_lines::ServerDebug {
-        self.flags
-            .debug
-            .lock()
+        horizon_os::sync::lock(&self.flags.debug)
             .map(|d| d.clone())
             .unwrap_or_default()
     }
@@ -182,21 +183,23 @@ impl Integrated {
     }
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
-        let split = !self.flags.split_players.lock().unwrap().is_empty();
+        let split = !horizon_os::sync::lock(&self.flags.split_players)
+            .unwrap()
+            .is_empty();
         self.flags.paused.store(paused && !split, Ordering::Relaxed);
     }
     /// Whether splitscreen players are joined: while any is, the game runs even behind a
     /// pause menu, so no window may stop ticking for one (`set_paused`, `pauses_game`).
     pub fn has_split_players(&self) -> bool {
-        !self.flags.split_players.lock().unwrap().is_empty()
+        !horizon_os::sync::lock(&self.flags.split_players)
+            .unwrap()
+            .is_empty()
     }
     /// Splitscreen: `name` left; the game pauses again once every such player has. The owner's
     /// permissions it was given go with it (a LAN player could otherwise join under that name).
     pub fn leave_split(&self, name: &str) {
         let uuid = horizon_protocol::crypto::offline_uuid(name);
-        self.flags
-            .split_players
-            .lock()
+        horizon_os::sync::lock(&self.flags.split_players)
             .unwrap()
             .retain(|&u| u != uuid);
         self.call(move |g| {
@@ -209,7 +212,9 @@ impl Integrated {
     /// the owner's permissions. `None` once the server has stopped.
     pub fn join_split(&self, name: &str) -> Option<horizon_protocol::connection::Pipe> {
         let uuid = horizon_protocol::crypto::offline_uuid(name);
-        self.flags.split_players.lock().unwrap().push(uuid);
+        horizon_os::sync::lock(&self.flags.split_players)
+            .unwrap()
+            .push(uuid);
         let pipe = self
             .call(move |g| {
                 let host = g.lan.as_mut()?;
@@ -539,7 +544,7 @@ impl Game<'_> {
                 );
                 if let Err(e) = result {
                     log::error!("Horizon: integrated server: {e}");
-                    *server_flags.failure.lock().unwrap() = Some(e.to_string());
+                    *horizon_os::sync::lock(&server_flags.failure).unwrap() = Some(e.to_string());
                     let _ = ready_tx.send(Err(e.to_string()));
                 }
             })?;
@@ -828,7 +833,7 @@ impl Game<'_> {
                             Ordering::Relaxed,
                         );
                         if let (Some(terrain), Ok(mut terrains)) =
-                            (self.end.locator(), flags.terrain.lock())
+                            (self.end.locator(), horizon_os::sync::lock(&flags.terrain))
                         {
                             terrains.insert(self.dim.id(), terrain);
                         }
@@ -891,12 +896,14 @@ impl Game<'_> {
         let Some(serving) = &self.serving else {
             return;
         };
-        let want = serving.flags.debug_at.lock().ok().and_then(|w| *w);
+        let want = horizon_os::sync::lock(&serving.flags.debug_at)
+            .ok()
+            .and_then(|w| *w);
         if let Some((at, feet)) = want
             && at == dim
         {
             let lines = self.server_debug_lines(feet);
-            if let Ok(mut debug) = serving.flags.debug.lock() {
+            if let Ok(mut debug) = horizon_os::sync::lock(&serving.flags.debug) {
                 *debug = lines;
             }
         }
@@ -964,13 +971,17 @@ impl Game<'_> {
             // Registered local seats share this computer; the vanilla LAN capacity still
             // applies to other connections when the world is published.
             bypasses_limit: Some(Arc::new(move |uuid| {
-                local_players.split_players.lock().unwrap().contains(&uuid)
+                horizon_os::sync::lock(&local_players.split_players)
+                    .unwrap()
+                    .contains(&uuid)
             })),
             gate: Some(Arc::new(move |address, uuid, _| {
                 refused(
                     uuid == owner,
                     published.published.load(Ordering::Relaxed) != 0,
-                    published.split_players.lock().unwrap().contains(&uuid),
+                    horizon_os::sync::lock(&published.split_players)
+                        .unwrap()
+                        .contains(&uuid),
                     address == horizon_client::lan::conn::MEMORY_ADDRESS,
                 )
                 .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
@@ -1356,7 +1367,7 @@ impl Game<'_> {
             let level = if allow { 4 } else { 0 };
             host.hub.ops.insert(owner, level);
             // Splitscreen seats have the owner's permissions (`join_split`): they follow it.
-            for &seat in flags.split_players.lock().unwrap().iter() {
+            for &seat in horizon_os::sync::lock(&flags.split_players).unwrap().iter() {
                 host.hub.ops.insert(seat, level);
             }
             if published {
@@ -1637,7 +1648,8 @@ mod tests {
             emergency_save: None,
             flags,
             thread: Some(horizon_os::thread::spawn(move || {
-                *saving.failure.lock().unwrap() = Some("disk write failed".into());
+                *horizon_os::sync::lock(&saving.failure).unwrap() =
+                    Some("disk write failed".into());
             })),
             tasks,
             world_name: String::new(),

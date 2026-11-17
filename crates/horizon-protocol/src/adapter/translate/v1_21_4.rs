@@ -29,7 +29,7 @@ pub(super) fn registry_data(session: &Session, payload: &[u8]) -> Result<()> {
         ("flow", item::FLOW_ARMOR_TRIM_SMITHING_TEMPLATE),
         ("bolt", item::BOLT_ARMOR_TRIM_SMITHING_TEMPLATE),
     ];
-    let mut patterns = session.trim_patterns.lock().unwrap();
+    let mut patterns = horizon_os::sync::lock(&session.trim_patterns).unwrap();
     patterns.clear();
     for (id, entry) in registry.entries.into_iter().enumerate() {
         let template = entry
@@ -153,9 +153,7 @@ pub(super) fn experience_orb(session: &Session, payload: &[u8]) -> Result<(i32, 
         head_yaw: 0,
         data: 0,
     };
-    session
-        .kinds
-        .lock()
+    horizon_os::sync::lock(&session.kinds)
         .unwrap()
         .insert(entity, entity::EXPERIENCE_ORB);
     let metadata = play::Clientbound::SetEntityData(play::SetEntityData {
@@ -166,10 +164,12 @@ pub(super) fn experience_orb(session: &Session, payload: &[u8]) -> Result<(i32, 
             crate::entity_data::Value::Int(value),
         )],
     });
-    session.incoming.lock().unwrap().push_back((
-        packet_ids::play::clientbound::SET_ENTITY_DATA,
-        strip_id(metadata.encode()),
-    ));
+    horizon_os::sync::lock(&session.incoming)
+        .unwrap()
+        .push_back((
+            packet_ids::play::clientbound::SET_ENTITY_DATA,
+            strip_id(metadata.encode()),
+        ));
     Ok((
         packet_ids::play::clientbound::ADD_ENTITY,
         strip_id(play::Clientbound::AddEntity(p).encode()),
@@ -197,7 +197,11 @@ pub(super) fn container_click(payload: &[u8]) -> Result<Vec<u8>> {
 
 pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
     use crate::entity_data::{Value, serializer};
-    let Some(kind) = session.kinds.lock().unwrap().get(&data.id).copied() else {
+    let Some(kind) = horizon_os::sync::lock(&session.kinds)
+        .unwrap()
+        .get(&data.id)
+        .copied()
+    else {
         return;
     };
     let mut saddle = None;
@@ -241,7 +245,7 @@ pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
                 | entity::TNT_MINECART,
                 11 | 13,
             ) => {
-                let mut cache = session.minecart_display.lock().unwrap();
+                let mut cache = horizon_os::sync::lock(&session.minecart_display).unwrap();
                 let entry = cache.entry(data.id).or_insert((0, false));
                 match value {
                     Value::Id(block) if *index == 11 => entry.0 = *block,
@@ -263,7 +267,7 @@ pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
         true
     });
     if display_changed {
-        let (block, custom) = session.minecart_display.lock().unwrap()[&data.id];
+        let (block, custom) = horizon_os::sync::lock(&session.minecart_display).unwrap()[&data.id];
         data.values.push((
             11,
             serializer::OPTIONAL_BLOCK_STATE,
@@ -275,10 +279,12 @@ pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
             id: data.id,
             slots: vec![(7, saddled.then(|| crate::item::Stack::new(item::SADDLE, 1)))],
         });
-        session.incoming.lock().unwrap().push_back((
-            packet_ids::play::clientbound::SET_EQUIPMENT,
-            strip_id(equipment.encode()),
-        ));
+        horizon_os::sync::lock(&session.incoming)
+            .unwrap()
+            .push_back((
+                packet_ids::play::clientbound::SET_EQUIPMENT,
+                strip_id(equipment.encode()),
+            ));
     }
 }
 
@@ -547,7 +553,9 @@ mod tests {
     #[test]
     fn a_saddle_moves_to_equipment_and_boost_stays_in_the_pig_field() {
         let session = Session::new(ServerVersion::V1_21_4);
-        session.kinds.lock().unwrap().insert(42, 101);
+        horizon_os::sync::lock(&session.kinds)
+            .unwrap()
+            .insert(42, 101);
         let (id, body) = super::super::clientbound(
             &session,
             State::Play,
@@ -582,7 +590,9 @@ mod tests {
             (141, vec![17, 18, 19, 20, 21, 22], vec![17, 18]),
             (87, vec![17], vec![17]),
         ] {
-            session.kinds.lock().unwrap().insert(42, kind);
+            horizon_os::sync::lock(&session.kinds)
+                .unwrap()
+                .insert(42, kind);
             let mut p = play::SetEntityData {
                 id: 42,
                 values: old
@@ -593,7 +603,9 @@ mod tests {
             entity_data(&session, &mut p);
             assert_eq!(p.values.iter().map(|v| v.0).collect::<Vec<_>>(), expected);
         }
-        session.kinds.lock().unwrap().insert(42, 86);
+        horizon_os::sync::lock(&session.kinds)
+            .unwrap()
+            .insert(42, 86);
         for (values, expected) in [
             (vec![(11, serializer::INT, Value::Int(7006))], 0),
             (vec![(13, serializer::BOOLEAN, Value::Bool(true))], 9980),

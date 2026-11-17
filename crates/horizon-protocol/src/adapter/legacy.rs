@@ -127,7 +127,7 @@ pub(super) fn split_registry_data(tag: &Tag) -> Result<Vec<configuration::Regist
 }
 
 pub(super) fn remember(session: &super::Session, packet: &configuration::RegistryData) {
-    let mut tables = session.legacy_registries.lock().unwrap();
+    let mut tables = horizon_os::sync::lock(&session.legacy_registries).unwrap();
     Arc::make_mut(&mut tables).insert(
         packet.registry.clone(),
         registry::Ids::from_names(packet.entries.iter().map(|e| e.id.clone()).collect()),
@@ -174,7 +174,11 @@ mod tests {
         );
         let session = super::super::Session::new(ServerVersion::V1_20_3);
         remember(&session, &packets[0]);
-        let _names = ids::legacy_registries(session.legacy_registries.lock().unwrap().clone());
+        let _names = ids::legacy_registries(
+            horizon_os::sync::lock(&session.legacy_registries)
+                .unwrap()
+                .clone(),
+        );
         assert_eq!(
             ids::legacy_registry_id("minecraft:trim_material", "minecraft:gold"),
             Some(1)

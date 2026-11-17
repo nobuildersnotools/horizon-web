@@ -1397,7 +1397,8 @@ impl Lod {
                             let mut mesher = mesh::Mesher::default();
                             loop {
                                 let job = {
-                                    let mut jobs = shared.mesh_jobs.lock().unwrap();
+                                    let mut jobs =
+                                        horizon_os::sync::lock(&shared.mesh_jobs).unwrap();
                                     loop {
                                         if shared.stop.load(Ordering::Relaxed) {
                                             return;
@@ -1505,7 +1506,8 @@ impl Lod {
                                         let mut behind = true;
                                         loop {
                                             let key = {
-                                                let mut jobs = shared.jobs.lock().unwrap();
+                                                let mut jobs =
+                                                    horizon_os::sync::lock(&shared.jobs).unwrap();
                                                 loop {
                                                     if shared.stop.load(Ordering::Relaxed) {
                                                         return;
@@ -1567,7 +1569,7 @@ impl Lod {
                                 }
                             }
                             let job = {
-                                let mut jobs = worker.jobs.lock().unwrap();
+                                let mut jobs = horizon_os::sync::lock(&worker.jobs).unwrap();
                                 if (jobs.is_empty()
                                     || (!sampling.is_empty()
                                         && jobs.iter().all(|job| matches!(job, Job::Sample(_)))))
@@ -1599,7 +1601,9 @@ impl Lod {
                             step_behind(&worker, &mut behind);
                             let done = match job {
                                 Job::Observe(key) => {
-                                    let chunk = worker.observed.lock().unwrap().remove(&key);
+                                    let chunk = horizon_os::sync::lock(&worker.observed)
+                                        .unwrap()
+                                        .remove(&key);
                                     let (Some(chunk), Some(kinds)) = (chunk, worker.kinds.get())
                                     else {
                                         continue;
@@ -1640,7 +1644,7 @@ impl Lod {
                                 break;
                             }
                         }
-                        let jobs = worker.jobs.lock();
+                        let jobs = horizon_os::sync::lock(&worker.jobs);
                         worker.stop.store(true, Ordering::Relaxed);
                         drop(jobs);
                         worker.wake.notify_all();
@@ -2106,17 +2110,12 @@ impl Lod {
     pub fn observe(&mut self, chunk: Arc<Chunk>, facts: &BlockFacts) {
         self.shared.kinds.get_or_init(|| state_kinds(facts));
         let key = (chunk.x, chunk.z);
-        if self
-            .shared
-            .observed
-            .lock()
+        if horizon_os::sync::lock(&self.shared.observed)
             .unwrap()
             .insert(key, chunk)
             .is_none()
         {
-            self.shared
-                .jobs
-                .lock()
+            horizon_os::sync::lock(&self.shared.jobs)
                 .unwrap()
                 .push_back(Job::Observe(key));
             self.shared.wake.notify_all();
@@ -2126,7 +2125,7 @@ impl Lod {
     /// held here is copied by its next edit (`Arc::make_mut`), so callers
     /// hand over a few at a time (`OBSERVE_AHEAD`).
     pub fn observing(&self) -> usize {
-        self.shared.observed.lock().unwrap().len()
+        horizon_os::sync::lock(&self.shared.observed).unwrap().len()
     }
     /// Whether tiles new to the plan are being sampled: far terrain on its way,
     /// meshed as soon as it is.
@@ -2456,9 +2455,7 @@ impl Lod {
         chunks.truncate(DETAIL_REQUEST);
         if !chunks.is_empty() {
             self.detail_request_pending = true;
-            self.shared
-                .jobs
-                .lock()
+            horizon_os::sync::lock(&self.shared.jobs)
                 .unwrap()
                 .push_back(Job::RequestDetail {
                     chunks,
@@ -3354,8 +3351,8 @@ impl Drop for Lod {
     fn drop(&mut self) {
         // Under each pool's own lock: a worker between its stop check and its
         // wait must not miss the wake, or join() hangs.
-        let jobs = self.shared.jobs.lock();
-        let mesh_jobs = self.shared.mesh_jobs.lock();
+        let jobs = horizon_os::sync::lock(&self.shared.jobs);
+        let mesh_jobs = horizon_os::sync::lock(&self.shared.mesh_jobs);
         self.shared.stop.store(true, Ordering::Relaxed);
         drop(mesh_jobs);
         drop(jobs);
@@ -3381,14 +3378,16 @@ fn drop_queued_samples(
     mut keep: impl FnMut(&TileKey) -> bool,
 ) -> Vec<TileKey> {
     let mut dropped = Vec::new();
-    shared.jobs.lock().unwrap().retain(|job| match job {
-        Job::Sample(key) if !keep(key) => {
-            pending.remove(key);
-            dropped.push(*key);
-            false
-        }
-        _ => true,
-    });
+    horizon_os::sync::lock(&shared.jobs)
+        .unwrap()
+        .retain(|job| match job {
+            Job::Sample(key) if !keep(key) => {
+                pending.remove(key);
+                dropped.push(*key);
+                false
+            }
+            _ => true,
+        });
     dropped
 }
 /// Fine retiring stand-ins need actual column detail before `Plan::replaces`
@@ -4687,7 +4686,7 @@ mod tests {
         lod.shared.wake.notify_all();
         lod.thread.take().unwrap().join().unwrap();
         while lod.results.try_recv().is_ok() {}
-        lod.shared.jobs.lock().unwrap().clear();
+        horizon_os::sync::lock(&lod.shared.jobs).unwrap().clear();
         lod.plan = Plan::new([-256, -256], 2, 64);
         let parent = TileKey {
             x: -2,
@@ -4710,7 +4709,10 @@ mod tests {
         lod.detail_request_pending = true;
         lod.wanted_stale = true;
         lod.update(camera, 2, 64, Some(FxHashSet::default()), None);
-        let Some(Job::Sample(nearby)) = lod.shared.jobs.lock().unwrap().pop_front() else {
+        let Some(Job::Sample(nearby)) = horizon_os::sync::lock(&lod.shared.jobs)
+            .unwrap()
+            .pop_front()
+        else {
             panic!("nearby detail was not scheduled");
         };
         assert_eq!(nearby.level, 0);
@@ -4721,14 +4723,17 @@ mod tests {
         );
         lod.finish_sample(nearby, vec![Column::default(); 256]);
         lod.update(camera, 2, 64, Some(FxHashSet::default()), None);
-        let Some(Job::Sample(next)) = lod.shared.jobs.lock().unwrap().pop_front() else {
+        let Some(Job::Sample(next)) = horizon_os::sync::lock(&lod.shared.jobs)
+            .unwrap()
+            .pop_front()
+        else {
             panic!("the next ring was not scheduled");
         };
         assert!(
             !lod.plan.split.contains(&next) && next.distance([-256, -256]) <= 64,
             "the next nearest final tile, never a coarse one under it: {next:?}"
         );
-        lod.shared.jobs.lock().unwrap().clear();
+        horizon_os::sync::lock(&lod.shared.jobs).unwrap().clear();
         let near = TileKey {
             x: -4,
             z: -4,
@@ -4751,7 +4756,7 @@ mod tests {
         }
         lod.active = [near, far].into_iter().collect();
         lod.wanted_stale = true;
-        lod.shared.jobs.lock().unwrap().clear();
+        horizon_os::sync::lock(&lod.shared.jobs).unwrap().clear();
         lod.sample_jobs = SAMPLE_JOBS;
         lod.pending = (0..SAMPLE_JOBS - 1)
             .map(|i| TileKey {
@@ -4761,7 +4766,10 @@ mod tests {
             })
             .collect();
         lod.update(camera, 2, 64, Some(FxHashSet::default()), None);
-        let Some(Job::Sample(first)) = lod.shared.jobs.lock().unwrap().pop_front() else {
+        let Some(Job::Sample(first)) = horizon_os::sync::lock(&lod.shared.jobs)
+            .unwrap()
+            .pop_front()
+        else {
             panic!("no final tile scheduled")
         };
         assert_eq!(
@@ -4769,7 +4777,7 @@ mod tests {
             (1, near),
             "the nearest parent's final tiles come first"
         );
-        lod.shared.jobs.lock().unwrap().clear();
+        horizon_os::sync::lock(&lod.shared.jobs).unwrap().clear();
         lod.active = (0..DETAIL_REQUEST as i32 + 8)
             .map(|x| TileKey { x, z: 0, level: 0 })
             .collect();
@@ -4781,7 +4789,9 @@ mod tests {
         lod.detail_request_at =
             horizon_os::time::Instant::now() - horizon_os::time::Duration::from_secs(1);
         lod.request_detail([0, 0]);
-        let Some(Job::RequestDetail { chunks, .. }) = lod.shared.jobs.lock().unwrap().pop_front()
+        let Some(Job::RequestDetail { chunks, .. }) = horizon_os::sync::lock(&lod.shared.jobs)
+            .unwrap()
+            .pop_front()
         else {
             panic!("detail batch was not requested");
         };
@@ -4800,14 +4810,14 @@ mod tests {
         lod.ready.clear();
         lod.active.clear();
         lod.pending.clear();
-        lod.shared.jobs.lock().unwrap().clear();
+        horizon_os::sync::lock(&lod.shared.jobs).unwrap().clear();
         let queued = |lod: &mut Lod, near_loading: bool| {
             lod.set_near_loading(near_loading);
-            lod.shared.jobs.lock().unwrap().clear();
+            horizon_os::sync::lock(&lod.shared.jobs).unwrap().clear();
             lod.pending.clear();
             lod.wanted_stale = true;
             lod.update([-256., 64., -256.], 2, 64, Some(FxHashSet::default()), None);
-            let jobs = lod.shared.jobs.lock().unwrap();
+            let jobs = horizon_os::sync::lock(&lod.shared.jobs).unwrap();
             jobs.iter()
                 .filter(|job| matches!(job, Job::Sample(_)))
                 .count()
@@ -5152,11 +5162,18 @@ mod tests {
         lod.mark_mesh(key);
         lod.set_near_loading(true);
         lod.dispatch_meshes([0, 0]);
-        assert!(lod.shared.mesh_jobs.lock().unwrap().is_empty());
+        assert!(
+            horizon_os::sync::lock(&lod.shared.mesh_jobs)
+                .unwrap()
+                .is_empty()
+        );
 
         lod.set_near_loading(false);
         lod.dispatch_meshes([0, 0]);
-        assert_eq!(lod.shared.mesh_jobs.lock().unwrap().len(), 1);
+        assert_eq!(
+            horizon_os::sync::lock(&lod.shared.mesh_jobs).unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -5165,7 +5182,7 @@ mod tests {
         lod.small = true;
         lod.sample_jobs = 16;
         let queued = |lod: &Lod| -> Vec<TileKey> {
-            let jobs = lod.shared.jobs.lock().unwrap();
+            let jobs = horizon_os::sync::lock(&lod.shared.jobs).unwrap();
             jobs.iter()
                 .filter_map(|job| match job {
                     Job::Sample(key) => Some(*key),
@@ -5174,7 +5191,7 @@ mod tests {
                 .collect()
         };
         let observing = |lod: &Lod| {
-            let jobs = lod.shared.jobs.lock().unwrap();
+            let jobs = horizon_os::sync::lock(&lod.shared.jobs).unwrap();
             jobs.iter().any(|job| matches!(job, Job::Observe((5, 5))))
         };
         let pending = |lod: &Lod| -> Vec<TileKey> {
@@ -5607,7 +5624,7 @@ mod tests {
         let finish_queued = |lod: &mut Lod| {
             let mut keys = Vec::new();
             {
-                let mut jobs = lod.shared.jobs.lock().unwrap();
+                let mut jobs = horizon_os::sync::lock(&lod.shared.jobs).unwrap();
                 let mut i = 0;
                 while i < jobs.len() {
                     if matches!(jobs[i], Job::Sample(_)) {
@@ -5776,7 +5793,7 @@ mod tests {
                     lod.pending.len(),
                     lod.outstanding_meshes,
                     lod.observing(),
-                    lod.shared.jobs.lock().unwrap().len(),
+                    horizon_os::sync::lock(&lod.shared.jobs).unwrap().len(),
                     lod.plan
                         .nodes
                         .iter()
@@ -6012,7 +6029,7 @@ mod tests {
     /// The sample jobs `request_samples` queues now, taken off the queue.
     fn queued(lod: &mut Lod) -> Vec<TileKey> {
         lod.request_samples([0, 0]);
-        let mut jobs = lod.shared.jobs.lock().unwrap();
+        let mut jobs = horizon_os::sync::lock(&lod.shared.jobs).unwrap();
         jobs.drain(..)
             .filter_map(|job| match job {
                 Job::Sample(key) => Some(key),

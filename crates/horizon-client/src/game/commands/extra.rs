@@ -11,12 +11,13 @@ use horizon_client::{
     snbt,
     text::{self, ClickEvent, InlineObject, Style, Text},
 };
+use horizon_os::time::Instant;
 use horizon_protocol::packets::{
     Empty,
     play::{self, Clientbound as C, DialogHolder},
 };
 use horizon_world::nbt::{JavaString, Tag};
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 
 /// Waypoint.Icon: the locator bar style and colour of a transmitter.
 #[derive(Clone, Debug, PartialEq)]

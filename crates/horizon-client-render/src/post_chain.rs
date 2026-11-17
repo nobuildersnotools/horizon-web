@@ -1023,7 +1023,7 @@ impl PostEffects {
         let module = |module: naga::Module| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Post effect shader"),
-                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+                source: crate::gfx::naga_source(module),
             })
         };
         pass.refs = refs;

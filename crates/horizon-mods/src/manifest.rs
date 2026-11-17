@@ -366,10 +366,10 @@ impl Package {
     /// Whether the mod at `path` (a `.hmod` or a folder) has a [`MANIFEST`]: content, or a legacy
     /// WebAssembly mod. A `.hmod` holding only native code has none.
     pub fn has_manifest(path: &Path) -> bool {
-        if path.is_dir() {
-            return path.join(MANIFEST).is_file();
+        if path.fs_is_dir() {
+            return path.join(MANIFEST).fs_is_file();
         }
-        std::fs::File::open(path)
+        horizon_os::fs::File::open(path)
             .ok()
             .and_then(|f| zip::ZipArchive::new(f).ok())
             .is_some_and(|mut zip| zip.by_name(MANIFEST).is_ok())

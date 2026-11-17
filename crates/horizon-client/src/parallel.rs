@@ -44,7 +44,7 @@ pub fn parallel_tick() -> u8 {
 pub fn set_setting(mode: ParallelTickMode) {
     let mode = mode as u8;
     if SETTING.swap(mode, Ordering::Relaxed) != mode {
-        *AUTO.lock().unwrap_or_else(PoisonError::into_inner) = Auto::new();
+        *horizon_os::sync::lock(&AUTO).unwrap_or_else(PoisonError::into_inner) = Auto::new();
         AUTO_STATE.store(0, Ordering::Relaxed);
         SHARED.store(
             u8::from(mode == ParallelTickMode::On as u8),
@@ -60,7 +60,7 @@ pub fn after_tick(ms: f32, cpu_ms: Option<f32>) {
     if forced().is_some() || SETTING.load(Ordering::Relaxed) != ParallelTickMode::Auto as u8 {
         return;
     }
-    let mut auto = AUTO.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut auto = horizon_os::sync::lock(&AUTO).unwrap_or_else(PoisonError::into_inner);
     let was = auto.shared;
     let shared = auto.after_tick(ms, cpu_ms.unwrap_or(ms), horizon_threads::worker_count());
     AUTO_STATE.store(auto.state as u8, Ordering::Relaxed);
@@ -281,12 +281,20 @@ pub fn lanes() -> usize {
     }
 }
 
-/// The pool: one thread fewer than a phase's lanes (the server thread takes parts too).
-fn pool() -> &'static rayon::ThreadPool {
-    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+/// The pool: one thread fewer than a phase's lanes (the server thread takes parts too). `None`
+/// where this thread may not wait for it (the browser's page) or, in the browser, when its
+/// helpers would not start: the phase then runs on this thread alone.
+fn pool() -> Option<&'static rayon::ThreadPool> {
+    // The page's thread may not wait (the browser traps it), and a scope on the pool waits for
+    // its helpers.
+    #[cfg(target_arch = "wasm32")]
+    if !horizon_os::workers::in_worker() {
+        return None;
+    }
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
     POOL.get_or_init(|| {
         log::info!("Horizon: starting the tick's helper threads");
-        rayon::ThreadPoolBuilder::new()
+        let built = rayon::ThreadPoolBuilder::new()
             .num_threads(
                 horizon_threads::worker_count()
                     .clamp(1, 8)
@@ -294,9 +302,27 @@ fn pool() -> &'static rayon::ThreadPool {
                     .max(1),
             )
             .thread_name(|i| format!("tick-helper-{i}"))
-            .build()
-            .expect("the tick's helper threads start")
+            // `horizon_os`'s threads: std's on native, Web Workers in the browser, where std's
+            // refuse to start.
+            .spawn_handler(|helper| {
+                let mut builder = horizon_os::thread::Builder::new();
+                if let Some(name) = helper.name() {
+                    builder = builder.name(name.to_owned());
+                }
+                if let Some(size) = helper.stack_size() {
+                    builder = builder.stack_size(size);
+                }
+                builder.spawn(|| helper.run()).map(|_| ())
+            })
+            .build();
+        #[cfg(not(target_arch = "wasm32"))]
+        return Some(built.expect("the tick's helper threads start"));
+        #[cfg(target_arch = "wasm32")]
+        built
+            .inspect_err(|e| log::warn!("Horizon: the tick's helper threads did not start: {e}"))
+            .ok()
     })
+    .as_ref()
 }
 
 /// `f` over `items` in parts on the pool, or all on this thread while the parallel tick is off or
@@ -334,12 +360,12 @@ fn par_chunks_mut_on<T: Send>(
 ) {
     let chunk = chunk.max(1);
     let count = items.len().div_ceil(chunk);
-    if lanes <= 1 || count < 2 {
+    let Some(pool) = (lanes > 1 && count >= 2).then(pool).flatten() else {
         for slice in items.chunks_mut(chunk) {
             f(slice);
         }
         return;
-    }
+    };
     // A thread takes a chunk whole; the lock is only held while a chunk is taken, never while
     // it runs: the chunk is popped in a statement of its own, so the guard is gone before `f`
     // (a guard in a `while let` scrutinee would live through the loop body).
@@ -351,7 +377,7 @@ fn par_chunks_mut_on<T: Send>(
             f(slice);
         }
     };
-    pool().in_place_scope(|s| {
+    pool.in_place_scope(|s| {
         for _ in 1..lanes.min(count) {
             s.spawn(|_| work());
         }
@@ -371,11 +397,14 @@ pub fn par_map_on<T: Sync, R: Send>(
     lanes: usize,
     f: impl Fn(&[T], &mut Vec<R>) + Sync,
 ) -> Vec<R> {
-    if lanes <= 1 || items.len() < min.max(2) {
+    let Some(pool) = (lanes > 1 && items.len() >= min.max(2))
+        .then(pool)
+        .flatten()
+    else {
         let mut out = Vec::with_capacity(items.len());
         f(items, &mut out);
         return out;
-    }
+    };
     let size = items.len().div_ceil(lanes * 4);
     let count = items.len().div_ceil(size);
     let next = AtomicUsize::new(0);
@@ -392,7 +421,7 @@ pub fn par_map_on<T: Sync, R: Send>(
             *slots[k].lock().unwrap_or_else(PoisonError::into_inner) = done;
         }
     };
-    pool().in_place_scope(|s| {
+    pool.in_place_scope(|s| {
         for _ in 1..lanes {
             s.spawn(|_| work());
         }

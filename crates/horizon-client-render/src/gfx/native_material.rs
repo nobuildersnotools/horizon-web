@@ -554,7 +554,7 @@ impl NativeMaterial {
         }
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&super::dx12_compiler::module_label(&stage.label)),
-            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+            source: super::naga_source(module),
         });
         let layout = |flat: Option<&wgpu::BindGroupLayout>| {
             let mut groups: [Option<&wgpu::BindGroupLayout>; GROUP as usize + 1] =

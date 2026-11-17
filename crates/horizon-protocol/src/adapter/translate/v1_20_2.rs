@@ -35,7 +35,9 @@ pub(super) fn clientbound(
         finish(&r)?;
         w.uuid(PACK_ID);
         w.bytes(payload);
-        session.legacy_resource_packs.lock().unwrap().requested = true;
+        horizon_os::sync::lock(&session.legacy_resource_packs)
+            .unwrap()
+            .requested = true;
         return Ok(Some(w.data));
     }
     if state == State::Play && id == packet_ids::play::clientbound::OPEN_SCREEN {
@@ -152,7 +154,11 @@ pub(super) fn resource_status(session: &Session, payload: &[u8]) -> Result<Optio
     if !(0..=7).contains(&action) {
         return Err(crate::Error::new("invalid resource-pack response"));
     }
-    if id != PACK_ID || !session.legacy_resource_packs.lock().unwrap().requested {
+    if id != PACK_ID
+        || !horizon_os::sync::lock(&session.legacy_resource_packs)
+            .unwrap()
+            .requested
+    {
         return Ok(None);
     }
     let action = match action {

@@ -26,12 +26,12 @@ static PACK_COLORS: RwLock<Option<HashMap<String, u32>>> = RwLock::new(None);
 /// Takes the packs' effect colours (none: vanilla's).
 pub fn set_pack_colors(colors: Vec<(String, u32)>) {
     let colors = (!colors.is_empty()).then(|| colors.into_iter().collect());
-    *PACK_COLORS.write().unwrap_or_else(|e| e.into_inner()) = colors;
+    *horizon_os::sync::write(&PACK_COLORS).unwrap_or_else(|e| e.into_inner()) = colors;
 }
 impl EffectDef {
     /// `MobEffect.getColor` as the packs show it: potions, tipped arrows and effect particles.
     pub fn shown_color(&self) -> u32 {
-        let pack = PACK_COLORS.read().unwrap_or_else(|e| e.into_inner());
+        let pack = horizon_os::sync::read(&PACK_COLORS).unwrap_or_else(|e| e.into_inner());
         pack.as_ref()
             .and_then(|colors| colors.get(self.id))
             .map_or(self.color, |c| c & 0xFF_FFFF)

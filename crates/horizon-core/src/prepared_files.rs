@@ -186,7 +186,7 @@ impl PreparedFiles {
 pub fn open(root: &Path) -> Option<Arc<PreparedFiles>> {
     type Opened = Vec<(PathBuf, Option<Arc<PreparedFiles>>)>;
     static OPENED: Mutex<Opened> = Mutex::new(Vec::new());
-    let mut opened = OPENED.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut opened = horizon_os::sync::lock(&OPENED).unwrap_or_else(PoisonError::into_inner);
     if let Some((_, files)) = opened.iter().find(|(r, _)| r == root) {
         return files.clone();
     }

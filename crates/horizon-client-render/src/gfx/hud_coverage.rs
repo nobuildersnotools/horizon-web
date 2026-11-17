@@ -109,7 +109,7 @@ pub(super) fn pipeline(
     wrap(&mut module, fragment.entry_point?, blend)?;
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: desc.label,
-        source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+        source: super::naga_source(module),
     });
     let over = wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,

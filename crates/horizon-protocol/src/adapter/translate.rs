@@ -98,7 +98,7 @@ pub fn clientbound(
         if r.remaining() != 0 || packets.is_empty() {
             return Err(crate::Error::new("invalid legacy registry packet"));
         }
-        *session.legacy_items.lock().unwrap() = Default::default();
+        *horizon_os::sync::lock(&session.legacy_items).unwrap() = Default::default();
         let mut bodies = Vec::new();
         for packet in packets {
             super::legacy::remember(session, &packet);
@@ -108,9 +108,7 @@ pub fn clientbound(
             bodies.push(w.data);
         }
         let first = bodies.remove(0);
-        session
-            .incoming
-            .lock()
+        horizon_os::sync::lock(&session.incoming)
             .unwrap()
             .extend(bodies.into_iter().map(|body| (id, body)));
         return Ok(Some((id, Some(first))));
@@ -153,7 +151,13 @@ pub fn clientbound(
     let _trims = (session.version.at_most(ServerVersion::V1_21_4)
         && state == State::Play
         && matches!(id, cb::RECIPE_BOOK_ADD | cb::PLACE_GHOST_RECIPE))
-    .then(|| ids::trim_patterns(session.trim_patterns.lock().unwrap().clone()));
+    .then(|| {
+        ids::trim_patterns(
+            horizon_os::sync::lock(&session.trim_patterns)
+                .unwrap()
+                .clone(),
+        )
+    });
     // 1.21.11's configuration ends with the world clocks 26.1 syncs as a registry.
     if session.version.at_most(ServerVersion::V1_21_11)
         && (state, id)
@@ -163,7 +167,7 @@ pub fn clientbound(
             )
     {
         let clocks = v1_21_11::world_clocks();
-        let mut incoming = session.incoming.lock().unwrap();
+        let mut incoming = horizon_os::sync::lock(&session.incoming).unwrap();
         let mut registries = legacy_registries(session);
         registries.push(clocks);
         let first = registries.remove(0);
@@ -217,33 +221,43 @@ pub fn clientbound(
             strip_id(p.encode())
         }
         (State::Play, cb::LOGIN) => {
-            session.legacy_boats.lock().unwrap().clear();
-            session.legacy_metadata.lock().unwrap().clear();
+            horizon_os::sync::lock(&session.legacy_boats)
+                .unwrap()
+                .clear();
+            horizon_os::sync::lock(&session.legacy_metadata)
+                .unwrap()
+                .clear();
             let body = login(payload, session.version)?;
             let login = play::Login::read(&mut Reader::new(&body))?;
-            *session.local_player.lock().unwrap() = Some((login.player_id, false));
-            *session.dimension.lock().unwrap() = login.spawn.dimension;
+            *horizon_os::sync::lock(&session.local_player).unwrap() =
+                Some((login.player_id, false));
+            *horizon_os::sync::lock(&session.dimension).unwrap() = login.spawn.dimension;
             // The local player receives no AddEntity packet; its metadata still needs the player step.
-            session
-                .kinds
-                .lock()
+            horizon_os::sync::lock(&session.kinds)
                 .unwrap()
                 .insert(login.player_id, packet_ids_entity::PLAYER);
             body
         }
         (State::Play, cb::RESPAWN) => {
-            if let Some((_, shift)) = session.local_player.lock().unwrap().as_mut() {
+            if let Some((_, shift)) = horizon_os::sync::lock(&session.local_player)
+                .unwrap()
+                .as_mut()
+            {
                 *shift = false;
             }
             let body = respawn(payload, session.version)?;
             let dimension = play::Respawn::read(&mut Reader::new(&body))?
                 .spawn
                 .dimension;
-            if *session.dimension.lock().unwrap() != dimension {
-                session.legacy_boats.lock().unwrap().clear();
-                session.legacy_metadata.lock().unwrap().clear();
+            if *horizon_os::sync::lock(&session.dimension).unwrap() != dimension {
+                horizon_os::sync::lock(&session.legacy_boats)
+                    .unwrap()
+                    .clear();
+                horizon_os::sync::lock(&session.legacy_metadata)
+                    .unwrap()
+                    .clear();
             }
-            *session.dimension.lock().unwrap() = dimension;
+            *horizon_os::sync::lock(&session.dimension).unwrap() = dimension;
             body
         }
         (State::Play, cb::LEVEL_CHUNK_WITH_LIGHT) => chunk(session, ids, payload)?,
@@ -266,7 +280,9 @@ pub fn clientbound(
         (State::Play, cb::ADD_ENTITY) => {
             let mut p = decode_play(ids, id, payload)?;
             if let play::Clientbound::AddEntity(e) = &mut p {
-                session.legacy_metadata.lock().unwrap().forget(e.id);
+                horizon_os::sync::lock(&session.legacy_metadata)
+                    .unwrap()
+                    .forget(e.id);
                 let falling_block = ids.entity_type.down(packet_ids_entity::FALLING_BLOCK);
                 if Some(e.kind) == falling_block {
                     e.data = ids.block_state.up(e.data).unwrap_or(0);
@@ -1034,7 +1050,11 @@ pub(crate) mod v1_21_10 {
     /// 1.21.11 made the bee's and the wolf's anger end a LONG (an INT before) and an avatar's main arm a
     /// HUMANOID_ARM (a BYTE before, with the same 0 left, 1 right). Indexes as 1.21.10 numbers them.
     pub fn entity_data(session: &Session, data: &mut play::SetEntityData) {
-        let Some(kind) = session.kinds.lock().unwrap().get(&data.id).copied() else {
+        let Some(kind) = horizon_os::sync::lock(&session.kinds)
+            .unwrap()
+            .get(&data.id)
+            .copied()
+        else {
             return;
         };
         for (index, ser, value) in &mut data.values {
@@ -1059,8 +1079,12 @@ pub(crate) mod v1_21_10 {
         #[test]
         fn a_bee_s_anger_and_a_player_s_arm_take_1_21_11_s_types() {
             let session = Session::new(ServerVersion::V1_21_10);
-            session.kinds.lock().unwrap().insert(1, BEE);
-            session.kinds.lock().unwrap().insert(2, PLAYER);
+            horizon_os::sync::lock(&session.kinds)
+                .unwrap()
+                .insert(1, BEE);
+            horizon_os::sync::lock(&session.kinds)
+                .unwrap()
+                .insert(2, PLAYER);
             let mut bee = play::SetEntityData {
                 id: 1,
                 values: vec![(18, serializer::INT, Value::Int(400))],
@@ -1122,20 +1146,28 @@ pub(crate) mod v1_21_11 {
                 if let Some(ids) = session.version.ids()
                     && let Some(kind) = ids.entity_type.up(kind)
                 {
-                    session.kinds.lock().unwrap().insert(entity, kind);
+                    horizon_os::sync::lock(&session.kinds)
+                        .unwrap()
+                        .insert(entity, kind);
                 }
                 None
             }
             (State::Play, cb::REMOVE_ENTITIES) => {
                 let mut r = Reader::new(payload);
                 let n = r.count(r.remaining())?;
-                let mut kinds = session.kinds.lock().unwrap();
+                let mut kinds = horizon_os::sync::lock(&session.kinds).unwrap();
                 for _ in 0..n {
                     let entity = r.varint()?;
                     kinds.remove(&entity);
-                    session.minecart_display.lock().unwrap().remove(&entity);
-                    session.legacy_boats.lock().unwrap().remove(&entity);
-                    session.legacy_metadata.lock().unwrap().forget(entity);
+                    horizon_os::sync::lock(&session.minecart_display)
+                        .unwrap()
+                        .remove(&entity);
+                    horizon_os::sync::lock(&session.legacy_boats)
+                        .unwrap()
+                        .remove(&entity);
+                    horizon_os::sync::lock(&session.legacy_metadata)
+                        .unwrap()
+                        .forget(entity);
                 }
                 None
             }
@@ -1213,7 +1245,10 @@ pub(crate) mod v1_21_11 {
 
     /// Entity data of an AgeableMob moves past the entry 26.1 inserted after the baby flag.
     pub fn entity_data(session: &Session, data: &mut play::SetEntityData) {
-        let kind = session.kinds.lock().unwrap().get(&data.id).copied();
+        let kind = horizon_os::sync::lock(&session.kinds)
+            .unwrap()
+            .get(&data.id)
+            .copied();
         if kind.is_some_and(|k| AGEABLE.contains(&k)) {
             for (index, _, _) in &mut data.values {
                 // 0xFF is the end of the list: an index the shift would make it stays put.
@@ -1250,7 +1285,9 @@ pub(crate) mod v1_21_11 {
         then.varint(0);
         then.varint(hand);
         then.bool(sneaking);
-        session.outgoing.lock().unwrap().push(then.data);
+        horizon_os::sync::lock(&session.outgoing)
+            .unwrap()
+            .push(then.data);
         Ok(Some((interact, first.data)))
     }
 
@@ -1340,13 +1377,15 @@ pub(crate) mod v26_1 {
                 let mut r = Reader::new(payload);
                 let entity = r.varint()?;
                 let uuid = r.uuid()?;
-                session.uuids.lock().unwrap().insert(entity, uuid);
+                horizon_os::sync::lock(&session.uuids)
+                    .unwrap()
+                    .insert(entity, uuid);
                 None
             }
             (State::Play, cb::REMOVE_ENTITIES) => {
                 let mut r = Reader::new(payload);
                 let n = r.count(r.remaining())?;
-                let mut uuids = session.uuids.lock().unwrap();
+                let mut uuids = horizon_os::sync::lock(&session.uuids).unwrap();
                 for _ in 0..n {
                     uuids.remove(&r.varint()?);
                 }
@@ -1417,7 +1456,11 @@ pub(crate) mod v26_1 {
         let Some(target) = <crate::buf::OptVarInt>::read(&mut Reader::new(payload))? else {
             return Ok(None);
         };
-        let Some(uuid) = session.uuids.lock().unwrap().get(&target).copied() else {
+        let Some(uuid) = horizon_os::sync::lock(&session.uuids)
+            .unwrap()
+            .get(&target)
+            .copied()
+        else {
             return Ok(None);
         };
         let mut w = Writer::new();
@@ -1561,7 +1604,9 @@ pub(crate) mod client_layout_v1_21_5 {
             w.varint(0); // the player's entity: the vanilla server ignores it
             w.varint(if sneak { 0 } else { 1 });
             w.varint(0);
-            session.outgoing.lock().unwrap().push(w.data);
+            horizon_os::sync::lock(&session.outgoing)
+                .unwrap()
+                .push(w.data);
         }
         Ok(session
             .version
@@ -2082,7 +2127,11 @@ pub(crate) mod client_layout_v1_21_8 {
     /// which is where decoding stops. `session` knows the entity's kind; other kinds are left alone.
     // TODO(step1.21.8): translate the shoulder data into 1.21.10's Optional VarInt instead of dropping it.
     pub fn entity_data(session: &Session, data: &mut play::SetEntityData) {
-        let Some(kind) = session.kinds.lock().unwrap().get(&data.id).copied() else {
+        let Some(kind) = horizon_os::sync::lock(&session.kinds)
+            .unwrap()
+            .get(&data.id)
+            .copied()
+        else {
             return;
         };
         if kind != v1_21_10::PLAYER {
@@ -2489,7 +2538,9 @@ pub(crate) mod client_layout_v1_21_1 {
             c.varint(0);
             c.varint(if sneak { 0 } else { 1 });
             c.varint(0);
-            session.outgoing.lock().unwrap().push(c.data);
+            horizon_os::sync::lock(&session.outgoing)
+                .unwrap()
+                .push(c.data);
         }
         Ok(session
             .version
@@ -2987,8 +3038,14 @@ mod legacy_registry_tests {
             (login.spawn.portal_cooldown, login.spawn.sea_level),
             (7, 63)
         );
-        assert_eq!(*session.local_player.lock().unwrap(), Some((42, false)));
-        assert_eq!(*session.dimension.lock().unwrap(), "horizon_wire:custom");
+        assert_eq!(
+            *horizon_os::sync::lock(&session.local_player).unwrap(),
+            Some((42, false))
+        );
+        assert_eq!(
+            *horizon_os::sync::lock(&session.dimension).unwrap(),
+            "horizon_wire:custom"
+        );
 
         let old_respawn = bytes(
             "18686f72697a6f6e5f776972653a637573746f6d5f7479706513686f72697a6f6e5f776972653a637573746f6d11223344556677880103000101146d696e6563726166743a7468655f6e65746865720000007fffffd0400703",

@@ -1032,7 +1032,7 @@ fn post_pipeline(
     let present: Vec<(&str, f64)> = present.iter().map(|(id, v)| (*id, *v)).collect();
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(&super::dx12_compiler::module_label(label)),
-        source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+        source: super::naga_source(module),
     });
     let options = wgpu::PipelineCompilationOptions {
         constants: &present,
@@ -1136,7 +1136,7 @@ impl NativePost {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tonemap"),
-            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+            source: super::naga_source(module),
         });
         let stages = (
             Some(&pipeline_layout),

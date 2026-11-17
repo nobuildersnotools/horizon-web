@@ -60,7 +60,7 @@ impl Part {
         let module = |stage, module: &naga::Module| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(&format!("Resource pack {name} ({stage})")),
-                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module.clone())),
+                source: crate::gfx::naga_source(module.clone()),
             })
         };
         let vertex = module("vertex", &program.vertex);

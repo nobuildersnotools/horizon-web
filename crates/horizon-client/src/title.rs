@@ -1896,7 +1896,7 @@ impl Title {
     /// The folder a new world named `name` gets (`findResultFolder`).
     fn target_folder(&self, name: &str) -> String {
         let new_world = lang::get_or("selectWorld.newWorld", "New World");
-        world_folder::result_folder(name, &new_world, |f| self.saves.join(f).exists())
+        world_folder::result_folder(name, &new_world, |f| self.saves.join(f).fs_exists())
     }
     fn buttons(&self, w: f32, h: f32) -> Vec<Button> {
         // The game rules draw and press their own.

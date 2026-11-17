@@ -288,7 +288,11 @@ pub(super) fn equipment(session: &Session, payload: &[u8]) -> Result<Vec<u8>> {
         play::SetEquipment::read(&mut r)?
     };
     finish(&r)?;
-    if session.kinds.lock().unwrap().get(&packet.id) == Some(&entity::HORSE) {
+    if horizon_os::sync::lock(&session.kinds)
+        .unwrap()
+        .get(&packet.id)
+        == Some(&entity::HORSE)
+    {
         for (slot, _) in &mut packet.slots {
             if *slot == 4 {
                 *slot = 6;
@@ -349,11 +353,15 @@ const LIVING: &[i32] = &[
 ];
 
 pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
-    let Some(kind) = session.kinds.lock().unwrap().get(&data.id).copied() else {
+    let Some(kind) = horizon_os::sync::lock(&session.kinds)
+        .unwrap()
+        .get(&data.id)
+        .copied()
+    else {
         return;
     };
     if LIVING.contains(&kind) {
-        let mut cache = session.legacy_metadata.lock().unwrap();
+        let mut cache = horizon_os::sync::lock(&session.legacy_metadata).unwrap();
         let (color, ambient) = cache.living.entry(data.id).or_default();
         let mut changed = false;
         data.values.retain_mut(|(index, _, value)| {
@@ -388,7 +396,7 @@ pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
         }
     }
     if kind == entity::AREA_EFFECT_CLOUD {
-        let mut cache = session.legacy_metadata.lock().unwrap();
+        let mut cache = horizon_os::sync::lock(&session.legacy_metadata).unwrap();
         let first = !cache.clouds.contains_key(&data.id);
         let (color, particle) = cache.clouds.entry(data.id).or_insert_with(|| {
             (
@@ -491,10 +499,12 @@ pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
                 id: data.id,
                 slots: vec![(6, item)],
             });
-            session.incoming.lock().unwrap().push_back((
-                packet_ids::play::clientbound::SET_EQUIPMENT,
-                strip_id(packet.encode()),
-            ));
+            horizon_os::sync::lock(&session.incoming)
+                .unwrap()
+                .push_back((
+                    packet_ids::play::clientbound::SET_EQUIPMENT,
+                    strip_id(packet.encode()),
+                ));
         }
     }
 }
@@ -768,7 +778,9 @@ mod tests {
         for version in [ServerVersion::V1_20_2, ServerVersion::V1_20_3] {
             for kind in [79, 138] {
                 let session = Session::new(version);
-                session.kinds.lock().unwrap().insert(42, kind);
+                horizon_os::sync::lock(&session.kinds)
+                    .unwrap()
+                    .insert(42, kind);
                 for color in -1..=16 {
                     let mut data = play::SetEntityData {
                         id: 42,
@@ -982,8 +994,12 @@ mod tests {
                 ],
             ),
         ] {
-            session.legacy_metadata.lock().unwrap().forget(42);
-            session.kinds.lock().unwrap().insert(42, kind);
+            horizon_os::sync::lock(&session.legacy_metadata)
+                .unwrap()
+                .forget(42);
+            horizon_os::sync::lock(&session.kinds)
+                .unwrap()
+                .insert(42, kind);
             for (old, new) in pairs {
                 let mut old = metadata(ServerVersion::V1_20_3, old);
                 entity_data(&session, &mut old);
@@ -1010,7 +1026,9 @@ mod tests {
         }
         // ItemFrame and BlockDisplay are not LivingEntity: their integer entry must stay an integer.
         for kind in [74, 15] {
-            session.kinds.lock().unwrap().insert(42, kind);
+            horizon_os::sync::lock(&session.kinds)
+                .unwrap()
+                .insert(42, kind);
             let mut data = play::SetEntityData {
                 id: 42,
                 values: vec![(10, serializer::INT, Value::Int(7))],
@@ -1019,8 +1037,12 @@ mod tests {
             entity_data(&session, &mut data);
             assert_eq!(data, expected);
         }
-        session.legacy_metadata.lock().unwrap().forget(42);
-        session.kinds.lock().unwrap().insert(42, 159);
+        horizon_os::sync::lock(&session.legacy_metadata)
+            .unwrap()
+            .forget(42);
+        horizon_os::sync::lock(&session.kinds)
+            .unwrap()
+            .insert(42, 159);
         let mut data = metadata(ServerVersion::V1_20_3, "2a0b0800ff");
         entity_data(&session, &mut data);
         assert!(
@@ -1034,7 +1056,11 @@ mod tests {
     fn vanilla_trade_and_horse_armor_stacks_are_canonicalized_once() {
         let session = Session::new(ServerVersion::V1_20_3);
         // These helpers normally run inside Session::clientbound's connection-local NBT context.
-        let _registries = ids::legacy_registries(session.legacy_registries.lock().unwrap().clone());
+        let _registries = ids::legacy_registries(
+            horizon_os::sync::lock(&session.legacy_registries)
+                .unwrap()
+                .clone(),
+        );
         let _items = ids::legacy_items(session.legacy_items.clone());
         let wire = bytes(
             "070101a206050001a10601000000000000000000000800000002000000003d4ccccd0000000003630101",
@@ -1061,7 +1087,9 @@ mod tests {
             (0, 8, 2, 0.05)
         );
         for (kind, slot) in [(67, 6), (159, 4)] {
-            session.kinds.lock().unwrap().insert(42, kind);
+            horizon_os::sync::lock(&session.kinds)
+                .unwrap()
+                .insert(42, kind);
             let body = equipment(&session, &bytes("2a0401df080100")).unwrap();
             let p = play::SetEquipment::read(&mut Reader::new(&body)).unwrap();
             assert_eq!(p.slots[0].0, slot);

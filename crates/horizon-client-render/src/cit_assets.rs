@@ -7,8 +7,8 @@
 
 use horizon_assets::model::{CuboidModel, TextureSlot};
 use horizon_optifine::cit::{Kind, Rule};
+use horizon_os::fs;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 /// The namespace of CIT files outside `textures/` and `models/`.

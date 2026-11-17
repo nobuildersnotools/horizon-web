@@ -238,7 +238,7 @@ impl CoreText {
             let module = |module: &naga::Module| {
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(label),
-                    source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module.clone())),
+                    source: crate::gfx::naga_source(module.clone()),
                 })
             };
             let (vertex, fragment) = (module(&program.vertex), module(&program.fragment));

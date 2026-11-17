@@ -222,7 +222,9 @@ pub(super) fn read_stack(r: &mut Reader) -> Result<Option<Stack>> {
     datafix::update(Ty::ItemStack, &mut saved, from, datafix::CURRENT);
     let stack = from_tag(&saved, Some((item, count)))?;
     if let Some(cache) = ids::legacy_item_cache() {
-        cache.lock().unwrap().remember(&stack, tag);
+        horizon_os::sync::lock(&cache)
+            .unwrap()
+            .remember(&stack, tag);
     }
     Ok(Some(stack))
 }
@@ -688,7 +690,8 @@ pub(super) fn write_stack(stack: Option<&Stack>, w: &mut Writer) {
         w.bool(false);
         return;
     }
-    let cached = ids::legacy_item_cache().and_then(|cache| cache.lock().unwrap().original(stack));
+    let cached = ids::legacy_item_cache()
+        .and_then(|cache| horizon_os::sync::lock(&cache).unwrap().original(stack));
     let from_cache = cached.is_some();
     let tag = if let Some(tag) = cached {
         tag

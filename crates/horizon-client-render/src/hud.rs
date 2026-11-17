@@ -878,6 +878,15 @@ impl HudAtlas {
         }
         let raw = Arc::new(std::mem::take(&mut self.pixels));
         let slot = Arc::new(OnceLock::new());
+        // The page may not wait in `pixels()` for a worker that only starts
+        // once the page returns to the browser: compressed here instead.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = slot.set(lz4_flex::compress_prepend_size(&raw));
+            self.packed = Some(slot);
+            return;
+        }
+        #[allow(unreachable_code)]
         let (job_raw, job_slot) = (raw.clone(), slot.clone());
         let spawned = horizon_os::thread::Builder::new()
             .name("Atlas packing".into())

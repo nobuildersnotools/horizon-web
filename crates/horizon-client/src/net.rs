@@ -165,16 +165,18 @@ impl Session {
     }
     /// The negotiated wire release, once the connection has been established.
     pub fn server_version(&self) -> horizon_protocol::adapter::ServerVersion {
-        self.writer.lock().unwrap().as_ref().map_or(
-            horizon_protocol::adapter::ServerVersion::Current,
-            ConnWriter::server_version,
-        )
+        horizon_os::sync::lock(&self.writer)
+            .unwrap()
+            .as_ref()
+            .map_or(
+                horizon_protocol::adapter::ServerVersion::Current,
+                ConnWriter::server_version,
+            )
     }
 
     /// Secure-chat enforcement synchronized later than login on older servers.
     pub fn legacy_secure_chat_enforcement(&self) -> Option<bool> {
-        self.writer
-            .lock()
+        horizon_os::sync::lock(&self.writer)
             .unwrap()
             .as_ref()
             .and_then(ConnWriter::legacy_secure_chat_enforcement)
@@ -360,26 +362,28 @@ impl Session {
         recorder: R,
         initialize: impl FnOnce(&R),
     ) {
-        let mut slot = self.recorder.lock().unwrap();
+        let mut slot = horizon_os::sync::lock(&self.recorder).unwrap();
         initialize(&recorder);
         *slot = Some(Box::new(recorder));
     }
     /// Stop recording and finalize the `.mcpr` archive.
     pub fn stop_recording(&self) -> Option<std::io::Result<PathBuf>> {
-        let rec = self.recorder.lock().unwrap().take()?;
+        let rec = horizon_os::sync::lock(&self.recorder).unwrap().take()?;
         Some(rec.stop())
     }
     /// Whether recording is currently active.
     pub fn is_recording(&self) -> bool {
-        self.recorder
-            .lock()
+        horizon_os::sync::lock(&self.recorder)
             .unwrap()
             .as_ref()
             .is_some_and(|r| r.is_active())
     }
     /// Status of the active recording, if any.
     pub fn recorder_status(&self) -> Option<RecorderStatus> {
-        self.recorder.lock().unwrap().as_ref().map(|r| r.status())
+        horizon_os::sync::lock(&self.recorder)
+            .unwrap()
+            .as_ref()
+            .map(|r| r.status())
     }
     /// Record an encoded Clientbound packet into the active recording session at current elapsed time.
     pub fn record_clientbound(&self, packet: &horizon_protocol::packets::play::Clientbound) {
@@ -387,7 +391,7 @@ impl Session {
             let encoded = packet.encode();
             let mut reader = horizon_protocol::buf::Reader::new(&encoded);
             if let Ok(id) = reader.varint()
-                && let Some(rec) = self.recorder.lock().unwrap().as_ref()
+                && let Some(rec) = horizon_os::sync::lock(&self.recorder).unwrap().as_ref()
             {
                 rec.record_packet(id, reader.rest());
             }

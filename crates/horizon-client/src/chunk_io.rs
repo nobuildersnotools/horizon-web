@@ -40,7 +40,7 @@ impl Pending {
 }
 
 fn with(update: impl FnOnce(&mut Pending)) {
-    let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut pending = horizon_os::sync::lock(&PENDING).unwrap_or_else(|e| e.into_inner());
     update(&mut pending);
 }
 
@@ -76,7 +76,7 @@ pub fn report_low_disk_space() {
 
 /// The reports since the last call.
 pub fn take() -> Pending {
-    let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut pending = horizon_os::sync::lock(&PENDING).unwrap_or_else(|e| e.into_inner());
     std::mem::take(&mut *pending)
 }
 

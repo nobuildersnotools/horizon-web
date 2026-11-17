@@ -15,12 +15,13 @@ use crate::nbt::{Limits, Tag};
 use crate::region::{ChunkRecord, RegionFile};
 use horizon_core::position::ChunkPos;
 use horizon_os::fs;
+use horizon_os::fs::PathExt;
+use horizon_os::thread::JoinHandle;
 use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 
 const NEW_DIRECTORY_PREFIX: &str = "new_";
 
@@ -182,7 +183,7 @@ struct OpenFiles {
 /// Region files are independent, so they are upgraded on all cores but one
 /// (the game keeps that one).
 pub fn worker_threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1))
+    horizon_os::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1))
 }
 
 impl RegionStorageUpgrader {
@@ -246,11 +247,11 @@ impl RegionStorageUpgrader {
                 this.progress.set_total_progress(total_progress);
             }
         };
-        std::thread::scope(|scope| {
+        horizon_os::thread::scope(|scope| {
             // This thread is worker 0; a helper that fails to start leaves
             // its share to the others.
             for i in 1..workers {
-                let _ = std::thread::Builder::new()
+                let _ = horizon_os::thread::Builder::new()
                     .name(format!("World Upgrader #{i}"))
                     .spawn_scoped(scope, work);
             }
@@ -389,7 +390,7 @@ impl RegionStorageUpgrader {
         open.reader = None;
         let new_file = resolve_recreate_directory(file.parent().unwrap_or(Path::new(".")))
             .join(file.file_name().unwrap_or_default());
-        if new_file.exists() {
+        if new_file.fs_exists() {
             if let Err(e) = fs::remove_file(file).and_then(|()| fs::rename(&new_file, file)) {
                 eprintln!("Failed to replace an old region file: {e}");
             }
@@ -492,7 +493,7 @@ impl WorldUpgrader {
         let worker_progress = progress.clone();
         let worker_levels = levels.clone();
         let base = base.to_path_buf();
-        let thread = std::thread::Builder::new()
+        let thread = horizon_os::thread::Builder::new()
             .name("World Upgrader #0".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

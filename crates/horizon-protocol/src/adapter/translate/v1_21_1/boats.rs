@@ -39,25 +39,29 @@ pub(crate) struct Boat {
 pub(crate) fn spawn(session: &Session, old_kind: Option<i32>, entity: &play::AddEntity) {
     let kind = old_kind.and_then(|kind| session.version.ids()?.entity_type.up(kind));
     if !matches!(kind, Some(entity::OAK_BOAT | entity::OAK_CHEST_BOAT)) {
-        session.legacy_boats.lock().unwrap().remove(&entity.id);
+        horizon_os::sync::lock(&session.legacy_boats)
+            .unwrap()
+            .remove(&entity.id);
         return;
     }
-    session.legacy_boats.lock().unwrap().insert(
-        entity.id,
-        Boat {
-            spawn: entity.clone(),
-            chest: kind == Some(entity::OAK_CHEST_BOAT),
-            replace: false,
-            metadata: Vec::new(),
-            passengers: None,
-            leash: None,
-        },
-    );
+    horizon_os::sync::lock(&session.legacy_boats)
+        .unwrap()
+        .insert(
+            entity.id,
+            Boat {
+                spawn: entity.clone(),
+                chest: kind == Some(entity::OAK_CHEST_BOAT),
+                replace: false,
+                metadata: Vec::new(),
+                passengers: None,
+                leash: None,
+            },
+        );
 }
 
 pub(crate) fn metadata(session: &Session, data: &mut play::SetEntityData) {
     let kind = {
-        let mut boats = session.legacy_boats.lock().unwrap();
+        let mut boats = horizon_os::sync::lock(&session.legacy_boats).unwrap();
         let Some(boat) = boats.get_mut(&data.id) else {
             return;
         };
@@ -82,7 +86,9 @@ pub(crate) fn metadata(session: &Session, data: &mut play::SetEntityData) {
         });
         boat.spawn.kind
     };
-    session.kinds.lock().unwrap().insert(data.id, kind);
+    horizon_os::sync::lock(&session.kinds)
+        .unwrap()
+        .insert(data.id, kind);
 }
 
 fn body(packet: play::Clientbound) -> (i32, Vec<u8>) {
@@ -105,11 +111,16 @@ fn movement(boat: &mut Boat, p: &play::MoveEntity) {
 
 /// Vehicle requests and corrections name no entity; the local player controls the first seat.
 pub(crate) fn controlled(session: &Session, position: [f64; 3], yaw: f32, pitch: f32) {
-    let local = session.local_player.lock().unwrap().map(|p| p.0);
+    let local = horizon_os::sync::lock(&session.local_player)
+        .unwrap()
+        .map(|p| p.0);
     let Some(local) = local else {
         return;
     };
-    for boat in session.legacy_boats.lock().unwrap().values_mut() {
+    for boat in horizon_os::sync::lock(&session.legacy_boats)
+        .unwrap()
+        .values_mut()
+    {
         if boat.passengers.as_ref().and_then(|p| p.first()) == Some(&local) {
             boat.spawn.position = position;
             boat.spawn.yaw = angle(yaw);
@@ -122,7 +133,9 @@ pub(crate) fn controlled(session: &Session, position: [f64; 3], yaw: f32, pitch:
 /// Recreate only when its type actually changes, retaining its metadata, passengers and lead.
 pub(crate) fn finish(session: &Session, id: i32, payload: Vec<u8>) -> Result<(i32, Vec<u8>)> {
     use packet_ids::play::clientbound as cb;
-    if session.legacy_boats.lock().unwrap().is_empty()
+    if horizon_os::sync::lock(&session.legacy_boats)
+        .unwrap()
+        .is_empty()
         || !matches!(
             id,
             cb::SET_ENTITY_DATA
@@ -148,7 +161,7 @@ pub(crate) fn finish(session: &Session, id: i32, payload: Vec<u8>) -> Result<(i3
     let mut queued = Vec::new();
     let mut replaced = None;
     {
-        let mut boats = session.legacy_boats.lock().unwrap();
+        let mut boats = horizon_os::sync::lock(&session.legacy_boats).unwrap();
         match packet {
             play::Clientbound::SetEntityData(p) => {
                 if let Some(boat) = boats.get_mut(&p.id) {
@@ -263,7 +276,9 @@ pub(crate) fn finish(session: &Session, id: i32, payload: Vec<u8>) -> Result<(i3
         }
     }
     if let Some(entity) = replaced {
-        session.incoming.lock().unwrap().extend(queued);
+        horizon_os::sync::lock(&session.incoming)
+            .unwrap()
+            .extend(queued);
         return Ok(body(play::Clientbound::RemoveEntities(
             play::RemoveEntities { ids: vec![entity] },
         )));
@@ -279,7 +294,7 @@ mod tests {
     #[test]
     fn controlled_requests_and_corrections_update_the_cached_boat_and_reused_ids_are_cleared() {
         let session = Session::new(ServerVersion::V1_21_1);
-        *session.local_player.lock().unwrap() = Some((7, false));
+        *horizon_os::sync::lock(&session.local_player).unwrap() = Some((7, false));
         let mut entity = play::AddEntity {
             id: 42,
             uuid: 123,
@@ -299,7 +314,9 @@ mod tests {
         finish(&session, id, payload).unwrap();
         controlled(&session, [10.0, 64.0, 2.0], 90.0, -45.0);
         assert_eq!(
-            session.legacy_boats.lock().unwrap()[&42].spawn.position,
+            horizon_os::sync::lock(&session.legacy_boats).unwrap()[&42]
+                .spawn
+                .position,
             [10.0, 64.0, 2.0]
         );
         let (id, payload) = body(play::Clientbound::MoveVehicle(play::MoveVehicle {
@@ -309,12 +326,18 @@ mod tests {
         }));
         finish(&session, id, payload).unwrap();
         assert_eq!(
-            session.legacy_boats.lock().unwrap()[&42].spawn.position,
+            horizon_os::sync::lock(&session.legacy_boats).unwrap()[&42]
+                .spawn
+                .position,
             [20.0, 65.0, 3.0]
         );
         entity.kind = 30;
         spawn(&session, Some(24), &entity);
-        assert!(session.legacy_boats.lock().unwrap().is_empty());
+        assert!(
+            horizon_os::sync::lock(&session.legacy_boats)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

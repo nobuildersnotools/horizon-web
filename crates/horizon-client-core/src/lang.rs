@@ -600,14 +600,17 @@ pub fn available(sources: &[&dyn ResourceSource]) -> Vec<LanguageInfo> {
 
 pub fn set(language: Language) {
     BIDIRECTIONAL.store(language.bidirectional, Ordering::Relaxed);
-    *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(language));
+    *horizon_os::sync::write(&CURRENT).unwrap_or_else(|e| e.into_inner()) =
+        Some(Arc::new(language));
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 pub fn current() -> Option<Arc<Language>> {
     if let Some(language) = SCOPE.with(|s| s.borrow().as_ref().map(|s| s.language.clone())) {
         return Some(language);
     }
-    CURRENT.read().unwrap_or_else(|e| e.into_inner()).clone()
+    horizon_os::sync::read(&CURRENT)
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 /// Runs `f` with `language` as the current language of this thread only, and returns what it
 /// returned with the keys `get` and `get_or` looked up and `language` did not have, in the order

@@ -133,7 +133,7 @@ impl NativeSky {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&super::dx12_compiler::module_label(&stage.label)),
-            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+            source: super::naga_source(module),
         });
         let pipeline = pipeline(
             device,
@@ -410,7 +410,7 @@ mod tests {
                 let (module, layout) = build(&device, &globals_layout, &frame, stage).unwrap();
                 let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: None,
-                    source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+                    source: crate::gfx::naga_source(module),
                 });
                 pipeline(&device, &layout, &module, "horizon_sky_fs_sky", &[], format)
             } else {

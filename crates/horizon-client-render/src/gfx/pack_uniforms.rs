@@ -2145,7 +2145,7 @@ pub(super) mod initial_history_tests {
         let module = |module| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: None,
-                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+                source: crate::gfx::naga_source(module),
             })
         };
         let vs = module(program.vertex);

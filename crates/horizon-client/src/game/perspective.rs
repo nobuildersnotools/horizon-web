@@ -139,7 +139,7 @@ static PLAYER_TYPES: Mutex<Vec<(PathBuf, Option<Arc<MobType>>)>> = Mutex::new(Ve
 /// world resources read it as the game starts (`load_world_rest`), so a join
 /// finds it; a resource pack change's new root is read once.
 pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
-    let mut cache = PLAYER_TYPES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = horizon_os::sync::lock(&PLAYER_TYPES).unwrap_or_else(|e| e.into_inner());
     if let Some((_, kind)) = cache.iter().find(|(cached, _)| cached == root) {
         return kind.clone();
     }
@@ -154,7 +154,7 @@ pub(super) fn player_type_with_document(
     root: &Path,
     models: &horizon_client::mobs::EntityModelDocument,
 ) -> Option<Arc<MobType>> {
-    let mut cache = PLAYER_TYPES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = horizon_os::sync::lock(&PLAYER_TYPES).unwrap_or_else(|e| e.into_inner());
     if let Some((_, kind)) = cache.iter().find(|(cached, _)| cached == root) {
         return kind.clone();
     }

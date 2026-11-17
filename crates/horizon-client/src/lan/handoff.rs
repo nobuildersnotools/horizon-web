@@ -39,7 +39,7 @@ const CHANGED_MAX: usize = 1 << 13;
 /// The server changed `chunk` in bulk and didn't send it to the player on its memory connection: the window's far
 /// terrain is to summarize it again.
 pub fn changed(chunk: &Arc<Chunk>) {
-    let Ok(mut changed) = CHANGED.lock() else {
+    let Ok(mut changed) = horizon_os::sync::lock(&CHANGED) else {
         return;
     };
     let changed = changed.get_or_insert_with(Default::default);
@@ -51,7 +51,7 @@ pub fn changed(chunk: &Arc<Chunk>) {
 
 /// The columns changed in bulk since the window last asked (`changed`), each once, as it was last changed.
 pub fn take_changed() -> Vec<Arc<Chunk>> {
-    match CHANGED.lock() {
+    match horizon_os::sync::lock(&CHANGED) {
         Ok(mut changed) => changed
             .take()
             .map(|c| c.into_values().collect())
@@ -62,7 +62,7 @@ pub fn take_changed() -> Vec<Arc<Chunk>> {
 
 /// The server sends `chunk` to a player on its memory connection.
 pub fn offer(chunk: &Chunk) {
-    let Ok(mut offered) = OFFERED.lock() else {
+    let Ok(mut offered) = horizon_os::sync::lock(&OFFERED) else {
         return;
     };
     let offered = offered.get_or_insert_with(Default::default);
@@ -85,7 +85,7 @@ pub fn offer(chunk: &Chunk) {
 /// as the server's offered one at that height becomes the server's. Returns
 /// how many did.
 pub fn take(chunk: &mut Chunk) -> usize {
-    let offer = match OFFERED.lock() {
+    let offer = match horizon_os::sync::lock(&OFFERED) {
         Ok(mut offered) => offered.as_mut().and_then(|o| o.remove(&(chunk.x, chunk.z))),
         Err(_) => None,
     };

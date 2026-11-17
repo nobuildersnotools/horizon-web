@@ -50,7 +50,7 @@ impl CoreLines {
         let module = |label, module: &naga::Module| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
-                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module.clone())),
+                source: crate::gfx::naga_source(module.clone()),
             })
         };
         let vertex = module("Resource pack lines (vertex)", &program.vertex);

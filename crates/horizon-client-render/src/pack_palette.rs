@@ -114,7 +114,8 @@ pub fn read(root: &Path) -> PackColors {
     let formats = crate::pack_hooks::formats();
     let colors = formats.colors(root).unwrap_or_default();
     set(&colors);
-    *ITEM_BARS.write().unwrap_or_else(|e| e.into_inner()) = formats.item_bars(root);
+    *horizon_os::sync::write(&ITEM_BARS).unwrap_or_else(|e| e.into_inner()) =
+        formats.item_bars(root);
     colors
 }
 
@@ -128,7 +129,7 @@ static ITEM_BARS: RwLock<Option<Arc<dyn ItemBars>>> = RwLock::new(None);
 
 /// A pack's durability bar colour (RGB) for an item at this damage (0 to 1).
 pub fn item_bar_color(item: &str, damage: f32) -> Option<u32> {
-    let bars = ITEM_BARS.read().unwrap_or_else(|e| e.into_inner());
+    let bars = horizon_os::sync::read(&ITEM_BARS).unwrap_or_else(|e| e.into_inner());
     bars.as_ref()?.color(item, damage)
 }
 

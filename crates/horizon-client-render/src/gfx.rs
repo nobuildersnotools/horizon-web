@@ -311,6 +311,8 @@ mod linear_blend;
 use frame_policy::frame_format;
 use frame_policy::{frame_configuration, hand_depth_store, horizon_tone_curve, overlay_format};
 mod lod;
+mod naga_shader;
+pub(crate) use naga_shader::naga_source;
 pub mod native_entity;
 mod native_material;
 mod native_pack;

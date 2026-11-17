@@ -22,9 +22,10 @@
 use super::{Mob, Species, equip, farm::Climate, gear, spawning::LocalDifficulty};
 use crate::{enchant::Enchantments, items::Items};
 use horizon_core::{geometry::Aabb, random::RandomSource};
+use horizon_os::fs;
 use horizon_world::player_inventory::EquipmentSlot;
 use serde_json::Value;
-use std::{fs, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 /// `EntitySpawnReason`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -560,7 +560,7 @@ impl NativeShadow {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Native shader pack shadow"),
-            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+            source: super::naga_source(module),
         });
         // The frame alone, and under `[displacement]` the height maps its grid moves by.
         let frame_entry = wgpu::BindGroupLayoutEntry {

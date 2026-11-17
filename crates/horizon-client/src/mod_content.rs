@@ -20,12 +20,12 @@ use horizon_mods::content::{
     Block, BlockShapes, Content, CreativeTab, EntityType, Fluid, MenuType, MobEffect, Rarity,
     StateProperty, StateValues,
 };
-use horizon_os::fs::PathExt;
+use horizon_os::fs::{self, PathExt};
 use horizon_world::nbt::{self, Compound, JavaString, Tag};
 use serde::{Deserialize, Serialize, de};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, fs,
+    fmt,
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -676,7 +676,7 @@ struct Plan<'a> {
 /// Component types present in the vanilla item table.
 pub fn known_components(base: &Path) -> Result<BTreeSet<String>> {
     let path = base.join("items.json");
-    if !path.exists() {
+    if !path.fs_exists() {
         return Ok(BTreeSet::new());
     }
     Ok(component_types(&read_json(&path)?))
@@ -918,7 +918,7 @@ fn mod_entity_row(
 
 impl<'a> Plan<'a> {
     fn new(base: &Path, mods: &'a [ContentMod]) -> Result<Self> {
-        let vanilla_items = match base.join("items.json").exists() {
+        let vanilla_items = match base.join("items.json").fs_exists() {
             true => match read_json(&base.join("items.json"))? {
                 J::Obj(entries) => entries.into_iter().map(|(id, _)| id).collect(),
                 _ => return Err("items.json is not an object".into()),
@@ -2109,7 +2109,7 @@ fn place_in_biomes(
     let bundle = |doc: Option<J>, name: &str| -> Result<BTreeMap<String, String>> {
         let doc = match doc {
             Some(doc) => doc,
-            None if base.join(name).exists() => read_json(&base.join(name))?,
+            None if base.join(name).fs_exists() => read_json(&base.join(name))?,
             None => return Ok(BTreeMap::new()),
         };
         let J::Obj(entries) = doc else {
@@ -2123,7 +2123,7 @@ fn place_in_biomes(
             })
             .collect())
     };
-    if !base.join(BIOMES).exists() {
+    if !base.join(BIOMES).fs_exists() {
         return Err(format!("biome modifiers need {BIOMES}").into());
     }
     let mut doc = read_json(&base.join(BIOMES))?;
@@ -3220,7 +3220,7 @@ fn stamp(base: &Path, mods: &[ContentMod]) -> Result<String> {
         let m = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let modified = m
             .modified()?
-            .duration_since(std::time::UNIX_EPOCH)
+            .duration_since(horizon_os::time::UNIX_EPOCH)
             .unwrap_or_default();
         Ok(format!(
             "{} {} {}",

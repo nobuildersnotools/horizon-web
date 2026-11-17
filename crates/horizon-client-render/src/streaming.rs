@@ -1290,7 +1290,7 @@ impl Streaming {
         // `release(col, true)` from the chunk's unload): the jobs still queued for a
         // column go with it instead of running for a level they no longer belong to.
         if !gone.is_empty()
-            && let Ok(mut queue) = self.shared.queue.lock()
+            && let Ok(mut queue) = horizon_os::sync::lock(&self.shared.queue)
         {
             release_columns(&mut queue, gone);
         }

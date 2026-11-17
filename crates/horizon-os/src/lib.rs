@@ -132,7 +132,7 @@ pub mod thread {
 pub mod sync {
     use crate::time::Duration;
     use std::sync::{
-        Condvar, LockResult, Mutex, MutexGuard, RwLock, RwLockWriteGuard,
+        Condvar, LockResult, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
         mpsc::{Receiver, RecvError, RecvTimeoutError},
     };
 
@@ -166,6 +166,21 @@ pub mod sync {
             }
         }
         lock.write()
+    }
+
+    /// `lock.read()`, spinning on the page's thread as [`lock`] does.
+    pub fn read<T: ?Sized>(lock: &RwLock<T>) -> LockResult<RwLockReadGuard<'_, T>> {
+        #[cfg(target_arch = "wasm32")]
+        if !can_wait() {
+            loop {
+                match lock.try_read() {
+                    Ok(guard) => return Ok(guard),
+                    Err(std::sync::TryLockError::Poisoned(e)) => return Err(e),
+                    Err(std::sync::TryLockError::WouldBlock) => std::hint::spin_loop(),
+                }
+            }
+        }
+        lock.read()
     }
 
     /// `rx.recv()`.

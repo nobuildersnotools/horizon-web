@@ -92,6 +92,8 @@ naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "glsl-out", "msl
 # The browser's stand-in for ureq: every request fails as if offline (the crate root names it `ureq`).
 horizon-ureq-web = { path = "../horizon-ureq-web" }
 wgpu = { version = "30.0.1", default-features = false, features = ["webgpu"] }
+# gfx::naga_source writes naga IR as WGSL for the browser.
+naga = { version = "30.0.1", features = ["wgsl-out"] }
 # Sound through the browser's Web Audio.
 cpal = { version = "0.16", optional = true, features = ["wasm-bindgen"] }
 

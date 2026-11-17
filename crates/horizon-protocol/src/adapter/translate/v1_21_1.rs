@@ -251,7 +251,7 @@ pub(super) fn explosion(session: &Session, payload: &[u8]) -> Result<Vec<u8>> {
         // The old client applied the listed destructive block changes immediately. Trigger-block
         // explosions have different block-specific behavior and must not erase their blocks.
         let origin = center.map(|value| value.floor() as i32);
-        let mut queued = session.incoming.lock().unwrap();
+        let mut queued = horizon_os::sync::lock(&session.incoming).unwrap();
         for offset in offsets.as_chunks::<3>().0 {
             let pos = std::array::from_fn(|axis| {
                 origin[axis].wrapping_add(i32::from(offset[axis] as i8))

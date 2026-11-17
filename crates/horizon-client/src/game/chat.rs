@@ -547,7 +547,7 @@ fn overworld_timelines(root: &Path) -> (Vec<(String, Option<i64>)>, Vec<(String,
 }
 
 fn resource_ids(root: &Path) -> Arc<ResourceIds> {
-    let mut cache = RESOURCE_IDS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = horizon_os::sync::lock(&RESOURCE_IDS).unwrap_or_else(|e| e.into_inner());
     if let Some((_, ids)) = cache.iter().find(|(cached, _)| cached == root) {
         return ids.clone();
     }
@@ -591,7 +591,7 @@ static BLOCK_PROPERTIES: Mutex<Vec<(usize, Arc<BlockProperties>)>> = Mutex::new(
 /// about 30 ms of every world opening.
 fn block_properties(registry: &'static BlockRegistry) -> Arc<BlockProperties> {
     let key = std::ptr::from_ref(registry) as usize;
-    let mut cache = BLOCK_PROPERTIES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = horizon_os::sync::lock(&BLOCK_PROPERTIES).unwrap_or_else(|e| e.into_inner());
     if let Some((_, properties)) = cache.iter().find(|(cached, _)| *cached == key) {
         return properties.clone();
     }
@@ -626,7 +626,7 @@ static COMMAND_EXPORTS: Mutex<Vec<(PathBuf, Option<Arc<Registries>>)>> = Mutex::
 /// the registries fill from stays, not the parsed export (4.2 MB, against
 /// 2.2 MB). A dedicated server opens its world once and keeps nothing.
 fn command_export(dir: &Path, keep: bool) -> Option<Arc<Registries>> {
-    let mut cache = COMMAND_EXPORTS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = horizon_os::sync::lock(&COMMAND_EXPORTS).unwrap_or_else(|e| e.into_inner());
     if let Some((_, export)) = cache.iter().find(|(cached, _)| cached == dir) {
         return export.clone();
     }

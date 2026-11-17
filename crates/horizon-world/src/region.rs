@@ -518,7 +518,13 @@ impl RegionWriter {
     pub fn create(destination: impl AsRef<Path>) -> io::Result<Self> {
         let destination = destination.as_ref().to_owned();
         let position = position_from_path(&destination)?;
-        if destination.try_exists()? {
+        // `Path::try_exists` through `horizon_os` (std's sees no files in the browser).
+        let exists = match fs::metadata(&destination) {
+            Ok(_) => true,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e),
+        };
+        if exists {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "destination region already exists",

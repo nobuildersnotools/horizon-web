@@ -80,7 +80,7 @@ static BUILTIN: std::sync::Mutex<BuiltinCache> = std::sync::Mutex::new(Vec::new(
 /// `None` when it is missing or invalid (not cached: a fixed install can
 /// join again).
 pub(super) fn builtin_registries(root: &std::path::Path) -> Option<Arc<Builtin>> {
-    let mut cache = BUILTIN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = horizon_os::sync::lock(&BUILTIN).unwrap_or_else(|e| e.into_inner());
     if let Some((_, builtin)) = cache.iter().find(|(cached, _)| cached == root) {
         return Some(builtin.clone());
     }

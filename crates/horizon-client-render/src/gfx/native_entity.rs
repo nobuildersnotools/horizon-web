@@ -262,11 +262,16 @@ fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
 
 /// The entity shader for the pack's entity stage `source`.
 pub(super) fn shader_source(source: &str) -> String {
+    let entity = super::wgsl_prefix::prefixed(&super::static_entity_shader(), PREFIX);
+    // entity_shader's directive must open the module, before the pack's declarations.
+    let (directive, entity) = match entity.split_once('\n') {
+        Some((first, rest)) if first.starts_with("diagnostic(") => (format!("{first}\n"), rest),
+        _ => (String::new(), entity.as_str()),
+    };
     format!(
-        "{source}\n// Horizon's entities (entity.wgsl, static_entity.wgsl)\n{}\
+        "{directive}{source}\n// Horizon's entities (entity.wgsl, static_entity.wgsl)\n{entity}\
          const horizon_entity_kind_shift: u32 = {KIND_SHIFT}u;\n\
          const horizon_entity_block_entity: u32 = {}u;\n{ENTRIES}",
-        super::wgsl_prefix::prefixed(&super::static_entity_shader(), PREFIX),
         EntityKind::BlockEntity as u32 + 1,
     )
 }
@@ -303,7 +308,7 @@ impl NativeEntity {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&stage.label),
-            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+            source: super::naga_source(module),
         });
         // As the renderer's entity vertices (gfx.rs): `Vertex`, and a retained section's origin.
         let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,

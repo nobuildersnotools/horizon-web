@@ -3068,7 +3068,7 @@ pub fn level_dat_issue(dir: &Path, old: bool) -> Option<DatIssue> {
 /// level.dat_old is a world not made yet, not a broken one.
 pub fn level_data_needs_recovery(world: &Path) -> Option<DatIssue> {
     match level_dat_issue(world, false)? {
-        DatIssue::Missing if !world.join("level.dat_old").exists() => None,
+        DatIssue::Missing if !world.join("level.dat_old").fs_exists() => None,
         issue => Some(issue),
     }
 }
@@ -3101,7 +3101,7 @@ fn backup_stamp() -> String {
 /// caller to refuse (both files broken, or nothing to fall back to).
 pub fn fall_back_to_level_dat_old(world: &Path) -> bool {
     level_dat_issue(world, false).is_some()
-        && world.join("level.dat_old").exists()
+        && world.join("level.dat_old").fs_exists()
         && level_dat_issue(world, true).is_none()
         && restore_level_data_from_old(world)
 }
@@ -3209,7 +3209,7 @@ fn write_dat_as(path: &Path, tag: Tag, durable: bool) -> Result<()> {
     } else {
         fs::write(&temporary, compressed)?;
     }
-    if path.exists() {
+    if path.fs_exists() {
         let old = match file.strip_suffix(".dat") {
             Some(stem) => path.with_file_name(format!("{stem}.dat_old")),
             None => path.with_file_name(format!("{file}_old")),

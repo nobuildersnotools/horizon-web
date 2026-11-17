@@ -2010,7 +2010,7 @@ fn build_pass(
             storage_formats_of(&mut m, &entries);
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(&p.name),
-                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(m)),
+                source: super::naga_source(m),
             })
         };
         let mut fragment = program.fragment;
@@ -2253,7 +2253,7 @@ fn build_compute(
         storage_formats_of(&mut module, &entries);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&name),
-            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+            source: super::naga_source(module),
         });
         let job = ComputeJob {
             label: name.clone(),

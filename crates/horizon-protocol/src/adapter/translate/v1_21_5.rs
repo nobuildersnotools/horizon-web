@@ -59,7 +59,7 @@ pub(super) fn player_command(payload: &[u8]) -> Result<Vec<u8>> {
 /// Input still has the shift bit, but the 1.21.5 server changes the entity flag only on a command.
 pub(super) fn input(session: &Session, payload: &[u8]) -> Result<()> {
     let shift = Reader::new(payload).u8()? & 32 != 0;
-    let mut local = session.local_player.lock().unwrap();
+    let mut local = horizon_os::sync::lock(&session.local_player).unwrap();
     if let Some((entity, was_shift)) = local.as_mut()
         && *was_shift != shift
     {
@@ -73,7 +73,9 @@ pub(super) fn input(session: &Session, payload: &[u8]) -> Result<()> {
         w.varint(*entity);
         w.varint(if shift { 0 } else { 1 });
         w.varint(0);
-        session.outgoing.lock().unwrap().push(w.data);
+        horizon_os::sync::lock(&session.outgoing)
+            .unwrap()
+            .push(w.data);
         *was_shift = shift;
     }
     Ok(())
@@ -82,7 +84,10 @@ pub(super) fn input(session: &Session, payload: &[u8]) -> Result<()> {
 /// HangingEntity added DATA_DIRECTION at index 8; the subclasses' existing fields moved up one.
 pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
     if matches!(
-        session.kinds.lock().unwrap().get(&data.id).copied(),
+        horizon_os::sync::lock(&session.kinds)
+            .unwrap()
+            .get(&data.id)
+            .copied(),
         Some(entity::GLOW_ITEM_FRAME | entity::ITEM_FRAME | entity::PAINTING)
     ) {
         for (index, _, _) in &mut data.values {
@@ -101,7 +106,7 @@ mod tests {
     #[test]
     fn commands_keep_their_actions_and_shift_only_sends_transitions() {
         let session = Session::new(ServerVersion::V1_21_5);
-        *session.local_player.lock().unwrap() = Some((42, false));
+        *horizon_os::sync::lock(&session.local_player).unwrap() = Some((42, false));
         for action in 0..=6 {
             let (id, body) = super::super::serverbound(
                 &session,
@@ -169,7 +174,9 @@ mod tests {
     fn hanging_fields_move_but_other_entity_fields_stay() {
         let session = Session::new(ServerVersion::V1_21_5);
         for kind in [61, 74, 94, 159] {
-            session.kinds.lock().unwrap().insert(42, kind);
+            horizon_os::sync::lock(&session.kinds)
+                .unwrap()
+                .insert(42, kind);
             let mut data = play::SetEntityData {
                 id: 42,
                 values: vec![

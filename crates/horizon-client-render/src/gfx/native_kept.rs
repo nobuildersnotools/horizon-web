@@ -317,7 +317,7 @@ pub(super) fn compute_pipeline(
     let present = super::present_constants(&module, constants);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(&super::super::dx12_compiler::module_label(label)),
-        source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+        source: crate::gfx::naga_source(module),
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some(label),

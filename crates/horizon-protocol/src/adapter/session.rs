@@ -118,21 +118,24 @@ impl Session {
         if !self.version.at_most(ServerVersion::V1_20_3) {
             return None;
         }
-        *self.legacy_secure_chat_enforcement.lock().unwrap()
+        *horizon_os::sync::lock(&self.legacy_secure_chat_enforcement).unwrap()
     }
 
     pub(super) fn set_legacy_secure_chat_enforcement(&self, value: Option<bool>) {
-        *self.legacy_secure_chat_enforcement.lock().unwrap() = value;
+        *horizon_os::sync::lock(&self.legacy_secure_chat_enforcement).unwrap() = value;
     }
 
     /// A packet the server sent, as the pinned version numbers and lays it out. `None` drops it: Horizon
     /// knows no such packet.
     pub fn clientbound(&self, id: i32, payload: Vec<u8>) -> Result<Option<(i32, Vec<u8>)>> {
         let state = self.reading();
-        let _legacy = self
-            .version
-            .at_most(ServerVersion::V1_20_3)
-            .then(|| super::ids::legacy_registries(self.legacy_registries.lock().unwrap().clone()));
+        let _legacy = self.version.at_most(ServerVersion::V1_20_3).then(|| {
+            super::ids::legacy_registries(
+                horizon_os::sync::lock(&self.legacy_registries)
+                    .unwrap()
+                    .clone(),
+            )
+        });
         let _items = self
             .version
             .at_most(ServerVersion::V1_20_3)
@@ -204,10 +207,13 @@ impl Session {
     /// the server has no such packet, so nothing is sent.
     pub fn serverbound(&self, body: &[u8]) -> Result<Option<Vec<u8>>> {
         let state = self.writing();
-        let _legacy = self
-            .version
-            .at_most(ServerVersion::V1_20_3)
-            .then(|| super::ids::legacy_registries(self.legacy_registries.lock().unwrap().clone()));
+        let _legacy = self.version.at_most(ServerVersion::V1_20_3).then(|| {
+            super::ids::legacy_registries(
+                horizon_os::sync::lock(&self.legacy_registries)
+                    .unwrap()
+                    .clone(),
+            )
+        });
         let _items = self
             .version
             .at_most(ServerVersion::V1_20_3)
@@ -241,11 +247,11 @@ impl Session {
 
     /// A packet the translation made that Horizon reads next, already in the pinned version's numbering.
     pub fn next_incoming(&self) -> Option<(i32, Vec<u8>)> {
-        self.incoming.lock().unwrap().pop_front()
+        horizon_os::sync::lock(&self.incoming).unwrap().pop_front()
     }
     /// Bodies the translation added after the packet just sent, in the server's numbering.
     pub fn take_outgoing(&self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut *self.outgoing.lock().unwrap())
+        std::mem::take(&mut *horizon_os::sync::lock(&self.outgoing).unwrap())
     }
 
     /// The handshake states this server's protocol, and its intent moves both directions on.
@@ -346,10 +352,11 @@ mod tests {
                 }
                 assert_eq!(s.login_requires_authentication(), authenticated);
                 if version == ServerVersion::V1_20_3 {
-                    Arc::make_mut(&mut s.legacy_registries.lock().unwrap()).insert(
-                        "minecraft:dimension_type".into(),
-                        crate::registry::Ids::from_names(vec!["minecraft:overworld".into()]),
-                    );
+                    Arc::make_mut(&mut horizon_os::sync::lock(&s.legacy_registries).unwrap())
+                        .insert(
+                            "minecraft:dimension_type".into(),
+                            crate::registry::Ids::from_names(vec!["minecraft:overworld".into()]),
+                        );
                 }
                 s.set_reading(State::Play);
                 let (id, payload) = s

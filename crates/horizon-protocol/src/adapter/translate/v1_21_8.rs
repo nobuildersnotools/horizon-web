@@ -46,7 +46,7 @@ pub(super) fn clientbound(
         }
         cb::SET_DEFAULT_SPAWN_POSITION => {
             let pos = crate::buf::Pos::read(&mut r)?;
-            w.string(&session.dimension.lock().unwrap());
+            w.string(&horizon_os::sync::lock(&session.dimension).unwrap());
             crate::buf::Pos::write(&pos, &mut w);
             w.f32(r.f32()?);
             w.f32(0.0); // No pitch was sent before RespawnData.
@@ -73,7 +73,11 @@ fn velocity(r: &mut Reader) -> Result<[f64; 3]> {
 /// Moving the main arm and skin mask to Avatar moved these four player fields, but not the shoulders.
 /// The later 1.21.11 step changes the arm's serializer after it has reached index 15 here.
 pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
-    if session.kinds.lock().unwrap().get(&data.id) != Some(&entity::PLAYER) {
+    if horizon_os::sync::lock(&session.kinds)
+        .unwrap()
+        .get(&data.id)
+        != Some(&entity::PLAYER)
+    {
         return;
     }
     for (index, _, _) in &mut data.values {
@@ -159,7 +163,7 @@ mod tests {
             (90.0, -30.0, false, false)
         );
         let session = Session::new(ServerVersion::V1_21_8);
-        *session.dimension.lock().unwrap() = "minecraft:the_nether".into();
+        *horizon_os::sync::lock(&session.dimension).unwrap() = "minecraft:the_nether".into();
         let mut w = Writer::new();
         crate::buf::Pos::write(&[-5, 70, 8], &mut w);
         w.f32(180.0);

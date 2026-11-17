@@ -1527,7 +1527,9 @@ impl ParticleEngine {
         if let Ok(namespaces) = horizon_os::fs::read_dir(&assets) {
             for namespace in namespaces.flatten() {
                 let ns = namespace.file_name().to_string_lossy().into_owned();
-                if ns == "minecraft" || !namespace.path().is_dir() {
+                if ns == "minecraft"
+                    || !horizon_os::fs::PathExt::fs_is_dir(namespace.path().as_path())
+                {
                     continue;
                 }
                 self.load_mod_sprites(&ns, &namespace.path().join("particles"));
