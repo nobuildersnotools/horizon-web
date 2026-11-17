@@ -168,8 +168,19 @@ pub const MIN_SECTIONS: usize = 1600;
 /// do, since only there does it read each quad's face normal and `mc_Entity`;
 /// frames without one draw flat only where `for_vanilla` says.
 /// `HORIZON_FLAT_DRAWS=1` draws every frame flat, `0` none.
+///
+/// Never in a browser: with flat draws the solid pipelines pull their vertices by
+/// `@builtin(vertex_index)`, which must carry each draw's base vertex (in the compact
+/// layout `PACKED_BASE` past it) through indirect draws. Chrome on Windows runs WebGPU on
+/// DirectX 12, where that base vertex is the browser's own emulation (as wgpu's DX12
+/// count draws leave it out); on an Intel HD 5500 it came out wrong, solid terrain
+/// flickering with see-through holes and corners stretched to the sky. The page can't
+/// tell the backend or the GPU (WebGPU's adapter info names neither), so it keeps vertex
+/// buffers, whose fetch applies the base vertex itself, as OpenGL without vertex storage does.
 pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
-    std::env::var("HORIZON_FLAT_DRAWS").as_deref() != Ok("0") && supported(adapter, device)
+    !cfg!(target_arch = "wasm32")
+        && std::env::var("HORIZON_FLAT_DRAWS").as_deref() != Ok("0")
+        && supported(adapter, device)
 }
 
 /// Whether frames without a shader pack's terrain draw flat: where the backend
